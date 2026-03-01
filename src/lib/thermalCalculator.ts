@@ -65,12 +65,163 @@ export function redondearValor(val: number, decimales: number): number {
 
 function getR(capa: CapaMaterial): number {
     if (capa.r_valor > 0) return capa.r_valor;
-    return capa.lambda_val > 0 ? {espesor: capa.espesor, lambda_val: capa.lambda_val} : 0; // Fixed typo from viewed file if any, actually getR was:
-    // return capa.lambda_val > 0 ? capa.espesor / capa.lambda_val : 0;
+    return capa.lambda_val > 0 ? capa.espesor / capa.lambda_val : 0;
 }
-// wait, I should copy exactly from view_file.
-// 66: function getR(capa: CapaMaterial): number {
-// 67:     if (capa.r_valor > 0) return capa.r_valor;
-// 68:     return capa.lambda_val > 0 ? capa.espesor / capa.lambda_val : 0;
-// 69: }
-// Let me use the exact code.
+
+// ─── Factor b (TABLA_7) ──────────────────────────────────────────────
+
+export function calcularB(ratio: number, escenario: string, caso: number): number {
+    let fila: number;
+    if (ratio < 0.25) fila = 0;
+    else if (ratio <= 0.50) fila = 1;
+    else if (ratio <= 0.75) fila = 2;
+    else if (ratio <= 1.00) fila = 3;
+    else if (ratio <= 1.25) fila = 4;
+    else if (ratio <= 2.00) fila = 5;
+    else if (ratio <= 2.50) fila = 6;
+    else if (ratio <= 3.00) fila = 7;
+    else fila = 8;
+
+    const colBase = ESCENARIO_COL[escenario] ?? 2;
+    return B_DATA[fila][colBase + (caso === 2 ? 1 : 0)];
+}
+
+// ─── Motor principal de cálculo ──────────────────────────────────────
+
+export function calcularAhorroCAE({
+    capas,
+    area_h_nh,
+    area_nh_e,
+    superficie_actuacion,
+    zona_climatica,
+    sup_envolvente_total = 0,
+    escenario_i = "antes_normal",
+    caso_i = 1,
+    escenario_f = "despues",
+    caso_f = 1,
+    ui_override,
+    uf_override,
+}: {
+    capas: CapaMaterial[];
+    area_h_nh: number;
+    area_nh_e: number;
+    superficie_actuacion: number;
+    zona_climatica: number;
+    sup_envolvente_total?: number;
+    escenario_i?: string;
+    caso_i?: number;
+    escenario_f?: string;
+    caso_f?: number;
+    ui_override?: number;
+    uf_override?: number;
+}): ResultadoTermico {
+    const r_mat_i = capas.filter((c) => !c.es_nueva).reduce((sum, c) => sum + getR(c), 0);
+    const r_mat_f = capas.reduce((sum, c) => sum + getR(c), 0);
+
+    // RT con Rsi + Rse = 0.10 + 0.10
+    const rt_i = redondearValor(r_mat_i + 0.20, 3);
+    const rt_f = redondearValor(r_mat_f + 0.20, 3);
+
+    // Up con RT ya redondeado
+    const up_i = rt_i > 0 ? redondearValor(1 / rt_i, 3) : 0;
+    const up_f = rt_f > 0 ? redondearValor(1 / rt_f, 3) : 0;
+
+    const ratio = area_nh_e > 0 ? area_h_nh / area_nh_e : 0;
+    const bi = calcularB(ratio, escenario_i, caso_i);
+    const bf = calcularB(ratio, escenario_f, caso_f);
+
+    // Ui/Uf con Up ya redondeado
+    const ui = ui_override ?? redondearValor(up_i * bi, 2);
+    const uf = uf_override ?? redondearValor(up_f * bf, 2);
+
+    // Ahorro kWh/año
+    const val_bruto = (ui - uf) * superficie_actuacion * zona_climatica;
+    const ahorro = Math.max(0, Math.round(val_bruto));
+
+    const pct = sup_envolvente_total > 0 ? redondearValor((superficie_actuacion / sup_envolvente_total) * 100, 2) : 0;
+
+    return {
+        rt_inicial: rt_i,
+        rt_final: rt_f,
+        up_inicial: up_i,
+        up_final: up_f,
+        b_inicial: bi,
+        b_final: bf,
+        ui_final: ui,
+        uf_final: uf,
+        ratio,
+        ahorro,
+        pct_envolvente: pct,
+    };
+}
+
+// ─── Generador de informe de texto ───────────────────────────────────
+
+export function generarInformeTexto({
+    capas,
+    resultado,
+    sup_actuacion,
+    sup_envolvente_total,
+    zona_climatica,
+    area_h_nh,
+    area_nh_e,
+}: {
+    capas: CapaMaterial[];
+    resultado: ResultadoTermico;
+    sup_actuacion: number;
+    sup_envolvente_total: number;
+    zona_climatica: number;
+    area_h_nh: number;
+    area_nh_e: number;
+}): string {
+    const capas_i = capas.filter((c) => !c.es_nueva);
+    const capas_m = capas.filter((c) => c.es_nueva);
+
+    const fmtCapa = (c: CapaMaterial, tag: string) => {
+        const r = getR(c);
+        if (c.r_valor > 0) return `  - ${c.nombre} [${tag}]: ${r.toFixed(3)} m²K/W`;
+        return `  - ${c.nombre} [${tag}]: e=${c.espesor} m / λ=${c.lambda_val} W/mK = ${r.toFixed(3)} m²K/W`;
+    };
+
+    const r_mat_i = capas_i.reduce((s, c) => s + getR(c), 0);
+    const r_mat_f = capas.reduce((s, c) => s + getR(c), 0);
+    const delta_u = resultado.ui_final - resultado.uf_final;
+
+    return [
+        "📊 INFORME DE JUSTIFICACIÓN TÉRMICA (CAE)",
+        "=".repeat(50),
+        "",
+        "1. CAPAS DE MATERIAL",
+        "Existentes:",
+        ...capas_i.map((c) => fmtCapa(c, "EXISTENTE")),
+        "Mejora:",
+        ...capas_m.map((c) => fmtCapa(c, "NUEVA")),
+        "",
+        "2. RESISTENCIAS TÉRMICAS",
+        `ΣR materiales (i) = ${r_mat_i.toFixed(3)} m²K/W`,
+        `RTi = ${r_mat_i.toFixed(3)} + 0.10 + 0.10 = ${resultado.rt_inicial.toFixed(3)} m²K/W`,
+        `ΣR materiales (f) = ${r_mat_f.toFixed(3)} m²K/W`,
+        `RTf = ${r_mat_f.toFixed(3)} + 0.10 + 0.10 = ${resultado.rt_final.toFixed(3)} m²K/W`,
+        "",
+        "3. TRANSMITANCIAS PROPIAS",
+        `Upi = 1 / ${resultado.rt_inicial.toFixed(3)} = ${resultado.up_inicial.toFixed(3)} W/m²K`,
+        `Upf = 1 / ${resultado.rt_final.toFixed(3)} = ${resultado.up_final.toFixed(3)} W/m²K`,
+        "",
+        "4. FACTOR b (TABLA 7 CAE)",
+        `Ratio = Ah-nh / Anh-e = ${area_h_nh.toFixed(2)} / ${area_nh_e.toFixed(2)} = ${resultado.ratio.toFixed(2)}`,
+        `bi = ${resultado.b_inicial.toFixed(2)}   bf = ${resultado.b_final.toFixed(2)}`,
+        "",
+        "5. TRANSMITANCIAS FINALES",
+        `Ui = Upi × bi = ${resultado.up_inicial.toFixed(3)} × ${resultado.b_inicial.toFixed(2)} = ${resultado.ui_final.toFixed(2)} W/m²K`,
+        `Uf = Upf × bf = ${resultado.up_final.toFixed(3)} × ${resultado.b_final.toFixed(2)} = ${resultado.uf_final.toFixed(2)} W/m²K`,
+        "",
+        "6. AHORRO ENERGÉTICO",
+        `ΔU = ${resultado.ui_final.toFixed(2)} − ${resultado.uf_final.toFixed(2)} = ${delta_u.toFixed(2)} W/m²K`,
+        `s = ${sup_actuacion.toFixed(2)} m²   S = ${sup_envolvente_total.toFixed(2)} m²   G = ${Math.round(zona_climatica)} h·K`,
+        `Afectado = ${sup_actuacion.toFixed(2)} / ${sup_envolvente_total.toFixed(2)} = ${resultado.pct_envolvente.toFixed(2)}%`,
+        `AE = ${delta_u.toFixed(2)} × ${sup_actuacion.toFixed(2)} × ${Math.round(zona_climatica)}`,
+        `   = ${resultado.ahorro} kWh/año`,
+        "",
+        `RESULTADO FINAL: ${resultado.ahorro} kWh/año`,
+    ].join("\n");
+}
