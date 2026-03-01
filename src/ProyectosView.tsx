@@ -133,11 +133,11 @@ export function ProyectosView() {
 
             {/* Content Area */}
             <div className="flex-1 overflow-y-auto p-6 md:p-8">
-                {return (
+                {loading ? (
                     <div className="flex items-center justify-center h-64">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
                     </div>
-                )} {projects.length === 0 ? (
+                ) : projects.length === 0 ? (
                     <div className="flex items-center justify-center h-64 border-2 border-dashed border-slate-800 rounded-xl bg-[#0a0a1a]">
                         <div className="text-center space-y-4">
                             <div className="w-16 h-16 bg-slate-800/50 rounded-full flex items-center justify-center mx-auto">
