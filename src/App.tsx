@@ -95,10 +95,10 @@ function App() {
 
   // Si hay sesión y licencia (o si estamos testeando y forzamos)
   if (session && license?.valid) {
-    return <DashboardLayout 
-      licenseKey={license.licenseKey || ''} 
-      tier={license.tier || 'pwa_only'} 
-      onLogout={handleLogout} 
+    return <DashboardLayout
+      licenseKey={license.licenseKey || ''}
+      tier={license.tier || 'pwa_only'}
+      onLogout={handleLogout}
     />;
   }
 
@@ -109,7 +109,7 @@ function App() {
         <div className="w-full max-w-md animate-in fade-in zoom-in duration-300">
           <div className="bg-[#0A0A1A] border border-slate-800 rounded-2xl p-8 shadow-2xl relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-600/10 blur-3xl -z-10"></div>
-            
+
             <div className="flex flex-col items-center mb-8">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 mb-4 transition-transform hover:scale-105">
                 <ShieldCheck className="w-8 h-8 text-white" />
@@ -167,7 +167,7 @@ function App() {
               </button>
             </form>
 
-            <button 
+            <button
               onClick={() => setView('landing')}
               className="w-full mt-6 text-slate-500 hover:text-white text-sm py-2 transition-colors"
             >
@@ -196,7 +196,7 @@ function App() {
           </div>
           <span className="text-xl font-bold tracking-tight">OmniCatastro <span className="text-indigo-400">PWA</span></span>
         </div>
-        <button 
+        <button
           onClick={() => setView('login')}
           className="bg-white/5 hover:bg-white/10 backdrop-blur-md border border-white/10 px-6 py-2.5 rounded-full font-semibold transition-all hover:scale-105 active:scale-95"
         >
@@ -211,17 +211,17 @@ function App() {
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-bold uppercase tracking-wider">
               <Sparkles className="w-3 h-3" /> v9.0 Pro Edition
             </div>
-            
+
             <h1 className="text-5xl lg:text-7xl font-extrabold leading-[1.1] tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-white via-white to-slate-500">
               La oficina técnica en tu <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-blue-400">dispositivo</span>.
             </h1>
-            
+
             <p className="text-lg text-slate-400 max-w-lg leading-relaxed">
               Consulta el catastro, calcula eficiencias energéticas y gestiona certificados CAE desde cualquier lugar con nuestra solución web progresiva.
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 pt-4">
-              <button 
+              <button
                 onClick={() => setView('login')}
                 className="bg-indigo-600 hover:bg-indigo-500 px-8 py-4 rounded-2xl font-bold text-lg transition-all shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-3 group"
               >
@@ -258,9 +258,9 @@ function App() {
             <div className="relative bg-[#0A0A1A] border border-slate-800 rounded-3xl p-4 shadow-3xl overflow-hidden group">
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent"></div>
               <div className="rounded-2xl overflow-hidden aspect-[4/3] bg-slate-900 flex items-center justify-center relative">
-                <img 
-                  src="/hero_b2b.png" 
-                  alt="App Interface" 
+                <img
+                  src="/hero_b2b.png"
+                  alt="App Interface"
                   className="w-full h-full object-cover opacity-80 group-hover:scale-110 transition-transform duration-1000"
                 />
                 <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity duration-300">
@@ -276,7 +276,7 @@ function App() {
 
       {/* Footer */}
       <footer className="container mx-auto px-6 py-12 border-t border-slate-900 mt-12 flex flex-col md:row items-center justify-between text-slate-500 text-sm gap-6">
-        <p>© 2024 OmniCatastro Suite. Todos los derechos reservados.</p>
+        <p>© 2026 OmniCatastro Suite. Todos los derechos reservados.</p>
         <div className="flex items-center gap-8">
           <a href="#" className="hover:text-indigo-400 transition-colors">Aviso Legal</a>
           <a href="#" className="hover:text-indigo-400 transition-colors">Privacidad</a>
