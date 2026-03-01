@@ -12,7 +12,7 @@ import {
     Building2,
     Users,
 } from "lucide-react";
-import { CentralDocumental } from "../CentralDocumental";
+import { CentralDocumental } from "../DocumentalCentral";
 import { ConsultaCatastral } from "../ConsultaCatastral";
 import { CalculadoraTermica } from "../CalculadoraTermica";
 import { ProyectosView } from "../ProyectosView";
