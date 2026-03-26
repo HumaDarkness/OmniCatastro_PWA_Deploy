@@ -294,8 +294,8 @@ type QuickLayerPresetId = "hormigon" | "yeso" | "madera" | "aislante";
 
 type CommonLayerSetId = "yeso" | "hormigon_yeso" | "madera_yeso";
 
-const SUPAFIL_FICHA_PUBLIC_PATH = "/fichas_tecnicas/SUPAFIL_Loft_045.png";
-const SUPAFIL_FICHA_FILE_NAME = "SUPAFIL_Loft_045.png";
+const SUPAFIL_FICHA_PUBLIC_PATH = "/fichas_tecnicas/SUPAFIL_Loft_045.jpg";
+const SUPAFIL_FICHA_FILE_NAME = "SUPAFIL_Loft_045.jpg";
 
 const QUICK_LAYER_PRESETS: Record<QuickLayerPresetId, { nombre: string; r: number; espesor: number; lambda: number }> = {
     hormigon: { nombre: "Hormigón armado", r: 0.04, espesor: 0.1, lambda: 2.5 },
