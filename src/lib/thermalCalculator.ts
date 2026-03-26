@@ -21,9 +21,9 @@ export type Caso = 'estanco' | 'ventilado';
 
 export interface CapaMaterial {
   nombre: string;
-  espesor: number;       // metros
-  lambda_val: number;    // W/(m·K)
-  r_valor: number;       // m²K/W (si se proporciona directamente)
+  espesor: number | string;       // metros
+  lambda_val: number | string;    // W/(m·K)
+  r_valor: number | string;       // m²K/W (si se proporciona directamente)
   es_nueva: boolean;
 }
 
@@ -175,8 +175,12 @@ export function getB(ratio: number, scenario: Scenario, caso: Caso): number {
 
 /** Calcula R de una capa (por R directo o por e/λ) */
 function calcularR(capa: CapaMaterial): number {
-  if (capa.r_valor > 0) return capa.r_valor;
-  if (capa.espesor > 0 && capa.lambda_val > 0) return capa.espesor / capa.lambda_val;
+  const rVal = Number(capa.r_valor);
+  const esp = Number(capa.espesor);
+  const lam = Number(capa.lambda_val);
+  
+  if (rVal > 0) return rVal;
+  if (esp > 0 && lam > 0) return esp / lam;
   return 0;
 }
 
@@ -258,7 +262,7 @@ export function generarInformeTexto(params: ParamsInforme): string {
   const capasExistentes = capas.filter(c => !c.es_nueva);
   const todasCapas = capas;
   const pct_afectado = sup_envolvente_total > 0 ? (sup_actuacion / sup_envolvente_total) * 100 : 0;
-  
+
   const lineas: string[] = [];
 
   lineas.push('1. SUPERFICIE Y PORCENTAJE AFECTADO');
@@ -269,7 +273,7 @@ export function generarInformeTexto(params: ParamsInforme): string {
   lineas.push('');
   lineas.push(`Ah-nh / Anh-e = ${fmt2(area_h_nh)} / ${fmt2(area_nh_e)} = ${fmt2(resultado.ratio)}`);
   lineas.push('');
-  
+
   lineas.push('2. RESISTENCIA TOTAL Y TRANSMITANCIA INICIAL (ANTES)');
   lineas.push('──────────────────────────────────────────────────────');
   lineas.push('Capas existentes:');

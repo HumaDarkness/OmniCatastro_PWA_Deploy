@@ -1557,8 +1557,8 @@ export function CalculadoraTermica() {
                                                 <Input
                                                     type="number"
                                                     step="0.001"
-                                                    value={c.r_valor !== 0 ? c.r_valor : ""}
-                                                    onChange={(e) => updateCapa(i, "r_valor", parseFloat(e.target.value) || 0)}
+                                                    value={c.r_valor === 0 ? "" : c.r_valor}
+                                                    onChange={(e) => updateCapa(i, "r_valor", e.target.value)}
                                                     placeholder="Ej: 0.18"
                                                     className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
                                                 />
@@ -1605,8 +1605,8 @@ export function CalculadoraTermica() {
                                                     <Input
                                                         type="number"
                                                         step="0.001"
-                                                        value={c.espesor || ""}
-                                                        onChange={(e) => updateCapa(i, "espesor", parseFloat(e.target.value) || 0)}
+                                                        value={c.espesor === 0 ? "" : c.espesor}
+                                                        onChange={(e) => updateCapa(i, "espesor", e.target.value)}
                                                         className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
                                                     />
                                                 </div>
@@ -1615,8 +1615,8 @@ export function CalculadoraTermica() {
                                                     <Input
                                                         type="number"
                                                         step="0.001"
-                                                        value={c.lambda_val || ""}
-                                                        onChange={(e) => updateCapa(i, "lambda_val", parseFloat(e.target.value) || 0)}
+                                                        value={c.lambda_val === 0 ? "" : c.lambda_val}
+                                                        onChange={(e) => updateCapa(i, "lambda_val", e.target.value)}
                                                         className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
                                                     />
                                                 </div>
@@ -1762,22 +1762,22 @@ export function CalculadoraTermica() {
                                 <div>
                                     <label className="text-[10px] text-blue-400 uppercase font-bold">Superficie Partición (m²)</label>
                                     <p className="text-[9px] text-slate-600 mb-1">Lo que se aísla</p>
-                                    <Input type="number" value={areaHNH} onChange={(e) => setAreaHNH(+e.target.value)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
+                                    <Input type="number" step="0.01" value={areaHNH} onChange={(e) => setAreaHNH(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-amber-400 uppercase font-bold">Superficie Cubierta (m²)</label>
                                     <p className="text-[9px] text-slate-600 mb-1">Límite para coef. b</p>
-                                    <Input type="number" value={areaNHE} onChange={(e) => setAreaNHE(+e.target.value)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
+                                    <Input type="number" step="0.01" value={areaNHE} onChange={(e) => setAreaNHE(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-slate-500 uppercase font-bold">Sup. Actuación (m²)</label>
                                     <p className="text-[9px] text-slate-600 mb-1">Superficie a aislar</p>
-                                    <Input type="number" value={supActuacion} onChange={(e) => setSupActuacion(+e.target.value)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
+                                    <Input type="number" step="0.01" value={supActuacion} onChange={(e) => setSupActuacion(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-slate-500 uppercase font-bold">Envolvente Total (m²)</label>
                                     <p className="text-[9px] text-slate-600 mb-1">Sin cubiertas</p>
-                                    <Input type="number" value={supEnvolvente} onChange={(e) => setSupEnvolvente(+e.target.value)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
+                                    <Input type="number" step="0.01" value={supEnvolvente} onChange={(e) => setSupEnvolvente(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
                                 </div>
                                 <div className="col-span-2 md:col-span-2">
                                     <label className="text-[10px] text-slate-500 uppercase font-bold">Zona Climática</label>

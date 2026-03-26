@@ -45,9 +45,9 @@ export function generarPDFAnexoE1(capas: CapaMaterial[], resultado: ResultadoTer
 
     const tableData = capas.map(c => [
         c.nombre || "Sin especificar",
-        c.espesor > 0 ? c.espesor.toFixed(3) : "-",
-        c.lambda_val > 0 ? c.lambda_val.toFixed(3) : "-",
-        c.r_valor > 0 ? c.r_valor.toFixed(3) : "-",
+        Number(c.espesor) > 0 ? Number(c.espesor).toFixed(3) : "-",
+        Number(c.lambda_val) > 0 ? Number(c.lambda_val).toFixed(3) : "-",
+        Number(c.r_valor) > 0 ? Number(c.r_valor).toFixed(3) : "-",
         c.es_nueva ? "MEJORA" : "EXISTENTE"
     ]);
 
