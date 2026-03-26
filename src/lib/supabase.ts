@@ -164,15 +164,59 @@ export async function getCurrentOrganizationId(): Promise<string | null> {
     return fromJwt;
   }
 
+  const pickOrgId = (rows: Array<{ organization_id?: unknown }> | null | undefined): string | null => {
+    if (!rows || rows.length === 0) return null;
+    for (const row of rows) {
+      const orgId = row?.organization_id;
+      if (typeof orgId === "string" && orgId.trim()) {
+        return orgId;
+      }
+    }
+    return null;
+  };
+
   const { data: licenses, error: licError } = await supabase
     .from("licenses")
     .select("organization_id")
     .eq("user_id", userData.user.id)
     .eq("status", "active")
     .order("created_at", { ascending: false })
-    .limit(1);
+    .limit(25);
 
-  if (licError || !licenses || licenses.length === 0) return null;
-  const orgId = licenses[0]?.organization_id;
-  return typeof orgId === "string" && orgId.trim() ? orgId : null;
+  if (!licError) {
+    const orgFromUserLicenses = pickOrgId(licenses as Array<{ organization_id?: unknown }> | null);
+    if (orgFromUserLicenses) return orgFromUserLicenses;
+  }
+
+  // Fallback legacy: algunos asientos antiguos pueden tener user_email sin user_id
+  const userEmail = userData.user.email?.trim().toLowerCase() ?? "";
+  if (userEmail) {
+    const { data: licensesByEmail, error: emailLicError } = await supabase
+      .from("licenses")
+      .select("organization_id")
+      .eq("user_email", userEmail)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(25);
+
+    if (!emailLicError) {
+      const orgFromEmailLicenses = pickOrgId(licensesByEmail as Array<{ organization_id?: unknown }> | null);
+      if (orgFromEmailLicenses) return orgFromEmailLicenses;
+    }
+  }
+
+  // Fallback operativo: si el usuario ya tiene proyectos, heredar su organization_id
+  const { data: projects, error: projError } = await supabase
+    .from("projects")
+    .select("organization_id")
+    .eq("created_by", userData.user.id)
+    .order("created_at", { ascending: false })
+    .limit(25);
+
+  if (!projError) {
+    const orgFromProjects = pickOrgId(projects as Array<{ organization_id?: unknown }> | null);
+    if (orgFromProjects) return orgFromProjects;
+  }
+
+  return null;
 }

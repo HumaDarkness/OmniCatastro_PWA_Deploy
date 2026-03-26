@@ -277,6 +277,31 @@ const CASOS_VENTILACION: { id: Caso; label: string; emoji: string }[] = [
     { id: "ventilado", label: "Ventilado (tejas rotas, rejillas)", emoji: "💨" },
 ];
 
+const CALC_STATE_STORAGE_KEY = "omnicatastro.calc-state.v1";
+
+interface CalcStateSnapshot {
+    capas: CapaMaterial[];
+    areaHNH: number;
+    areaNHE: number;
+    supActuacion: number;
+    supEnvolvente: number;
+    zonaKey: string;
+    scenarioI: Scenario;
+    scenarioF: Scenario;
+    caseI: Caso;
+    caseF: Caso;
+    modoCE3X: boolean;
+    overrideUi: string;
+    overrideUf: string;
+    clienteNombre: string;
+    clienteDni: string;
+    clienteDireccionDni: string;
+    filtroMetodo: Record<number, string>;
+    materialSearchByLayer: Record<number, string>;
+    soloFavoritosPorCapa: Record<number, boolean>;
+    resultado: ResultadoTermico | null;
+}
+
 export function CalculadoraTermica() {
     const [capas, setCapas] = useState<CapaMaterial[]>([
         { nombre: "Ladrillo hueco", espesor: 0.07, lambda_val: 0.49, r_valor: 0, es_nueva: false },
@@ -291,6 +316,8 @@ export function CalculadoraTermica() {
     const [copied, setCopied] = useState(false);
     const [materialesDB, setMaterialesDB] = useState<MaterialDB[]>([]);
     const [filtroMetodo, setFiltroMetodo] = useState<Record<number, string>>({});
+    const [materialSearchByLayer, setMaterialSearchByLayer] = useState<Record<number, string>>({});
+    const [soloFavoritosPorCapa, setSoloFavoritosPorCapa] = useState<Record<number, boolean>>({});
 
     // Nuevos estados para escenario y ventilación
     const [scenarioI, setScenarioI] = useState<Scenario>("nada_aislado");
@@ -314,6 +341,96 @@ export function CalculadoraTermica() {
         fileName: string;
         dataUrl: string;
     } | null>(null);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        try {
+            const raw = window.localStorage.getItem(CALC_STATE_STORAGE_KEY);
+            if (!raw) return;
+
+            const saved = JSON.parse(raw) as Partial<CalcStateSnapshot>;
+
+            if (Array.isArray(saved.capas) && saved.capas.length > 0) setCapas(saved.capas);
+            if (typeof saved.areaHNH === "number") setAreaHNH(saved.areaHNH);
+            if (typeof saved.areaNHE === "number") setAreaNHE(saved.areaNHE);
+            if (typeof saved.supActuacion === "number") setSupActuacion(saved.supActuacion);
+            if (typeof saved.supEnvolvente === "number") setSupEnvolvente(saved.supEnvolvente);
+            if (typeof saved.zonaKey === "string" && saved.zonaKey) setZonaKey(saved.zonaKey);
+            if (saved.scenarioI) setScenarioI(saved.scenarioI);
+            if (saved.scenarioF) setScenarioF(saved.scenarioF);
+            if (saved.caseI) setCaseI(saved.caseI);
+            if (saved.caseF) setCaseF(saved.caseF);
+            if (typeof saved.modoCE3X === "boolean") setModoCE3X(saved.modoCE3X);
+            if (typeof saved.overrideUi === "string") setOverrideUi(saved.overrideUi);
+            if (typeof saved.overrideUf === "string") setOverrideUf(saved.overrideUf);
+            if (typeof saved.clienteNombre === "string") setClienteNombre(saved.clienteNombre);
+            if (typeof saved.clienteDni === "string") setClienteDni(saved.clienteDni);
+            if (typeof saved.clienteDireccionDni === "string") setClienteDireccionDni(saved.clienteDireccionDni);
+            if (saved.filtroMetodo && typeof saved.filtroMetodo === "object") setFiltroMetodo(saved.filtroMetodo);
+            if (saved.materialSearchByLayer && typeof saved.materialSearchByLayer === "object") {
+                setMaterialSearchByLayer(saved.materialSearchByLayer);
+            }
+            if (saved.soloFavoritosPorCapa && typeof saved.soloFavoritosPorCapa === "object") {
+                setSoloFavoritosPorCapa(saved.soloFavoritosPorCapa);
+            }
+            if (saved.resultado && typeof saved.resultado === "object") setResultado(saved.resultado as ResultadoTermico);
+        } catch {
+            // Si hay datos corruptos en localStorage, no bloquear la UI.
+        }
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        try {
+            const snapshot: CalcStateSnapshot = {
+                capas,
+                areaHNH,
+                areaNHE,
+                supActuacion,
+                supEnvolvente,
+                zonaKey,
+                scenarioI,
+                scenarioF,
+                caseI,
+                caseF,
+                modoCE3X,
+                overrideUi,
+                overrideUf,
+                clienteNombre,
+                clienteDni,
+                clienteDireccionDni,
+                filtroMetodo,
+                materialSearchByLayer,
+                soloFavoritosPorCapa,
+                resultado,
+            };
+
+            window.localStorage.setItem(CALC_STATE_STORAGE_KEY, JSON.stringify(snapshot));
+        } catch {
+            // Evitar interrumpir flujo si localStorage no está disponible.
+        }
+    }, [
+        capas,
+        areaHNH,
+        areaNHE,
+        supActuacion,
+        supEnvolvente,
+        zonaKey,
+        scenarioI,
+        scenarioF,
+        caseI,
+        caseF,
+        modoCE3X,
+        overrideUi,
+        overrideUf,
+        clienteNombre,
+        clienteDni,
+        clienteDireccionDni,
+        filtroMetodo,
+        materialSearchByLayer,
+        soloFavoritosPorCapa,
+        resultado,
+    ]);
 
     // Cargar materiales CE3X desde Supabase
     useEffect(() => {
@@ -353,12 +470,26 @@ export function CalculadoraTermica() {
         );
     }, [filtroMetodo, materialesDB, setCapas]);
 
+    const reindexRecordAfterRemove = <T,>(record: Record<number, T>, removedIndex: number): Record<number, T> => {
+        const next: Record<number, T> = {};
+        Object.entries(record).forEach(([key, value]) => {
+            const idx = Number(key);
+            if (!Number.isFinite(idx) || idx === removedIndex) return;
+            const targetIdx = idx > removedIndex ? idx - 1 : idx;
+            next[targetIdx] = value;
+        });
+        return next;
+    };
+
     const addCapa = (esNueva: boolean) => {
         setCapas([...capas, { nombre: "", espesor: 0, lambda_val: 0, r_valor: 0, es_nueva: esNueva }]);
     };
 
     const removeCapa = (idx: number) => {
         setCapas(capas.filter((_, i) => i !== idx));
+        setFiltroMetodo((prev) => reindexRecordAfterRemove(prev, idx));
+        setMaterialSearchByLayer((prev) => reindexRecordAfterRemove(prev, idx));
+        setSoloFavoritosPorCapa((prev) => reindexRecordAfterRemove(prev, idx));
     };
 
     const updateCapa = (idx: number, field: keyof CapaMaterial, value: any) => {
@@ -567,17 +698,33 @@ export function CalculadoraTermica() {
         });
     };
 
+    const clearLocalCalcMemory = () => {
+        if (typeof window !== "undefined") {
+            window.localStorage.removeItem(CALC_STATE_STORAGE_KEY);
+        }
+        setXmlImportMsg("Memoria local limpiada. Mantienes la sesión online, pero este formulario vuelve a estado manual.");
+    };
+
     return (
         <div className="flex flex-col h-[calc(100vh-4rem)] p-6 gap-5 animate-in fade-in duration-500 overflow-y-auto">
             {/* Cabecera */}
-            <div>
-                <h2 className="text-3xl font-bold tracking-tight text-slate-100 flex items-center gap-3">
-                    <Calculator className="h-8 w-8 text-orange-400" />
-                    Calculadora Térmica CAE
-                </h2>
-                <p className="text-slate-400 mt-1">
-                    Calcula el ahorro energético (kWh/año) según CTE DB-HE — Tabla 7.
-                </p>
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                    <h2 className="text-3xl font-bold tracking-tight text-slate-100 flex items-center gap-3">
+                        <Calculator className="h-8 w-8 text-orange-400" />
+                        Calculadora Térmica CAE
+                    </h2>
+                    <p className="text-slate-400 mt-1">
+                        Calcula el ahorro energético (kWh/año) según CTE DB-HE — Tabla 7.
+                    </p>
+                </div>
+                <button
+                    onClick={clearLocalCalcMemory}
+                    className="h-8 px-3 rounded-md border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 text-xs"
+                    title="Borra memoria local del formulario guardada en este navegador"
+                >
+                    Limpiar memoria local
+                </button>
             </div>
 
             <Card className="bg-slate-900/40 border-slate-800">
@@ -746,101 +893,133 @@ export function CalculadoraTermica() {
                                 </div>
                             </div>
 
-                            {capas.map((c, i) => (
-                                <div
-                                    key={i}
-                                    className={`p-3 rounded-lg border transition-colors ${c.es_nueva
-                                        ? "bg-emerald-500/5 border-emerald-500/20"
-                                        : "bg-slate-800/30 border-slate-800"
-                                        }`}
-                                >
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <Badge
-                                            className={`text-[10px] ${c.es_nueva
-                                                ? "bg-emerald-500/15 text-emerald-400"
-                                                : "bg-slate-700 text-slate-400"
-                                                }`}
-                                        >
-                                            {c.es_nueva ? "✦ MEJORA" : "EXISTENTE"}
-                                        </Badge>
-                                        <button onClick={() => removeCapa(i)} className="ml-auto text-slate-600 hover:text-red-400 transition-colors">
-                                            <Trash2 className="h-4 w-4" />
-                                        </button>
-                                    </div>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                                        <div className="col-span-2 md:col-span-1">
-                                            <label className="text-[10px] text-slate-500 uppercase">Nombre</label>
-                                            <Input
-                                                value={c.nombre}
-                                                onChange={(e) => updateCapa(i, "nombre", e.target.value)}
-                                                placeholder="Ej: Ladrillo"
-                                                className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="text-[10px] text-slate-500 uppercase">Espesor (m)</label>
-                                            <Input
-                                                type="number"
-                                                step="0.001"
-                                                value={c.espesor || ""}
-                                                onChange={(e) => updateCapa(i, "espesor", parseFloat(e.target.value) || 0)}
-                                                className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="text-[10px] text-slate-500 uppercase">λ (W/mK)</label>
-                                            <Input
-                                                type="number"
-                                                step="0.001"
-                                                value={c.lambda_val || ""}
-                                                onChange={(e) => updateCapa(i, "lambda_val", parseFloat(e.target.value) || 0)}
-                                                className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="text-[10px] text-slate-500 uppercase">R directo</label>
-                                            <Input
-                                                type="number"
-                                                step="0.01"
-                                                value={c.r_valor || ""}
-                                                onChange={(e) => updateCapa(i, "r_valor", parseFloat(e.target.value) || 0)}
-                                                placeholder="Ej: 0.18"
-                                                className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
-                                            />
-                                        </div>
-                                    </div>
-                                    {/* Selector rápido de material CE3X (Supabase) */}
-                                    {materialesDB.length > 0 && c.es_nueva && (
-                                        <div className="mt-2 space-y-1">
-                                            <select
-                                                className="w-full h-7 text-[10px] bg-slate-900/30 border border-slate-700/50 text-slate-400 rounded px-2"
-                                                value={filtroMetodo[i] ?? ""}
-                                                onChange={(e) => setFiltroMetodo(prev => ({ ...prev, [i]: e.target.value }))}
+                            {capas.map((c, i) => {
+                                const methodFilter = filtroMetodo[i] ?? "";
+                                const searchTerm = (materialSearchByLayer[i] ?? "").trim().toLowerCase();
+                                const onlyFavorites = !!soloFavoritosPorCapa[i];
+                                const materialesFiltrados = materialesDB
+                                    .filter((m) => !methodFilter || m.application_method === methodFilter)
+                                    .filter((m) => !onlyFavorites || m.is_default)
+                                    .filter((m) => {
+                                        if (!searchTerm) return true;
+                                        const haystack = `${m.nombre} ${m.marca}`.toLowerCase();
+                                        return haystack.includes(searchTerm);
+                                    });
+
+                                return (
+                                    <div
+                                        key={i}
+                                        className={`p-3 rounded-lg border transition-colors ${c.es_nueva
+                                            ? "bg-emerald-500/5 border-emerald-500/20"
+                                            : "bg-slate-800/30 border-slate-800"
+                                            }`}
+                                    >
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <Badge
+                                                className={`text-[10px] ${c.es_nueva
+                                                    ? "bg-emerald-500/15 text-emerald-400"
+                                                    : "bg-slate-700 text-slate-400"
+                                                    }`}
                                             >
-                                                <option value="">Todos los métodos</option>
-                                                <option value="Insuflado">Insuflado</option>
-                                                <option value="Rollo">Rollo</option>
-                                            </select>
-                                            <select
-                                                className="w-full h-8 text-xs bg-slate-900/50 border border-slate-700 text-slate-300 rounded-md px-2"
-                                                defaultValue=""
-                                                onChange={(e) => seleccionarMaterialDB(i, e.target.value)}
-                                            >
-                                                <option value="" disabled>
-                                                    ↓ Seleccionar material CE3X...
-                                                </option>
-                                                {materialesDB
-                                                    .filter((m) => !(filtroMetodo[i] ?? "") || m.application_method === (filtroMetodo[i] ?? ""))
-                                                    .map((m) => (
-                                                        <option key={m.id} value={m.id}>
-                                                            {m.is_default ? "★ " : ""}{m.nombre} ({m.marca}) — λ={m.lambda_w_mk}{m.application_method ? ` [${m.application_method}]` : ""}
-                                                        </option>
-                                                    ))}
-                                            </select>
+                                                {c.es_nueva ? "✦ MEJORA" : "EXISTENTE"}
+                                            </Badge>
+                                            <button onClick={() => removeCapa(i)} className="ml-auto text-slate-600 hover:text-red-400 transition-colors">
+                                                <Trash2 className="h-4 w-4" />
+                                            </button>
                                         </div>
-                                    )}
-                                </div>
-                            ))}
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                            <div className="col-span-2 md:col-span-1">
+                                                <label className="text-[10px] text-slate-500 uppercase">Nombre</label>
+                                                <Input
+                                                    value={c.nombre}
+                                                    onChange={(e) => updateCapa(i, "nombre", e.target.value)}
+                                                    placeholder="Ej: Ladrillo"
+                                                    className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] text-slate-500 uppercase">Espesor (m)</label>
+                                                <Input
+                                                    type="number"
+                                                    step="0.001"
+                                                    value={c.espesor || ""}
+                                                    onChange={(e) => updateCapa(i, "espesor", parseFloat(e.target.value) || 0)}
+                                                    className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] text-slate-500 uppercase">λ (W/mK)</label>
+                                                <Input
+                                                    type="number"
+                                                    step="0.001"
+                                                    value={c.lambda_val || ""}
+                                                    onChange={(e) => updateCapa(i, "lambda_val", parseFloat(e.target.value) || 0)}
+                                                    className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] text-slate-500 uppercase">R directo</label>
+                                                <Input
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={c.r_valor || ""}
+                                                    onChange={(e) => updateCapa(i, "r_valor", parseFloat(e.target.value) || 0)}
+                                                    placeholder="Ej: 0.18"
+                                                    className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                                />
+                                            </div>
+                                        </div>
+                                        {/* Selector rápido de material CE3X (Supabase) */}
+                                        {materialesDB.length > 0 && c.es_nueva && (
+                                            <div className="mt-2 space-y-1">
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                    <select
+                                                        className="w-full h-7 text-[10px] bg-slate-900/30 border border-slate-700/50 text-slate-400 rounded px-2"
+                                                        value={methodFilter}
+                                                        onChange={(e) => setFiltroMetodo(prev => ({ ...prev, [i]: e.target.value }))}
+                                                    >
+                                                        <option value="">Todos los métodos</option>
+                                                        <option value="Insuflado">Insuflado</option>
+                                                        <option value="Rollo">Rollo</option>
+                                                    </select>
+                                                    <Input
+                                                        value={materialSearchByLayer[i] ?? ""}
+                                                        onChange={(e) => setMaterialSearchByLayer((prev) => ({ ...prev, [i]: e.target.value }))}
+                                                        placeholder="Buscar por nombre o marca"
+                                                        className="h-7 text-[10px] bg-slate-900/40 border-slate-700 text-slate-300"
+                                                    />
+                                                </div>
+                                                <label className="inline-flex items-center gap-2 text-[10px] text-slate-400">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={onlyFavorites}
+                                                        onChange={(e) => setSoloFavoritosPorCapa((prev) => ({ ...prev, [i]: e.target.checked }))}
+                                                        className="accent-emerald-500"
+                                                    />
+                                                    Solo favoritos
+                                                </label>
+                                                <select
+                                                    className="w-full h-8 text-xs bg-slate-900/50 border border-slate-700 text-slate-300 rounded-md px-2"
+                                                    defaultValue=""
+                                                    onChange={(e) => seleccionarMaterialDB(i, e.target.value)}
+                                                >
+                                                    <option value="" disabled>
+                                                        {materialesFiltrados.length > 0
+                                                            ? `↓ Seleccionar material CE3X... (${materialesFiltrados.length})`
+                                                            : "Sin resultados con ese filtro"}
+                                                    </option>
+                                                    {materialesFiltrados
+                                                        .map((m) => (
+                                                            <option key={m.id} value={m.id}>
+                                                                {m.is_default ? "★ " : ""}{m.nombre} ({m.marca}) — λ={m.lambda_w_mk}{m.application_method ? ` [${m.application_method}]` : ""}
+                                                            </option>
+                                                        ))}
+                                                </select>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
 
                             <div className="flex gap-2 pt-2">
                                 <button
