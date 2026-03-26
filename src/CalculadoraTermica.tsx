@@ -1556,8 +1556,8 @@ export function CalculadoraTermica() {
                                                 <label className="text-[10px] text-slate-500 uppercase">R directo</label>
                                                 <Input
                                                     type="number"
-                                                    step="0.01"
-                                                    value={c.r_valor || ""}
+                                                    step="0.001"
+                                                    value={c.r_valor !== 0 ? c.r_valor : ""}
                                                     onChange={(e) => updateCapa(i, "r_valor", parseFloat(e.target.value) || 0)}
                                                     placeholder="Ej: 0.18"
                                                     className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
