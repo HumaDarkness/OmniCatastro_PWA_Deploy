@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { FolderOpen, Plus, Search, MapPin, Calendar, Clock, CheckCircle } from "lucide-react";
+import { FolderOpen, Plus, MapPin, Calendar } from "lucide-react";
 import { supabase } from "./lib/supabase";
 import { ProyectoDetalle } from "./ProyectoDetalle";
 import type { Client } from "./ClientesView";

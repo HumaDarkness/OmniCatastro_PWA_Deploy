@@ -361,7 +361,7 @@ export function ClientesView() {
             <div className="flex-1 overflow-y-auto p-6 md:p-8">
                 {loading ? (
                     <div className="flex justify-center p-12">
-                        <div className="w-8 h-8 text-indigo-500 animate-spin" />
+                        <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
                     </div>
                 ) : clients.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-slate-800 rounded-xl bg-[#0a0a1a]">

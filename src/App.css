@@ -1,6 +1,7 @@
 #root {
   max-width: 1280px;
   margin: 0 auto;
+  padding: 2rem;
   text-align: center;
 }
 
@@ -38,19 +39,4 @@
 
 .read-the-docs {
   color: #888;
-}
-
-/* Fix for jspdf/jszip related issues if any */
-canvas {
-  display: block;
-}
-
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-4px); }
-  75% { transform: translateX(4px); }
-}
-
-.animate-in.shake {
-  animation: shake 0.4s ease-in-out;
 }
