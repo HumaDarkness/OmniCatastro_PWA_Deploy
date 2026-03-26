@@ -290,7 +290,7 @@ const CERT_INDEX_FILENAME = "_index.json";
 
 type CertDraftStatus = "pendiente" | "en_progreso" | "completado";
 
-type QuickLayerPresetId = "hormigon" | "yeso" | "madera" | "aislante";
+type QuickLayerPresetId = "hormigon" | "yeso" | "yeso_023" | "madera" | "aislante";
 
 type CommonLayerSetId = "yeso" | "hormigon_yeso" | "madera_yeso";
 
@@ -300,6 +300,7 @@ const SUPAFIL_FICHA_FILE_NAME = "SUPAFIL_Loft_045.jpg";
 const QUICK_LAYER_PRESETS: Record<QuickLayerPresetId, { nombre: string; r: number; espesor: number; lambda: number }> = {
     hormigon: { nombre: "Hormigón armado", r: 0.04, espesor: 0.1, lambda: 2.5 },
     yeso: { nombre: "Yeso", r: 0.036, espesor: 0.01, lambda: 0.43 },
+    yeso_023: { nombre: "Yeso", r: 0.023, espesor: 0.01, lambda: 0.43 },
     madera: { nombre: "Madera", r: 0.069, espesor: 0.02, lambda: 0.13 },
     aislante: { nombre: "SUPAFIL LOFT 045", r: 5.11, espesor: 0.23, lambda: 0.045 },
 };
@@ -308,7 +309,7 @@ const COMMON_LAYER_SETS: Record<CommonLayerSetId, Array<{ preset: QuickLayerPres
     yeso: [{ preset: "yeso", esNueva: false }],
     hormigon_yeso: [
         { preset: "hormigon", esNueva: false },
-        { preset: "yeso", esNueva: false },
+        { preset: "yeso_023", esNueva: false },
     ],
     madera_yeso: [
         { preset: "madera", esNueva: false },
@@ -1577,6 +1578,12 @@ export function CalculadoraTermica() {
                                                 className="h-7 px-2 rounded border border-slate-700 text-[10px] text-slate-300 hover:border-slate-500"
                                             >
                                                 Yeso
+                                            </button>
+                                            <button
+                                                onClick={() => applyQuickPresetToLayer(i, "yeso_023")}
+                                                className="h-7 px-2 rounded border border-slate-700 text-[10px] text-slate-300 hover:border-slate-500"
+                                            >
+                                                Yeso (0.023)
                                             </button>
                                             <button
                                                 onClick={() => applyQuickPresetToLayer(i, "madera")}
