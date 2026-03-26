@@ -8,6 +8,8 @@ import { DashboardLayout } from './components/DashboardLayout';
 type AppView = 'landing' | 'login' | 'dashboard';
 
 function App() {
+  const showDemoMode = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO_MODE === 'true';
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [view, setView] = useState<AppView>('landing');
@@ -183,17 +185,18 @@ function App() {
           </div>
         </div>
 
-        {/* DEV ONLY: Modo Demo para testing */}
-        <button
-          onClick={() => {
-            setSessionTier('suite_pro');
-            setSessionKey('DEMO-MODE');
-            setView('dashboard');
-          }}
-          className="mt-4 w-full text-xs text-slate-600 hover:text-slate-400 transition-colors py-2 border border-dashed border-slate-800 rounded-lg"
-        >
-          🧪 Modo Demo (Dev Only)
-        </button>
+        {showDemoMode && (
+          <button
+            onClick={() => {
+              setSessionTier('suite_pro');
+              setSessionKey('DEMO-MODE');
+              setView('dashboard');
+            }}
+            className="mt-4 w-full text-xs text-slate-600 hover:text-slate-400 transition-colors py-2 border border-dashed border-slate-800 rounded-lg"
+          >
+            Modo Demo (solo desarrollo)
+          </button>
+        )}
       </main>
     </div>
   );

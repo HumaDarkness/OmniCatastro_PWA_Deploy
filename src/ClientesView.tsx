@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Users, Plus, UploadCloud, Save, ChevronLeft, Image as ImageIcon, Loader2 } from "lucide-react";
-import { supabase } from "./lib/supabase";
+import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 
 export interface Client {
     id: string;
@@ -21,6 +21,8 @@ export interface Client {
 }
 
 export function ClientesView() {
+    const ORG_REQUIRED_MSG = "No se pudo resolver tu empresa activa. Inicia sesion real (no modo demo) y verifica que tu licencia este activa y vinculada a una organizacion.";
+
     const [clients, setClients] = useState<Client[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -98,13 +100,13 @@ export function ClientesView() {
 
     async function uploadDniImage(file: File, side: 'front' | 'back') {
         try {
-            const { data: license } = await supabase.from('licenses').select('organization_id').eq('status', 'active').maybeSingle();
-            if (!license?.organization_id) throw new Error("No organization found");
+            const organizationId = await getCurrentOrganizationId();
+            if (!organizationId) throw new Error(ORG_REQUIRED_MSG);
 
             const clientId = editingClient?.id || 'temp_' + Date.now();
             const fileExt = file.name.split('.').pop();
             const fileName = `dni_${side}_${Date.now()}.${fileExt}`;
-            const filePath = `${license.organization_id}/clients/${clientId}/${fileName}`;
+            const filePath = `${organizationId}/clients/${clientId}/${fileName}`;
 
             const setter = side === 'front' ? setUploadingFront : setUploadingBack;
             setter(true);
@@ -140,11 +142,11 @@ export function ClientesView() {
 
         setSaving(true);
         try {
-            const { data: license } = await supabase.from('licenses').select('organization_id').eq('status', 'active').maybeSingle();
-            if (!license?.organization_id) throw new Error("No org");
+            const organizationId = await getCurrentOrganizationId();
+            if (!organizationId) throw new Error(ORG_REQUIRED_MSG);
 
             const payload = {
-                organization_id: license.organization_id,
+                organization_id: organizationId,
                 first_name: editingClient.first_name,
                 middle_name: editingClient.middle_name || null,
                 last_name_1: editingClient.last_name_1,

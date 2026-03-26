@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { FolderOpen, Plus, MapPin, Calendar } from "lucide-react";
-import { supabase } from "./lib/supabase";
+import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 import { ProyectoDetalle } from "./ProyectoDetalle";
 import type { Client } from "./ClientesView";
 
@@ -63,19 +63,15 @@ export function ProyectosView() {
         setFormSaving(true);
 
         try {
-            // Get org_id from the user's active license
-            const { data: license } = await supabase
-                .from('licenses')
-                .select('organization_id')
-                .eq('status', 'active')
-                .maybeSingle();
-
-            if (!license?.organization_id) throw new Error("No organization found for this user.");
+            const organizationId = await getCurrentOrganizationId();
+            if (!organizationId) {
+                throw new Error("No se pudo resolver tu empresa activa. Inicia sesion real (no modo demo) y verifica que tu licencia este activa y vinculada a una organizacion para crear proyectos.");
+            }
 
             const { data: userAuth } = await supabase.auth.getUser();
 
             const { data: newProject, error } = await supabase.from('projects').insert([{
-                organization_id: license.organization_id,
+                organization_id: organizationId,
                 rc: formRc,
                 address: formAddress,
                 visit_date: formDate,

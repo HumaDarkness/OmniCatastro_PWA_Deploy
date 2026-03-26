@@ -145,3 +145,34 @@ export async function validateUserLicense(
 
   return { valid: true, tier, licenseKey: lic.license_key };
 }
+
+/**
+ * Resuelve organization_id del usuario autenticado.
+ * Prioridad:
+ * 1) JWT app_metadata (org_id / organization_id)
+ * 2) Licencia activa del propio usuario (fallback)
+ */
+export async function getCurrentOrganizationId(): Promise<string | null> {
+  if (!supabase) return null;
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData?.user) return null;
+
+  const appMeta = (userData.user.app_metadata ?? {}) as Record<string, unknown>;
+  const fromJwt = appMeta.org_id ?? appMeta.organization_id;
+  if (typeof fromJwt === "string" && fromJwt.trim()) {
+    return fromJwt;
+  }
+
+  const { data: licenses, error: licError } = await supabase
+    .from("licenses")
+    .select("organization_id")
+    .eq("user_id", userData.user.id)
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (licError || !licenses || licenses.length === 0) return null;
+  const orgId = licenses[0]?.organization_id;
+  return typeof orgId === "string" && orgId.trim() ? orgId : null;
+}
