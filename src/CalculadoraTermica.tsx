@@ -859,6 +859,7 @@ export function CalculadoraTermica() {
             g: gValue,
             area_h_nh: areaHNH,
             area_nh_e: areaNHE,
+            zonaKey: zonaKey,
         });
 
         if (clienteNombre.trim() || clienteDni.trim()) {

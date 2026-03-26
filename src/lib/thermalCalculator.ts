@@ -65,6 +65,7 @@ interface ParamsInforme {
   g: number;
   area_h_nh: number;
   area_nh_e: number;
+  zonaKey: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,49 +250,60 @@ export function calcularAhorroCAE(params: ParamsCAE): ResultadoTermico {
 // ---------------------------------------------------------------------------
 
 export function generarInformeTexto(params: ParamsInforme): string {
-  const { capas, resultado, sup_actuacion, sup_envolvente_total, g, area_h_nh, area_nh_e } = params;
+  const { capas, resultado, sup_actuacion, sup_envolvente_total, g, area_h_nh, area_nh_e, zonaKey } = params;
 
   const fmt = (v: number, d = 3) => Number(v).toFixed(d);
+  const fmt2 = (v: number) => Number(v).toFixed(2);
 
-  const lineas: string[] = [
-    '📊 INFORME CERTIFICADO AHORRO ENERGÉTICO (CAE)',
-    '══════════════════════════════════════════',
-    '',
-    `Superficie de actuación: ${fmt(sup_actuacion, 2)} m²`,
-    `Superficie envolvente total: ${fmt(sup_envolvente_total, 2)} m²`,
-    `Factor G: ${fmt(g, 2)} h·K`,
-    `Superficie Partición: ${fmt(area_h_nh, 2)} m²  |  Superficie Cubierta: ${fmt(area_nh_e, 2)} m²`,
-    `Ratio: ${fmt(area_h_nh, 2)} / ${fmt(area_nh_e, 2)} = ${fmt(resultado.ratio, 2)}`,
-    '',
-    '── Capas del cerramiento ──',
-  ];
+  const capasExistentes = capas.filter(c => !c.es_nueva);
+  const todasCapas = capas;
+  const pct_afectado = sup_envolvente_total > 0 ? (sup_actuacion / sup_envolvente_total) * 100 : 0;
+  
+  const lineas: string[] = [];
 
-  capas.forEach((c, i) => {
-    const tipo = c.es_nueva ? '[NUEVA]' : '[EXIST]';
-    const r = calcularR(c);
-    lineas.push(`  ${i + 1}. ${tipo} ${c.nombre || 'Sin nombre'} — e=${c.espesor}m, λ=${c.lambda_val}, R=${fmt(r)} m²K/W`);
+  lineas.push('1. SUPERFICIE Y PORCENTAJE AFECTADO');
+  lineas.push('────────────────────────────────────');
+  lineas.push(`Superficie envolvente total (S): ${fmt2(sup_envolvente_total)} m²`);
+  lineas.push(`Superficie actuación (s = Ah-nh): ${fmt2(sup_actuacion)} m²`);
+  lineas.push(`Porcentaje afectado: ${fmt2(sup_actuacion)} / ${fmt2(sup_envolvente_total)} = ${fmt2(pct_afectado)} %`);
+  lineas.push('');
+  lineas.push(`Ah-nh / Anh-e = ${fmt2(area_h_nh)} / ${fmt2(area_nh_e)} = ${fmt2(resultado.ratio)}`);
+  lineas.push('');
+  
+  lineas.push('2. RESISTENCIA TOTAL Y TRANSMITANCIA INICIAL (ANTES)');
+  lineas.push('──────────────────────────────────────────────────────');
+  lineas.push('Capas existentes:');
+  capasExistentes.forEach(c => {
+    lineas.push(`  - ${c.nombre || 'Sin nombre'}: ${fmt(calcularR(c))} m²K/W`);
   });
+  lineas.push(`ΣR materiales (i) = ${fmt(resultado.r_mat_inicial)} m²K/W`);
+  lineas.push(`RTi = ${fmt(resultado.r_mat_inicial)} + ${Rse} + ${Rsi} = ${fmt(resultado.rt_inicial)} m²K/W`);
+  lineas.push(`Upi = 1 / ${fmt(resultado.rt_inicial)} = ${fmt(resultado.up_inicial)} W/m²K`);
+  lineas.push(`bi = ${resultado.b_inicial} → Ui = ${fmt(resultado.up_inicial)} * ${resultado.b_inicial} = ${fmt2(resultado.ui_final)} W/m²K`);
+  lineas.push('');
+  lineas.push('');
 
+  lineas.push('3. RESISTENCIA TOTAL Y TRANSMITANCIA FINAL (DESPUÉS)');
+  lineas.push('──────────────────────────────────────────────────────');
+  lineas.push('Capas con mejora:');
+  todasCapas.forEach(c => {
+    const estado = c.es_nueva ? '[NUEVA]' : '[EXISTENTE]';
+    lineas.push(`  - ${c.nombre || 'Sin nombre'} ${estado}: ${fmt(calcularR(c))} m²K/W`);
+  });
+  lineas.push(`ΣR materiales (f) = ${fmt(resultado.r_mat_final)} m²K/W`);
+  lineas.push(`RTf = ${fmt(resultado.r_mat_final)} + ${Rse} + ${Rsi} = ${fmt(resultado.rt_final)} m²K/W`);
+  lineas.push(`Upf = 1 / ${fmt(resultado.rt_final)} = ${fmt(resultado.up_final)} W/m²K`);
+  lineas.push(`bf = ${resultado.b_final} → Uf = ${fmt(resultado.up_final)} * ${resultado.b_final} = ${fmt2(resultado.uf_final)} W/m²K`);
   lineas.push('');
-  lineas.push('── ANTES ──');
-  lineas.push(`ΣR materiales (i): ${fmt(resultado.r_mat_inicial)} m²K/W`);
-  lineas.push(`RT inicial: ${fmt(resultado.rt_inicial)} m²K/W`);
-  lineas.push(`Up inicial: ${fmt(resultado.up_inicial)} W/m²K`);
-  lineas.push(`bi = ${resultado.b_inicial} → Ui = ${fmt(resultado.up_inicial)} × ${resultado.b_inicial} = ${fmt(resultado.ui_final, 2)} W/m²K`);
   lineas.push('');
-  lineas.push('── DESPUÉS ──');
-  lineas.push(`ΣR materiales (f): ${fmt(resultado.r_mat_final)} m²K/W`);
-  lineas.push(`RT final: ${fmt(resultado.rt_final)} m²K/W`);
-  lineas.push(`Up final: ${fmt(resultado.up_final)} W/m²K`);
-  lineas.push(`bf = ${resultado.b_final} → Uf = ${fmt(resultado.up_final)} × ${resultado.b_final} = ${fmt(resultado.uf_final, 2)} W/m²K`);
+
+  lineas.push('4. CÁLCULO AHORRO ENERGÉTICO');
+  lineas.push('─────────────────────────────');
+  lineas.push(`Zona Climática: ${zonaKey}   G = ${fmt2(g)} h·K`);
+  lineas.push(`AE = Fp * (Ui − Uf) * s * G`);
+  lineas.push(`AE = ${FP} * (${fmt2(resultado.ui_final)} − ${fmt2(resultado.uf_final)}) * ${fmt2(sup_actuacion)} * ${fmt2(g)} = ${Math.round(resultado.ahorro)} kWh`);
   lineas.push('');
-  lineas.push('── AHORRO ENERGÉTICO ──');
-  lineas.push(`AE = Fp × (Ui − Uf) × s × G`);
-  lineas.push(`AE = ${FP} × (${fmt(resultado.ui_final, 2)} − ${fmt(resultado.uf_final, 2)}) × ${fmt(sup_actuacion, 2)} × ${fmt(g, 2)} = ${resultado.ahorro.toLocaleString()} kWh`);
-  lineas.push('');
-  lineas.push(`>>> RESULTADO FINAL: ${resultado.ahorro.toLocaleString()} kWh <<<`);
-  lineas.push('');
-  lineas.push('Generado por OmniCatastro Suite PWA');
+  lineas.push(`RESULTADO FINAL: ${Math.round(resultado.ahorro)} kWh`);
 
   return lineas.join('\n');
 }
