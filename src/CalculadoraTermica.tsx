@@ -59,8 +59,11 @@ interface ClienteBasico {
 }
 
 interface ParsedCE3X {
-    nombreCliente: string;
-    dniCliente: string;
+    clienteNombre: string;
+    clienteDni: string;
+    tecnicoNombre: string;
+    tecnicoNif: string;
+    tecnicoEntidadNif: string;
     zonaKey: string;
     superficieParticion: number;
     superficieCubierta: number;
@@ -74,9 +77,9 @@ function parseDecimal(value: string | null | undefined): number {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function queryText(doc: Document, selectors: string[]): string {
+function queryText(root: ParentNode, selectors: string[]): string {
     for (const selector of selectors) {
-        const text = doc.querySelector(selector)?.textContent?.trim();
+        const text = root.querySelector(selector)?.textContent?.trim();
         if (text) return text;
     }
     return "";
@@ -86,6 +89,69 @@ function normalizeDni(value: string): string {
     return value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
 }
 
+function roundTo(value: number, decimals = 2): number {
+    const factor = 10 ** decimals;
+    return Math.round((value + Number.EPSILON) * factor) / factor;
+}
+
+function normalizeTextKey(value: string): string {
+    return value
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase();
+}
+
+function isEnvelopeElementLabel(value: string): boolean {
+    const normalized = normalizeTextKey(value);
+    const blockedFragments = [
+        "SUELO",
+        "CUBIERTA",
+        "FACHADA",
+        "HUECO",
+        "LUCERNARIO",
+        "PARTICION",
+        "MURO",
+        "FORJADO",
+    ];
+
+    return blockedFragments.some((fragment) => normalized.includes(fragment));
+}
+
+function parseClienteNombreFromScopes(doc: Document, scopeSelectors: string[]): string {
+    for (const scopeSelector of scopeSelectors) {
+        const scope = doc.querySelector(scopeSelector);
+        if (!scope) continue;
+
+        const fullName = queryText(scope, [
+            "NombreYApellidos",
+            "NombreyApellidos",
+            "NombrePropietario",
+            "Titular",
+        ]);
+        if (fullName && !isEnvelopeElementLabel(fullName)) {
+            return fullName;
+        }
+
+        const nombre = queryText(scope, ["Nombre", "NombreTitular"]);
+        const apellido1 = queryText(scope, ["PrimerApellido", "Apellido1", "Apellido"]);
+        const apellido2 = queryText(scope, ["SegundoApellido", "Apellido2"]);
+
+        const composed = [nombre, apellido1, apellido2]
+            .filter(Boolean)
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        if (composed && !isEnvelopeElementLabel(composed)) {
+            return composed;
+        }
+    }
+
+    return "";
+}
+
 function parseCE3XXml(xmlText: string): ParsedCE3X {
     const parser = new DOMParser();
     const doc = parser.parseFromString(xmlText, "application/xml");
@@ -93,25 +159,38 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         throw new Error("XML CE3X malformado.");
     }
 
-    const nombreCliente = queryText(doc, [
-        "NombrePropietario",
-        "DatosAdministrativos NombrePropietario",
-        "IdentificacionEdificio NombrePropietario",
-        "Nombre",
+    const clienteScopeSelectors = [
+        "DatosDelSolicitante",
+        "DatosDelPropietario",
+        "Solicitante",
+        "Propietario",
+        "Titular",
+        "DatosAdministrativos",
+    ];
+
+    const clienteNombre = parseClienteNombreFromScopes(doc, clienteScopeSelectors);
+
+    // En CE3X de producción el DNI del titular suele no venir o se confunde con el técnico.
+    // Por fiabilidad operativa se desactiva extracción automática de DNI desde XML.
+    const clienteDni = "";
+
+    const tecnicoNombre = queryText(doc, [
+        "DatosDelCertificador NombreyApellidos",
+        "DatosDelCertificador NombreYApellidos",
+        "DatosDelCertificador Nombre",
     ]);
 
-    const dniCliente = normalizeDni(queryText(doc, [
-        "NIF",
-        "DNI",
-        "DocumentoIdentidad",
-        "DatosAdministrativos NIF",
-        "DatosAdministrativos DNI",
-    ]));
+    const tecnicoNif = normalizeDni(queryText(doc, ["DatosDelCertificador NIF"]));
+    const tecnicoEntidadNif = normalizeDni(queryText(doc, ["DatosDelCertificador NIFEntidad"]));
 
     const zonaRaw = queryText(doc, ["ZonaClimatica"]);
     const zonaKey = zonaRaw === "α3" ? "alpha3" : zonaRaw;
 
-    const elementos = [...doc.querySelectorAll("CerramientosOpacos Elemento, HuecosYLucernarios Elemento")];
+    const elementos = [
+        ...doc.querySelectorAll(
+            "CerramientosOpacos Elemento, HuecosYLucernarios Elemento, HuecosyLucernarios Elemento",
+        ),
+    ];
 
     let superficieParticion = 0;
     let superficieCubierta = 0;
@@ -121,10 +200,15 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         const tipo = el.querySelector("Tipo")?.textContent?.trim() || "";
         const sup = parseDecimal(el.querySelector("Superficie")?.textContent);
 
-        if (tipo === "ParticionInteriorHorizontal") {
+        const tipoNorm = normalizeTextKey(tipo);
+
+        if (
+            tipoNorm.includes("PARTICIONINTERIORHORIZONTAL")
+            || (tipoNorm.includes("PARTICION") && tipoNorm.includes("HORIZONTAL"))
+        ) {
             superficieParticion += sup;
             superficieEnvolvente += sup;
-        } else if (tipo === "Cubierta") {
+        } else if (tipoNorm.includes("CUBIERTA")) {
             superficieCubierta += sup;
         } else {
             superficieEnvolvente += sup;
@@ -132,16 +216,37 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
     }
 
     return {
-        nombreCliente,
-        dniCliente,
+        clienteNombre,
+        clienteDni,
+        tecnicoNombre,
+        tecnicoNif,
+        tecnicoEntidadNif,
         zonaKey,
-        superficieParticion,
-        superficieCubierta,
-        superficieEnvolvente,
+        superficieParticion: roundTo(superficieParticion, 2),
+        superficieCubierta: roundTo(superficieCubierta, 2),
+        superficieEnvolvente: roundTo(superficieEnvolvente, 2),
     };
 }
 
-// Zonas climáticas con G directo (mirror de Python zona_climatica.py)
+function buildXmlImportSummary(parsed: ParsedCE3X): string {
+    const parts = ["XML CE3X importado: superficies y zona actualizadas."];
+
+    if (parsed.clienteNombre) {
+        parts.push(
+            `Cliente detectado: ${parsed.clienteNombre}.`,
+        );
+    } else {
+        parts.push("Cliente no detectado en XML (completar manual o usar búsqueda por DNI).");
+    }
+
+    parts.push("DNI de cliente: CE3X normalmente no lo trae de forma fiable, úsalo manual o desde BD.");
+
+    if (parsed.tecnicoNombre) {
+        parts.push(`Técnico detectado (referencia): ${parsed.tecnicoNombre}.`);
+    }
+
+    return parts.join(" ");
+}
 const ZONAS_CLIMATICAS = Object.entries(VALORES_G).map(([zona, g]) => {
     const NOMBRES: Record<string, string> = {
         alpha3: "α3 — Canarias costa",
@@ -325,37 +430,40 @@ export function CalculadoraTermica() {
     const importarXmlCE3X = async (file?: File) => {
         if (!file) return;
 
+        // Limpieza preventiva para no arrastrar datos de importaciones previas.
+        setClienteNombre("");
+        setClienteDni("");
+        setDniLookupMsg(null);
+
         try {
             const text = await file.text();
             const parsed = parseCE3XXml(text);
 
-            if (parsed.superficieParticion > 0) {
-                setAreaHNH(parsed.superficieParticion);
-                setSupActuacion(parsed.superficieParticion);
-            }
-            if (parsed.superficieCubierta > 0) {
-                setAreaNHE(parsed.superficieCubierta);
-            }
-            if (parsed.superficieEnvolvente > 0) {
-                setSupEnvolvente(parsed.superficieEnvolvente);
-            }
+            // Siempre se actualizan superficies para no arrastrar valores previos del formulario.
+            setAreaHNH(parsed.superficieParticion);
+            setSupActuacion(parsed.superficieParticion);
+            setAreaNHE(parsed.superficieCubierta);
+            setSupEnvolvente(parsed.superficieEnvolvente);
 
             if (parsed.zonaKey && VALORES_G[parsed.zonaKey] !== undefined) {
                 setZonaKey(parsed.zonaKey);
             }
 
-            if (parsed.nombreCliente && !clienteNombre.trim()) {
-                setClienteNombre(parsed.nombreCliente);
-            }
+            setClienteNombre(parsed.clienteNombre || "");
 
-            if (parsed.dniCliente) {
-                setClienteDni(parsed.dniCliente);
-                if (supabase) await buscarClientePorDni(parsed.dniCliente);
+            setClienteDni(parsed.clienteDni);
+
+            if (parsed.clienteDni && supabase) {
+                await buscarClientePorDni(parsed.clienteDni);
+            } else {
+                setDniLookupMsg("DNI de cliente no disponible en XML CE3X. Usa búsqueda manual.");
             }
 
             setXmlFileName(file.name);
-            setXmlImportMsg("XML CE3X importado: superficies y zona actualizadas.");
+            setXmlImportMsg(buildXmlImportSummary(parsed));
         } catch {
+            setClienteNombre("");
+            setClienteDni("");
             setXmlImportMsg("No se pudo importar el XML CE3X. Revisa el archivo.");
         }
     };
