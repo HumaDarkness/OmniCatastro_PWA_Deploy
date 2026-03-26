@@ -19,6 +19,12 @@ import {
     FileCode,
     ZoomIn,
     X,
+    Save,
+    ListChecks,
+    RefreshCcw,
+    Download,
+    FolderPlus,
+    CircleCheckBig,
 } from "lucide-react";
 import {
     calcularAhorroCAE,
@@ -31,7 +37,7 @@ import {
     type Caso,
 } from "./lib/thermalCalculator";
 import { generarPDFAnexoE1 } from "./lib/anexoE1Generator";
-import { supabase } from "./lib/supabase";
+import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 import {
     CertificadoCapturasPanelControlado,
     createEmptyCapturasState,
@@ -278,8 +284,51 @@ const CASOS_VENTILACION: { id: Caso; label: string; emoji: string }[] = [
 ];
 
 const CALC_STATE_STORAGE_KEY = "omnicatastro.calc-state.v1";
+const CERT_DRAFT_VERSION = 1;
+const CERT_DRAFT_FOLDER = "certificados";
+const CERT_INDEX_FILENAME = "_index.json";
 
-interface CalcStateSnapshot {
+type CertDraftStatus = "pendiente" | "en_progreso" | "completado";
+
+type QuickLayerPresetId = "hormigon" | "yeso" | "madera" | "aislante";
+
+type CommonLayerSetId = "yeso" | "hormigon_yeso" | "madera_yeso";
+
+const SUPAFIL_FICHA_PUBLIC_PATH = "/fichas_tecnicas/SUPAFIL_Loft_045.png";
+const SUPAFIL_FICHA_FILE_NAME = "SUPAFIL_Loft_045.png";
+
+const QUICK_LAYER_PRESETS: Record<QuickLayerPresetId, { nombre: string; r: number; espesor: number; lambda: number }> = {
+    hormigon: { nombre: "Hormigón armado", r: 0.04, espesor: 0.1, lambda: 2.5 },
+    yeso: { nombre: "Yeso", r: 0.036, espesor: 0.01, lambda: 0.43 },
+    madera: { nombre: "Madera", r: 0.069, espesor: 0.02, lambda: 0.13 },
+    aislante: { nombre: "SUPAFIL LOFT 045", r: 5.11, espesor: 0.23, lambda: 0.045 },
+};
+
+const COMMON_LAYER_SETS: Record<CommonLayerSetId, Array<{ preset: QuickLayerPresetId; esNueva: boolean }>> = {
+    yeso: [{ preset: "yeso", esNueva: false }],
+    hormigon_yeso: [
+        { preset: "hormigon", esNueva: false },
+        { preset: "yeso", esNueva: false },
+    ],
+    madera_yeso: [
+        { preset: "madera", esNueva: false },
+        { preset: "yeso", esNueva: false },
+    ],
+};
+
+interface CertificateDraftIndexItem {
+    rc: string;
+    status: CertDraftStatus;
+    updatedAt: string;
+    clienteNombre: string;
+    clienteDni: string;
+}
+
+interface CertificateDraftPayload {
+    version: number;
+    rc: string;
+    status: CertDraftStatus;
+    updatedAt: string;
     capas: CapaMaterial[];
     areaHNH: number;
     areaNHE: number;
@@ -290,6 +339,61 @@ interface CalcStateSnapshot {
     scenarioF: Scenario;
     caseI: Caso;
     caseF: Caso;
+    ventilationLocked: boolean;
+    modoCE3X: boolean;
+    overrideUi: string;
+    overrideUf: string;
+    clienteNombre: string;
+    clienteDni: string;
+    clienteDireccionDni: string;
+    filtroMetodo: Record<number, string>;
+    materialSearchByLayer: Record<number, string>;
+    soloFavoritosPorCapa: Record<number, boolean>;
+    capturas: CapturasState;
+    resultado: ResultadoTermico | null;
+}
+
+const INITIAL_CAPAS: CapaMaterial[] = [];
+
+function cloneInitialCapas(): CapaMaterial[] {
+    return INITIAL_CAPAS.map((capa) => ({ ...capa }));
+}
+
+function normalizeRc(value: string): string {
+    return value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
+        reader.readAsDataURL(blob);
+    });
+}
+
+function getDraftPath(organizationId: string, rc: string): string {
+    return `${organizationId}/${CERT_DRAFT_FOLDER}/cert_${normalizeRc(rc)}.json`;
+}
+
+function getIndexPath(organizationId: string): string {
+    return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_INDEX_FILENAME}`;
+}
+
+interface CalcStateSnapshot {
+    expedienteRc: string;
+    certStatus: CertDraftStatus;
+    capas: CapaMaterial[];
+    areaHNH: number;
+    areaNHE: number;
+    supActuacion: number;
+    supEnvolvente: number;
+    zonaKey: string;
+    scenarioI: Scenario;
+    scenarioF: Scenario;
+    caseI: Caso;
+    caseF: Caso;
+    ventilationLocked: boolean;
     modoCE3X: boolean;
     overrideUi: string;
     overrideUf: string;
@@ -303,10 +407,10 @@ interface CalcStateSnapshot {
 }
 
 export function CalculadoraTermica() {
-    const [capas, setCapas] = useState<CapaMaterial[]>([
-        { nombre: "Ladrillo hueco", espesor: 0.07, lambda_val: 0.49, r_valor: 0, es_nueva: false },
-        { nombre: "Cámara de aire", espesor: 0, lambda_val: 0, r_valor: 0.18, es_nueva: false },
-    ]);
+    const [expedienteRc, setExpedienteRc] = useState("");
+    const [certStatus, setCertStatus] = useState<CertDraftStatus>("en_progreso");
+
+    const [capas, setCapas] = useState<CapaMaterial[]>(cloneInitialCapas());
     const [areaHNH, setAreaHNH] = useState(25);
     const [areaNHE, setAreaNHE] = useState(25);
     const [supActuacion, setSupActuacion] = useState(25);
@@ -318,12 +422,14 @@ export function CalculadoraTermica() {
     const [filtroMetodo, setFiltroMetodo] = useState<Record<number, string>>({});
     const [materialSearchByLayer, setMaterialSearchByLayer] = useState<Record<number, string>>({});
     const [soloFavoritosPorCapa, setSoloFavoritosPorCapa] = useState<Record<number, boolean>>({});
+    const [showAdvancedByLayer, setShowAdvancedByLayer] = useState<Record<number, boolean>>({});
 
     // Nuevos estados para escenario y ventilación
     const [scenarioI, setScenarioI] = useState<Scenario>("nada_aislado");
     const [scenarioF, setScenarioF] = useState<Scenario>("particion_aislada");
     const [caseI, setCaseI] = useState<Caso>("estanco");
     const [caseF, setCaseF] = useState<Caso>("estanco");
+    const [ventilationLocked, setVentilationLocked] = useState(true);
     const [modoCE3X, setModoCE3X] = useState(false);
     const [overrideUi, setOverrideUi] = useState("");
     const [overrideUf, setOverrideUf] = useState("");
@@ -341,6 +447,11 @@ export function CalculadoraTermica() {
         fileName: string;
         dataUrl: string;
     } | null>(null);
+    const [draftQueue, setDraftQueue] = useState<CertificateDraftIndexItem[]>([]);
+    const [draftLoading, setDraftLoading] = useState(false);
+    const [draftSaving, setDraftSaving] = useState(false);
+    const [draftMsg, setDraftMsg] = useState<string | null>(null);
+    const [draftError, setDraftError] = useState<string | null>(null);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -350,7 +461,13 @@ export function CalculadoraTermica() {
 
             const saved = JSON.parse(raw) as Partial<CalcStateSnapshot>;
 
-            if (Array.isArray(saved.capas) && saved.capas.length > 0) setCapas(saved.capas);
+            if (typeof saved.expedienteRc === "string") setExpedienteRc(saved.expedienteRc);
+            if (saved.certStatus === "pendiente" || saved.certStatus === "en_progreso" || saved.certStatus === "completado") {
+                setCertStatus(saved.certStatus);
+            }
+            if (Array.isArray(saved.capas) && typeof saved.expedienteRc === "string" && saved.expedienteRc.trim()) {
+                setCapas(saved.capas);
+            }
             if (typeof saved.areaHNH === "number") setAreaHNH(saved.areaHNH);
             if (typeof saved.areaNHE === "number") setAreaNHE(saved.areaNHE);
             if (typeof saved.supActuacion === "number") setSupActuacion(saved.supActuacion);
@@ -360,6 +477,7 @@ export function CalculadoraTermica() {
             if (saved.scenarioF) setScenarioF(saved.scenarioF);
             if (saved.caseI) setCaseI(saved.caseI);
             if (saved.caseF) setCaseF(saved.caseF);
+            if (typeof saved.ventilationLocked === "boolean") setVentilationLocked(saved.ventilationLocked);
             if (typeof saved.modoCE3X === "boolean") setModoCE3X(saved.modoCE3X);
             if (typeof saved.overrideUi === "string") setOverrideUi(saved.overrideUi);
             if (typeof saved.overrideUf === "string") setOverrideUf(saved.overrideUf);
@@ -383,6 +501,8 @@ export function CalculadoraTermica() {
         if (typeof window === "undefined") return;
         try {
             const snapshot: CalcStateSnapshot = {
+                expedienteRc,
+                certStatus,
                 capas,
                 areaHNH,
                 areaNHE,
@@ -393,6 +513,7 @@ export function CalculadoraTermica() {
                 scenarioF,
                 caseI,
                 caseF,
+                ventilationLocked,
                 modoCE3X,
                 overrideUi,
                 overrideUf,
@@ -410,6 +531,8 @@ export function CalculadoraTermica() {
             // Evitar interrumpir flujo si localStorage no está disponible.
         }
     }, [
+        expedienteRc,
+        certStatus,
         capas,
         areaHNH,
         areaNHE,
@@ -420,6 +543,7 @@ export function CalculadoraTermica() {
         scenarioF,
         caseI,
         caseF,
+        ventilationLocked,
         modoCE3X,
         overrideUi,
         overrideUf,
@@ -482,7 +606,74 @@ export function CalculadoraTermica() {
     };
 
     const addCapa = (esNueva: boolean) => {
-        setCapas([...capas, { nombre: "", espesor: 0, lambda_val: 0, r_valor: 0, es_nueva: esNueva }]);
+        setCapas((prev) => [...prev, { nombre: "", espesor: 0, lambda_val: 0, r_valor: 0, es_nueva: esNueva }]);
+    };
+
+    const addPresetLayer = (presetId: QuickLayerPresetId, esNueva: boolean) => {
+        const preset = QUICK_LAYER_PRESETS[presetId];
+        setCapas((prev) => [
+            ...prev,
+            {
+                nombre: preset.nombre,
+                espesor: preset.espesor,
+                lambda_val: preset.lambda,
+                r_valor: preset.r,
+                es_nueva: esNueva,
+            },
+        ]);
+
+        if (presetId === "aislante") {
+            void loadSupafilFichaTecnica();
+        }
+    };
+
+    const resetLayerAuxState = () => {
+        setFiltroMetodo({});
+        setMaterialSearchByLayer({});
+        setSoloFavoritosPorCapa({});
+        setShowAdvancedByLayer({});
+        setResultado(null);
+    };
+
+    const applyCommonLayerSet = (setId: CommonLayerSetId) => {
+        const definition = COMMON_LAYER_SETS[setId];
+        const nextLayers: CapaMaterial[] = definition.map((item) => {
+            const preset = QUICK_LAYER_PRESETS[item.preset];
+            return {
+                nombre: preset.nombre,
+                espesor: preset.espesor,
+                lambda_val: preset.lambda,
+                r_valor: preset.r,
+                es_nueva: item.esNueva,
+            };
+        });
+
+        setCapas(nextLayers);
+        resetLayerAuxState();
+    };
+
+    const loadSupafilFichaTecnica = async () => {
+        if (capturas.ficha_tecnica?.fileName === SUPAFIL_FICHA_FILE_NAME) return;
+
+        try {
+            const response = await fetch(SUPAFIL_FICHA_PUBLIC_PATH);
+            if (!response.ok) throw new Error("No disponible");
+            const blob = await response.blob();
+            const dataUrl = await blobToDataUrl(blob);
+
+            setCapturas((prev) => ({
+                ...prev,
+                ficha_tecnica: {
+                    fileName: SUPAFIL_FICHA_FILE_NAME,
+                    mimeType: blob.type || "image/png",
+                    dataUrl,
+                },
+            }));
+
+            setDraftMsg("Ficha técnica SUPAFIL cargada automáticamente para copiar al PDF.");
+        } catch {
+            setDraftError("No se pudo cargar la ficha técnica SUPAFIL automática. Puedes subirla manualmente en Capturas.");
+        }
     };
 
     const removeCapa = (idx: number) => {
@@ -490,12 +681,33 @@ export function CalculadoraTermica() {
         setFiltroMetodo((prev) => reindexRecordAfterRemove(prev, idx));
         setMaterialSearchByLayer((prev) => reindexRecordAfterRemove(prev, idx));
         setSoloFavoritosPorCapa((prev) => reindexRecordAfterRemove(prev, idx));
+        setShowAdvancedByLayer((prev) => reindexRecordAfterRemove(prev, idx));
     };
 
-    const updateCapa = (idx: number, field: keyof CapaMaterial, value: any) => {
-        const updated = [...capas];
-        (updated[idx] as any)[field] = value;
-        setCapas(updated);
+    const updateCapa = <K extends keyof CapaMaterial>(idx: number, field: K, value: CapaMaterial[K]) => {
+        setCapas((prev) => {
+            const updated = [...prev];
+            updated[idx] = {
+                ...updated[idx],
+                [field]: value,
+            };
+            return updated;
+        });
+    };
+
+    const applyQuickPresetToLayer = (idx: number, presetId: QuickLayerPresetId) => {
+        const preset = QUICK_LAYER_PRESETS[presetId];
+        setCapas((prev) => {
+            const updated = [...prev];
+            updated[idx] = {
+                ...updated[idx],
+                nombre: preset.nombre,
+                r_valor: preset.r,
+                espesor: preset.espesor,
+                lambda_val: preset.lambda,
+            };
+            return updated;
+        });
     };
 
     const seleccionarMaterialDB = (idx: number, materialId: string) => {
@@ -705,6 +917,263 @@ export function CalculadoraTermica() {
         setXmlImportMsg("Memoria local limpiada. Mantienes la sesión online, pero este formulario vuelve a estado manual.");
     };
 
+    const sortDrafts = (items: CertificateDraftIndexItem[]): CertificateDraftIndexItem[] => {
+        const statusOrder: Record<CertDraftStatus, number> = {
+            pendiente: 0,
+            en_progreso: 1,
+            completado: 2,
+        };
+
+        return [...items].sort((a, b) => {
+            const statusDiff = statusOrder[a.status] - statusOrder[b.status];
+            if (statusDiff !== 0) return statusDiff;
+            return b.updatedAt.localeCompare(a.updatedAt);
+        });
+    };
+
+    const resolveOrganizationOrThrow = async (): Promise<string> => {
+        const organizationId = await getCurrentOrganizationId();
+        if (!organizationId) {
+            throw new Error("No se pudo resolver la empresa activa para guardar/cargar certificados.");
+        }
+        return organizationId;
+    };
+
+    const loadDraftIndex = async (organizationId: string): Promise<CertificateDraftIndexItem[]> => {
+        const indexPath = getIndexPath(organizationId);
+        const { data, error } = await supabase.storage.from("work_photos").download(indexPath);
+        if (error || !data) return [];
+
+        try {
+            const text = await data.text();
+            const parsed = JSON.parse(text) as CertificateDraftIndexItem[];
+            if (!Array.isArray(parsed)) return [];
+            return parsed.filter((it) => typeof it.rc === "string" && typeof it.updatedAt === "string");
+        } catch {
+            return [];
+        }
+    };
+
+    const saveDraftIndex = async (organizationId: string, items: CertificateDraftIndexItem[]) => {
+        const indexPath = getIndexPath(organizationId);
+        const blob = new Blob([JSON.stringify(sortDrafts(items), null, 2)], { type: "application/json" });
+        const { error } = await supabase.storage.from("work_photos").upload(indexPath, blob, {
+            upsert: true,
+            contentType: "application/json",
+        });
+        if (error) throw error;
+    };
+
+    const refreshDraftQueue = async () => {
+        if (!supabase) return;
+        setDraftLoading(true);
+        setDraftError(null);
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const indexItems = await loadDraftIndex(organizationId);
+            setDraftQueue(sortDrafts(indexItems));
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudo cargar la cola de certificados.");
+        } finally {
+            setDraftLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        refreshDraftQueue();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
+        if (!ventilationLocked) return;
+        setCaseI("estanco");
+        setCaseF("estanco");
+    }, [ventilationLocked]);
+
+    const applyDraftPayload = (payload: CertificateDraftPayload) => {
+        setExpedienteRc(payload.rc || "");
+        setCertStatus(payload.status || "en_progreso");
+        setCapas(Array.isArray(payload.capas) && payload.capas.length > 0 ? payload.capas : cloneInitialCapas());
+        setAreaHNH(payload.areaHNH ?? 25);
+        setAreaNHE(payload.areaNHE ?? 25);
+        setSupActuacion(payload.supActuacion ?? 25);
+        setSupEnvolvente(payload.supEnvolvente ?? 120);
+        setZonaKey(payload.zonaKey || "D3");
+        setScenarioI(payload.scenarioI || "nada_aislado");
+        setScenarioF(payload.scenarioF || "particion_aislada");
+        setCaseI(payload.caseI || "estanco");
+        setCaseF(payload.caseF || "estanco");
+        setVentilationLocked(typeof payload.ventilationLocked === "boolean" ? payload.ventilationLocked : true);
+        setModoCE3X(!!payload.modoCE3X);
+        setOverrideUi(payload.overrideUi || "");
+        setOverrideUf(payload.overrideUf || "");
+        setClienteNombre(payload.clienteNombre || "");
+        setClienteDni(payload.clienteDni || "");
+        setClienteDireccionDni(payload.clienteDireccionDni || "");
+        setFiltroMetodo(payload.filtroMetodo || {});
+        setMaterialSearchByLayer(payload.materialSearchByLayer || {});
+        setSoloFavoritosPorCapa(payload.soloFavoritosPorCapa || {});
+        setCapturas(payload.capturas || createEmptyCapturasState());
+        setResultado(payload.resultado ?? null);
+    };
+
+    const saveCurrentDraft = async (statusOverride?: CertDraftStatus) => {
+        const rcNormalized = normalizeRc(expedienteRc);
+        if (!rcNormalized) {
+            setDraftError("Debes indicar Referencia Catastral para guardar el certificado.");
+            return;
+        }
+        if (!supabase) {
+            setDraftError("Supabase no está configurado en esta sesión.");
+            return;
+        }
+
+        setDraftSaving(true);
+        setDraftError(null);
+        setDraftMsg(null);
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const finalStatus = statusOverride ?? certStatus;
+            const nowIso = new Date().toISOString();
+
+            const payload: CertificateDraftPayload = {
+                version: CERT_DRAFT_VERSION,
+                rc: rcNormalized,
+                status: finalStatus,
+                updatedAt: nowIso,
+                capas,
+                areaHNH,
+                areaNHE,
+                supActuacion,
+                supEnvolvente,
+                zonaKey,
+                scenarioI,
+                scenarioF,
+                caseI,
+                caseF,
+                ventilationLocked,
+                modoCE3X,
+                overrideUi,
+                overrideUf,
+                clienteNombre,
+                clienteDni,
+                clienteDireccionDni,
+                filtroMetodo,
+                materialSearchByLayer,
+                soloFavoritosPorCapa,
+                capturas,
+                resultado,
+            };
+
+            const draftPath = getDraftPath(organizationId, rcNormalized);
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+            const { error } = await supabase.storage.from("work_photos").upload(draftPath, blob, {
+                upsert: true,
+                contentType: "application/json",
+            });
+            if (error) throw error;
+
+            const currentIndex = await loadDraftIndex(organizationId);
+            const merged: CertificateDraftIndexItem[] = [
+                {
+                    rc: rcNormalized,
+                    status: finalStatus,
+                    updatedAt: nowIso,
+                    clienteNombre: clienteNombre.trim(),
+                    clienteDni: clienteDni.trim(),
+                },
+                ...currentIndex.filter((it) => normalizeRc(it.rc) !== rcNormalized),
+            ];
+
+            await saveDraftIndex(organizationId, merged);
+            setCertStatus(finalStatus);
+            setExpedienteRc(rcNormalized);
+            setDraftQueue(sortDrafts(merged));
+            setDraftMsg(finalStatus === "completado"
+                ? `Certificado ${rcNormalized} marcado como completado y guardado.`
+                : `Borrador ${rcNormalized} guardado correctamente.`);
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudo guardar el borrador.");
+        } finally {
+            setDraftSaving(false);
+        }
+    };
+
+    const loadDraft = async (item: CertificateDraftIndexItem) => {
+        if (!supabase) return;
+        setDraftLoading(true);
+        setDraftError(null);
+        setDraftMsg(null);
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const draftPath = getDraftPath(organizationId, item.rc);
+            const { data, error } = await supabase.storage.from("work_photos").download(draftPath);
+            if (error || !data) throw new Error("No se pudo descargar el borrador seleccionado.");
+
+            const text = await data.text();
+            const payload = JSON.parse(text) as CertificateDraftPayload;
+            applyDraftPayload(payload);
+            setDraftMsg(`Cargado certificado ${item.rc}.`);
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudo cargar el borrador.");
+        } finally {
+            setDraftLoading(false);
+        }
+    };
+
+    const loadNextPendingDraft = async () => {
+        const next = draftQueue.find((it) => it.status !== "completado");
+        if (!next) {
+            setDraftMsg("No hay certificados pendientes en la cola.");
+            return;
+        }
+        await loadDraft(next);
+    };
+
+    const resetForNewCertificate = () => {
+        setExpedienteRc("");
+        setCertStatus("en_progreso");
+        setCapas(cloneInitialCapas());
+        setAreaHNH(25);
+        setAreaNHE(25);
+        setSupActuacion(25);
+        setSupEnvolvente(120);
+        setZonaKey("D3");
+        setScenarioI("nada_aislado");
+        setScenarioF("particion_aislada");
+        setCaseI("estanco");
+        setCaseF("estanco");
+        setVentilationLocked(true);
+        setModoCE3X(false);
+        setOverrideUi("");
+        setOverrideUf("");
+        setClienteNombre("");
+        setClienteDni("");
+        setClienteDireccionDni("");
+        setCapturas(createEmptyCapturasState());
+        setResultado(null);
+        setXmlFileName("");
+        setXmlImportMsg("Nuevo expediente preparado. Define RC y comienza el siguiente certificado.");
+        setDraftMsg(null);
+        setDraftError(null);
+    };
+
+    const queueTotal = draftQueue.length;
+    const queueCompleted = draftQueue.filter((it) => it.status === "completado").length;
+    const queuePending = queueTotal - queueCompleted;
+
+    const materialFlags = {
+        hormigon: capas.some((c) => c.nombre.toLowerCase().includes("hormig")),
+        yeso: capas.some((c) => c.nombre.toLowerCase().includes("yeso")),
+        madera: capas.some((c) => c.nombre.toLowerCase().includes("madera")),
+    };
+
+    const draftStatusLabel = (status: CertDraftStatus) => {
+        if (status === "completado") return "Completado";
+        if (status === "en_progreso") return "En progreso";
+        return "Pendiente";
+    };
+
     return (
         <div className="flex flex-col h-[calc(100vh-4rem)] p-6 gap-5 animate-in fade-in duration-500 overflow-y-auto">
             {/* Cabecera */}
@@ -726,6 +1195,139 @@ export function CalculadoraTermica() {
                     Limpiar memoria local
                 </button>
             </div>
+
+            <Card className="bg-slate-900/40 border-slate-800">
+                <CardHeader className="pb-3">
+                    <CardTitle className="text-lg text-slate-200 flex items-center gap-2">
+                        <ListChecks className="h-5 w-5 text-amber-300" />
+                        Flujo por lote de certificados
+                    </CardTitle>
+                    <CardDescription className="text-slate-500">
+                        Guarda por Referencia Catastral, retoma expedientes en segundos y marca completados sin perder cálculos ni capturas.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                        <div className="md:col-span-2">
+                            <label className="text-[10px] text-slate-500 uppercase font-bold">Referencia catastral</label>
+                            <Input
+                                value={expedienteRc}
+                                onChange={(e) => setExpedienteRc(normalizeRc(e.target.value))}
+                                placeholder="Ej: 1234567AB1234C0001DE"
+                                className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-bold">Estado</label>
+                            <select
+                                value={certStatus}
+                                onChange={(e) => setCertStatus(e.target.value as CertDraftStatus)}
+                                className="h-9 w-full rounded-md bg-slate-900/50 border border-slate-700 text-slate-200 px-2 text-sm"
+                            >
+                                <option value="pendiente">Pendiente</option>
+                                <option value="en_progreso">En progreso</option>
+                                <option value="completado">Completado</option>
+                            </select>
+                        </div>
+                        <div className="md:col-span-2 grid grid-cols-2 gap-2 items-end">
+                            <button
+                                onClick={() => saveCurrentDraft()}
+                                disabled={draftSaving}
+                                className="h-9 px-3 rounded-md bg-amber-900/30 border border-amber-700/40 text-amber-300 hover:bg-amber-800/40 disabled:opacity-40 text-xs inline-flex items-center justify-center gap-1"
+                            >
+                                <Save className="h-3.5 w-3.5" />
+                                Guardar
+                            </button>
+                            <button
+                                onClick={() => saveCurrentDraft("completado")}
+                                disabled={draftSaving}
+                                className="h-9 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-xs inline-flex items-center justify-center gap-1"
+                            >
+                                <CircleCheckBig className="h-3.5 w-3.5" />
+                                Guardar + completar
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="px-2 py-1 rounded border border-slate-700 text-slate-300 bg-slate-900/40">Total: {queueTotal}</span>
+                        <span className="px-2 py-1 rounded border border-amber-700/40 text-amber-300 bg-amber-900/20">Pendientes: {queuePending}</span>
+                        <span className="px-2 py-1 rounded border border-emerald-700/40 text-emerald-300 bg-emerald-900/20">Completados: {queueCompleted}</span>
+                        <button
+                            onClick={() => refreshDraftQueue()}
+                            disabled={draftLoading}
+                            className="ml-auto h-8 px-3 rounded-md bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 disabled:opacity-40 inline-flex items-center gap-1"
+                        >
+                            <RefreshCcw className="h-3.5 w-3.5" />
+                            Refrescar cola
+                        </button>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                        <button
+                            onClick={() => loadNextPendingDraft()}
+                            disabled={draftLoading || queueTotal === 0}
+                            className="h-8 px-3 rounded-md bg-indigo-900/30 border border-indigo-700/40 text-indigo-300 hover:bg-indigo-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                        >
+                            <Download className="h-3.5 w-3.5" />
+                            Cargar siguiente pendiente
+                        </button>
+                        <button
+                            onClick={resetForNewCertificate}
+                            className="h-8 px-3 rounded-md bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-xs inline-flex items-center gap-1"
+                        >
+                            <FolderPlus className="h-3.5 w-3.5" />
+                            Nuevo expediente
+                        </button>
+                    </div>
+
+                    {draftError && (
+                        <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 px-3 py-2 rounded-md">
+                            {draftError}
+                        </div>
+                    )}
+
+                    {draftMsg && (
+                        <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-3 py-2 rounded-md">
+                            {draftMsg}
+                        </div>
+                    )}
+
+                    <div className="rounded-md border border-slate-800 bg-slate-950/30 max-h-52 overflow-y-auto">
+                        {draftLoading ? (
+                            <div className="px-3 py-3 text-xs text-slate-400">Cargando cola de certificados...</div>
+                        ) : draftQueue.length === 0 ? (
+                            <div className="px-3 py-3 text-xs text-slate-500">Sin expedientes en cola. Guarda el primero para iniciar el lote.</div>
+                        ) : (
+                            <div className="divide-y divide-slate-800">
+                                {draftQueue.map((item) => (
+                                    <div key={item.rc} className="px-3 py-2 flex items-center gap-2">
+                                        <button
+                                            onClick={() => loadDraft(item)}
+                                            className="text-left flex-1 min-w-0"
+                                        >
+                                            <p className="text-xs text-slate-200 font-mono truncate">{item.rc}</p>
+                                            <p className="text-[11px] text-slate-500 truncate">
+                                                {item.clienteNombre || "Sin nombre"}
+                                                {item.clienteDni ? ` · ${item.clienteDni}` : ""}
+                                                {` · ${new Date(item.updatedAt).toLocaleString()}`}
+                                            </p>
+                                        </button>
+                                        <span className={`px-2 py-1 rounded border text-[10px] ${item.status === "completado"
+                                            ? "border-emerald-700/40 text-emerald-300 bg-emerald-900/20"
+                                            : item.status === "en_progreso"
+                                                ? "border-amber-700/40 text-amber-300 bg-amber-900/20"
+                                                : "border-slate-700 text-slate-300 bg-slate-900/20"
+                                            }`}>
+                                            {draftStatusLabel(item.status)}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </CardContent>
+            </Card>
 
             <Card className="bg-slate-900/40 border-slate-800">
                 <CardHeader className="pb-3">
@@ -855,6 +1457,18 @@ export function CalculadoraTermica() {
                         </CardHeader>
                         <CardContent className="space-y-3">
                             <div className="rounded-lg border border-slate-800 bg-slate-900/30 p-3">
+                                <div className="flex flex-wrap items-center gap-2 mb-2">
+                                    <span className="text-[10px] uppercase font-bold text-slate-400">Materiales detectados en capas:</span>
+                                    <span className={`px-2 py-1 rounded border text-[10px] ${materialFlags.hormigon ? "border-emerald-600/40 text-emerald-300 bg-emerald-900/20" : "border-slate-700 text-slate-500"}`}>Hormigón</span>
+                                    <span className={`px-2 py-1 rounded border text-[10px] ${materialFlags.yeso ? "border-emerald-600/40 text-emerald-300 bg-emerald-900/20" : "border-slate-700 text-slate-500"}`}>Yeso</span>
+                                    <span className={`px-2 py-1 rounded border text-[10px] ${materialFlags.madera ? "border-emerald-600/40 text-emerald-300 bg-emerald-900/20" : "border-slate-700 text-slate-500"}`}>Madera</span>
+                                </div>
+                                <p className="text-[11px] text-slate-500">
+                                    El bloque de capas ahora empieza vacío. Añade capas y trabaja rápido con R directo; espesor/λ quedan como detalle opcional.
+                                </p>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-800 bg-slate-900/30 p-3">
                                 <p className="text-[10px] font-bold uppercase text-cyan-300 mb-2">
                                     Referencias visuales mientras transcribes R y material
                                 </p>
@@ -928,33 +1542,13 @@ export function CalculadoraTermica() {
                                             </button>
                                         </div>
                                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                                            <div className="col-span-2 md:col-span-1">
+                                            <div className="col-span-2 md:col-span-3">
                                                 <label className="text-[10px] text-slate-500 uppercase">Nombre</label>
                                                 <Input
                                                     value={c.nombre}
                                                     onChange={(e) => updateCapa(i, "nombre", e.target.value)}
-                                                    placeholder="Ej: Ladrillo"
+                                                    placeholder="Ej: Hormigón armado"
                                                     className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="text-[10px] text-slate-500 uppercase">Espesor (m)</label>
-                                                <Input
-                                                    type="number"
-                                                    step="0.001"
-                                                    value={c.espesor || ""}
-                                                    onChange={(e) => updateCapa(i, "espesor", parseFloat(e.target.value) || 0)}
-                                                    className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="text-[10px] text-slate-500 uppercase">λ (W/mK)</label>
-                                                <Input
-                                                    type="number"
-                                                    step="0.001"
-                                                    value={c.lambda_val || ""}
-                                                    onChange={(e) => updateCapa(i, "lambda_val", parseFloat(e.target.value) || 0)}
-                                                    className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
                                                 />
                                             </div>
                                             <div>
@@ -969,6 +1563,65 @@ export function CalculadoraTermica() {
                                                 />
                                             </div>
                                         </div>
+
+                                        <div className="mt-2 flex flex-wrap gap-1">
+                                            <button
+                                                onClick={() => applyQuickPresetToLayer(i, "hormigon")}
+                                                className="h-7 px-2 rounded border border-slate-700 text-[10px] text-slate-300 hover:border-slate-500"
+                                            >
+                                                Hormigón
+                                            </button>
+                                            <button
+                                                onClick={() => applyQuickPresetToLayer(i, "yeso")}
+                                                className="h-7 px-2 rounded border border-slate-700 text-[10px] text-slate-300 hover:border-slate-500"
+                                            >
+                                                Yeso
+                                            </button>
+                                            <button
+                                                onClick={() => applyQuickPresetToLayer(i, "madera")}
+                                                className="h-7 px-2 rounded border border-slate-700 text-[10px] text-slate-300 hover:border-slate-500"
+                                            >
+                                                Madera
+                                            </button>
+                                            <button
+                                                onClick={() => applyQuickPresetToLayer(i, "aislante")}
+                                                className="h-7 px-2 rounded border border-emerald-700/40 text-[10px] text-emerald-300 hover:border-emerald-500"
+                                            >
+                                                Aislante
+                                            </button>
+                                            <button
+                                                onClick={() => setShowAdvancedByLayer((prev) => ({ ...prev, [i]: !prev[i] }))}
+                                                className="h-7 px-2 rounded border border-indigo-700/40 text-[10px] text-indigo-300 hover:border-indigo-500"
+                                            >
+                                                {showAdvancedByLayer[i] ? "Ocultar detalles" : "Mostrar espesor/λ"}
+                                            </button>
+                                        </div>
+
+                                        {showAdvancedByLayer[i] && (
+                                            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                <div>
+                                                    <label className="text-[10px] text-slate-500 uppercase">Espesor (m)</label>
+                                                    <Input
+                                                        type="number"
+                                                        step="0.001"
+                                                        value={c.espesor || ""}
+                                                        onChange={(e) => updateCapa(i, "espesor", parseFloat(e.target.value) || 0)}
+                                                        className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-[10px] text-slate-500 uppercase">λ (W/mK)</label>
+                                                    <Input
+                                                        type="number"
+                                                        step="0.001"
+                                                        value={c.lambda_val || ""}
+                                                        onChange={(e) => updateCapa(i, "lambda_val", parseFloat(e.target.value) || 0)}
+                                                        className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {/* Selector rápido de material CE3X (Supabase) */}
                                         {materialesDB.length > 0 && c.es_nueva && (
                                             <div className="mt-2 space-y-1">
@@ -1033,6 +1686,63 @@ export function CalculadoraTermica() {
                                     className="flex-1 h-9 rounded-md border border-dashed border-emerald-700 text-emerald-500 hover:text-emerald-300 hover:border-emerald-500 transition-colors text-xs flex items-center justify-center gap-1"
                                 >
                                     <Plus className="h-3 w-3" /> Capa de Mejora
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                <button
+                                    onClick={() => addPresetLayer("hormigon", false)}
+                                    className="h-8 rounded-md border border-slate-700 text-slate-300 hover:border-slate-500 text-[11px]"
+                                >
+                                    + Hormigón
+                                </button>
+                                <button
+                                    onClick={() => addPresetLayer("yeso", false)}
+                                    className="h-8 rounded-md border border-slate-700 text-slate-300 hover:border-slate-500 text-[11px]"
+                                >
+                                    + Yeso
+                                </button>
+                                <button
+                                    onClick={() => addPresetLayer("madera", false)}
+                                    className="h-8 rounded-md border border-slate-700 text-slate-300 hover:border-slate-500 text-[11px]"
+                                >
+                                    + Madera
+                                </button>
+                                <button
+                                    onClick={() => addPresetLayer("aislante", true)}
+                                    className="h-8 rounded-md border border-emerald-700/40 text-emerald-300 hover:border-emerald-500 text-[11px]"
+                                >
+                                    + Aislante mejora
+                                </button>
+                            </div>
+
+                            <div className="rounded-md border border-slate-800 bg-slate-900/20 p-2 space-y-2">
+                                <p className="text-[10px] uppercase font-bold text-slate-400">Plantillas rápidas para tu lote</p>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                    <button
+                                        onClick={() => applyCommonLayerSet("yeso")}
+                                        className="h-8 rounded-md border border-slate-700 text-slate-200 hover:border-slate-500 text-[11px]"
+                                    >
+                                        YESO
+                                    </button>
+                                    <button
+                                        onClick={() => applyCommonLayerSet("hormigon_yeso")}
+                                        className="h-8 rounded-md border border-slate-700 text-slate-200 hover:border-slate-500 text-[11px]"
+                                    >
+                                        HORMIGÓN + YESO
+                                    </button>
+                                    <button
+                                        onClick={() => applyCommonLayerSet("madera_yeso")}
+                                        className="h-8 rounded-md border border-slate-700 text-slate-200 hover:border-slate-500 text-[11px]"
+                                    >
+                                        MADERA + YESO
+                                    </button>
+                                </div>
+                                <button
+                                    onClick={() => void loadSupafilFichaTecnica()}
+                                    className="w-full h-8 rounded-md border border-cyan-700/40 text-cyan-300 hover:border-cyan-500 text-[11px]"
+                                >
+                                    Cargar ficha técnica SUPAFIL en Capturas
                                 </button>
                             </div>
                         </CardContent>
@@ -1108,6 +1818,22 @@ export function CalculadoraTermica() {
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
+                            <div className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2">
+                                <div>
+                                    <p className="text-xs text-slate-300 font-semibold">Ventilación anclada por defecto</p>
+                                    <p className="text-[10px] text-slate-500">Antes y después se mantienen en estanco para acelerar el flujo típico de suelo.</p>
+                                </div>
+                                <button
+                                    onClick={() => setVentilationLocked((prev) => !prev)}
+                                    className={`h-8 px-3 rounded-md border text-xs ${ventilationLocked
+                                        ? "border-emerald-700/40 text-emerald-300 bg-emerald-900/20"
+                                        : "border-amber-700/40 text-amber-300 bg-amber-900/20"
+                                        }`}
+                                >
+                                    {ventilationLocked ? "Anclada" : "Editable"}
+                                </button>
+                            </div>
+
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {/* Escenario ANTES */}
                                 <div className="space-y-2">
@@ -1126,6 +1852,7 @@ export function CalculadoraTermica() {
                                     <select
                                         value={caseI}
                                         onChange={(e) => setCaseI(e.target.value as Caso)}
+                                        disabled={ventilationLocked}
                                         className="w-full h-9 bg-slate-900/50 border border-slate-700 text-slate-200 rounded-md px-3 text-xs"
                                     >
                                         {CASOS_VENTILACION.map((c) => (
@@ -1158,6 +1885,7 @@ export function CalculadoraTermica() {
                                     <select
                                         value={caseF}
                                         onChange={(e) => setCaseF(e.target.value as Caso)}
+                                        disabled={ventilationLocked}
                                         className="w-full h-9 bg-slate-900/50 border border-emerald-700/30 text-slate-200 rounded-md px-3 text-xs"
                                     >
                                         {CASOS_VENTILACION.map((c) => (
