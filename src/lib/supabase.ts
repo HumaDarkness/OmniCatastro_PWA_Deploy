@@ -21,6 +21,15 @@ interface LoginResult {
   licenseKey?: string;
 }
 
+export interface UxRecoverySnapshot {
+  isAuthenticated: boolean;
+  userEmail: string | null;
+  organizationId: string | null;
+  clientsCount: number | null;
+  projectsCount: number | null;
+  issues: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Cliente Supabase (singleton)
 // ---------------------------------------------------------------------------
@@ -219,4 +228,61 @@ export async function getCurrentOrganizationId(): Promise<string | null> {
   }
 
   return null;
+}
+
+/**
+ * Snapshot de salud UX para guiar al usuario cuando queda atascado.
+ * No lanza errores: devuelve issues legibles para mostrar en UI.
+ */
+export async function getUxRecoverySnapshot(): Promise<UxRecoverySnapshot> {
+  const snapshot: UxRecoverySnapshot = {
+    isAuthenticated: false,
+    userEmail: null,
+    organizationId: null,
+    clientsCount: null,
+    projectsCount: null,
+    issues: [],
+  };
+
+  if (!supabase) {
+    snapshot.issues.push("Supabase no esta configurado en este entorno.");
+    return snapshot;
+  }
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData?.user) {
+    snapshot.issues.push("Sesion no detectada. Vuelve a iniciar sesion.");
+    return snapshot;
+  }
+
+  snapshot.isAuthenticated = true;
+  snapshot.userEmail = userData.user.email ?? null;
+
+  const orgId = await getCurrentOrganizationId();
+  snapshot.organizationId = orgId;
+  if (!orgId) {
+    snapshot.issues.push("No se encontro empresa activa para esta sesion.");
+  }
+
+  const { count: clientsCount, error: clientsErr } = await supabase
+    .from("clients")
+    .select("id", { count: "exact", head: true });
+
+  if (clientsErr) {
+    snapshot.issues.push("No se pudo leer clientes para este usuario.");
+  } else {
+    snapshot.clientsCount = clientsCount ?? 0;
+  }
+
+  const { count: projectsCount, error: projectsErr } = await supabase
+    .from("projects")
+    .select("id", { count: "exact", head: true });
+
+  if (projectsErr) {
+    snapshot.issues.push("No se pudo leer proyectos para este usuario.");
+  } else {
+    snapshot.projectsCount = projectsCount ?? 0;
+  }
+
+  return snapshot;
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Users, Plus, UploadCloud, Save, ChevronLeft, Image as ImageIcon, Loader2 } from "lucide-react";
+import { Users, Plus, UploadCloud, Save, ChevronLeft, Image as ImageIcon, Loader2, CircleAlert, CircleCheck } from "lucide-react";
 import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 
 export interface Client {
@@ -37,6 +37,8 @@ export function ClientesView() {
     // Preview URLs for new uploads
     const [localFrontPreview, setLocalFrontPreview] = useState<string | null>(null);
     const [localBackPreview, setLocalBackPreview] = useState<string | null>(null);
+    const [uxError, setUxError] = useState<string | null>(null);
+    const [uxInfo, setUxInfo] = useState<string | null>(null);
 
     const frontInputRef = useRef<HTMLInputElement>(null);
     const backInputRef = useRef<HTMLInputElement>(null);
@@ -56,6 +58,9 @@ export function ClientesView() {
 
         if (!error && data) {
             setClients(data as Client[]);
+            setUxError(null);
+        } else if (error) {
+            setUxError("No se pudo cargar el listado de clientes. Revalida sesion y vuelve a intentar.");
         }
         setLoading(false);
     }
@@ -78,6 +83,8 @@ export function ClientesView() {
 
     async function handleEditClient(client: Client) {
         setLoading(true);
+        setUxError(null);
+        setUxInfo(null);
         const enriched = await loadClientUrls(client);
         setEditingClient(enriched);
         setLocalFrontPreview(null);
@@ -86,6 +93,8 @@ export function ClientesView() {
     }
 
     function handleNewClient() {
+        setUxError(null);
+        setUxInfo(null);
         setEditingClient({
             first_name: "",
             middle_name: "",
@@ -100,6 +109,7 @@ export function ClientesView() {
 
     async function uploadDniImage(file: File, side: 'front' | 'back') {
         try {
+            setUxError(null);
             const organizationId = await getCurrentOrganizationId();
             if (!organizationId) throw new Error(ORG_REQUIRED_MSG);
 
@@ -127,21 +137,42 @@ export function ClientesView() {
                 setLocalBackPreview(urlData?.signedUrl || URL.createObjectURL(file));
             }
         } catch (error: any) {
-            alert("Error subiendo imagen: " + error.message);
+            setUxError("Error subiendo imagen: " + error.message);
         } finally {
             const setter = side === 'front' ? setUploadingFront : setUploadingBack;
             setter(false);
         }
     }
 
+    async function copyDiagnostic() {
+        try {
+            const { data: userData } = await supabase.auth.getUser();
+            const organizationId = await getCurrentOrganizationId();
+            const diagnostic = [
+                "[UX-DIAGNOSTICO CLIENTES]",
+                `user_email=${userData.user?.email ?? "sin_sesion"}`,
+                `organization_id=${organizationId ?? "null"}`,
+                `editing_client_id=${editingClient?.id ?? "nuevo"}`,
+                `has_front=${editingClient?.dni_front_path ? "1" : "0"}`,
+                `has_back=${editingClient?.dni_back_path ? "1" : "0"}`,
+                `timestamp=${new Date().toISOString()}`,
+            ].join("\n");
+            await navigator.clipboard.writeText(diagnostic);
+            setUxInfo("Diagnostico copiado al portapapeles.");
+        } catch {
+            setUxInfo("No se pudo copiar el diagnostico en este navegador.");
+        }
+    }
+
     async function saveClient() {
         if (!editingClient?.first_name || !editingClient?.last_name_1 || !editingClient?.dni) {
-            alert("El primer nombre, primer apellido y DNI son obligatorios.");
+            setUxError("El primer nombre, primer apellido y DNI son obligatorios.");
             return;
         }
 
         setSaving(true);
         try {
+            setUxError(null);
             const organizationId = await getCurrentOrganizationId();
             if (!organizationId) throw new Error(ORG_REQUIRED_MSG);
 
@@ -169,7 +200,7 @@ export function ClientesView() {
 
             setEditingClient(null);
         } catch (error: any) {
-            alert("Error guardando cliente: " + error.message);
+            setUxError("Error guardando cliente: " + error.message);
         } finally {
             setSaving(false);
         }
@@ -192,6 +223,31 @@ export function ClientesView() {
                         Guardar Cliente
                     </button>
                 </div>
+
+                {(uxError || uxInfo) && (
+                    <div className="px-4 md:px-6 pt-4">
+                        {uxError && (
+                            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 flex items-start justify-between gap-3">
+                                <div className="inline-flex items-start gap-2">
+                                    <CircleAlert className="w-4 h-4 mt-0.5 shrink-0" />
+                                    <span>{uxError}</span>
+                                </div>
+                                <button
+                                    onClick={copyDiagnostic}
+                                    className="px-2 py-1 rounded border border-amber-500/30 text-[11px] text-amber-200 hover:bg-amber-500/10"
+                                >
+                                    Copiar diagnostico
+                                </button>
+                            </div>
+                        )}
+                        {uxInfo && (
+                            <div className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200 inline-flex items-center gap-2">
+                                <CircleCheck className="w-4 h-4" />
+                                <span>{uxInfo}</span>
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Split Screen Layout */}
                 <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
@@ -361,6 +417,12 @@ export function ClientesView() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 md:p-8">
+                {uxError && (
+                    <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 inline-flex items-center gap-2">
+                        <CircleAlert className="w-4 h-4" />
+                        <span>{uxError}</span>
+                    </div>
+                )}
                 {loading ? (
                     <div className="flex justify-center p-12">
                         <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />

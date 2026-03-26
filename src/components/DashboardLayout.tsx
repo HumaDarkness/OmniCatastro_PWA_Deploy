@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
     FileText,
     LayoutDashboard,
@@ -11,13 +11,17 @@ import {
     FileStack,
     Building2,
     Users,
+    RefreshCw,
+    CircleAlert,
+    CircleCheck,
+    ArrowRight,
 } from "lucide-react";
 import { CentralDocumental } from "../CentralDocumental";
 import { ConsultaCatastral } from "../ConsultaCatastral";
 import { CalculadoraTermica } from "../CalculadoraTermica";
 import { ProyectosView } from "../ProyectosView";
 import { ClientesView } from "../ClientesView";
-import type { LicenseTier } from "../lib/supabase";
+import { getUxRecoverySnapshot, type LicenseTier, type UxRecoverySnapshot } from "../lib/supabase";
 
 type DashboardView = "resumen" | "central-documental" | "calculadora" | "consulta-catastral" | "clientes" | "mis-proyectos" | "ajustes";
 
@@ -38,6 +42,8 @@ interface NavItem {
 export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
     const [activeView, setActiveView] = useState<DashboardView>("central-documental");
     const [sidebarOpen, setSidebarOpen] = useState(true);
+    const [uxSnapshot, setUxSnapshot] = useState<UxRecoverySnapshot | null>(null);
+    const [uxLoading, setUxLoading] = useState(true);
 
     const navItems: NavItem[] = [
         { id: "resumen", label: "Resumen General", icon: <LayoutDashboard className="w-5 h-5" />, badge: "Pronto", disabled: true },
@@ -54,6 +60,52 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
         pwa_only: "PWA Standard",
         suite_pro: "Suite Pro",
     };
+
+    const refreshUxSnapshot = async () => {
+        setUxLoading(true);
+        const snapshot = await getUxRecoverySnapshot();
+        setUxSnapshot(snapshot);
+        setUxLoading(false);
+    };
+
+    useEffect(() => {
+        let isMounted = true;
+
+        async function loadNow() {
+            const snapshot = await getUxRecoverySnapshot();
+            if (!isMounted) return;
+            setUxSnapshot(snapshot);
+            setUxLoading(false);
+        }
+
+        loadNow();
+        const timer = window.setInterval(loadNow, 45000);
+
+        return () => {
+            isMounted = false;
+            window.clearInterval(timer);
+        };
+    }, []);
+
+    const suggestedAction = (() => {
+        if (!uxSnapshot) return null;
+        if (!uxSnapshot.isAuthenticated) {
+            return { label: "Cerrar sesion y volver a entrar", onClick: onLogout };
+        }
+        if (!uxSnapshot.organizationId) {
+            return { label: "Abrir Clientes para comprobar flujo", onClick: () => setActiveView("clientes") };
+        }
+        if ((uxSnapshot.clientsCount ?? 0) === 0) {
+            return { label: "Crear primer cliente", onClick: () => setActiveView("clientes") };
+        }
+        if ((uxSnapshot.projectsCount ?? 0) === 0) {
+            return { label: "Crear primer proyecto", onClick: () => setActiveView("mis-proyectos") };
+        }
+        if (activeView !== "calculadora") {
+            return { label: "Continuar en Calculadora", onClick: () => setActiveView("calculadora") };
+        }
+        return null;
+    })();
 
     const renderView = () => {
         switch (activeView) {
@@ -163,7 +215,60 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
 
             {/* Main Content */}
             <main className="flex-1 overflow-hidden">
-                {renderView()}
+                <div className="h-full flex flex-col">
+                    <div className="border-b border-indigo-500/10 bg-[#0a0a1a] px-4 md:px-6 py-3">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                            <div className="flex items-start gap-2 text-sm">
+                                {uxLoading ? (
+                                    <>
+                                        <RefreshCw className="w-4 h-4 mt-0.5 animate-spin text-slate-500" />
+                                        <p className="text-slate-400">Analizando bloqueos UX y estado de sesion...</p>
+                                    </>
+                                ) : uxSnapshot?.issues.length ? (
+                                    <>
+                                        <CircleAlert className="w-4 h-4 mt-0.5 text-amber-400" />
+                                        <div className="text-slate-300">
+                                            <p className="font-medium">Modo rescate UX activo</p>
+                                            <p className="text-xs text-slate-400">{uxSnapshot.issues.join(" | ")}</p>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <CircleCheck className="w-4 h-4 mt-0.5 text-emerald-400" />
+                                        <p className="text-slate-300">
+                                            Sesion y contexto listos.
+                                            {(uxSnapshot?.clientsCount ?? 0) > 0 ? ` Clientes: ${uxSnapshot?.clientsCount}` : " Sin clientes"}
+                                            {(uxSnapshot?.projectsCount ?? 0) >= 0 ? ` | Proyectos: ${uxSnapshot?.projectsCount}` : ""}
+                                        </p>
+                                    </>
+                                )}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                {suggestedAction && (
+                                    <button
+                                        onClick={suggestedAction.onClick}
+                                        className="h-8 px-3 rounded-md border border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/10 text-xs inline-flex items-center gap-1"
+                                    >
+                                        {suggestedAction.label}
+                                        <ArrowRight className="w-3.5 h-3.5" />
+                                    </button>
+                                )}
+                                <button
+                                    onClick={refreshUxSnapshot}
+                                    className="h-8 px-3 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs inline-flex items-center gap-1"
+                                >
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                    Revalidar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 overflow-hidden">
+                        {renderView()}
+                    </div>
+                </div>
             </main>
         </div>
     );
