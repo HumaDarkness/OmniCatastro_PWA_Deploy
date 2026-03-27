@@ -221,16 +221,19 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         const sup = parseDecimal(el.querySelector("Superficie")?.textContent);
         const tipoNorm = normalizeTextKey(tipo);
 
-        if (
-            tipoNorm.includes("PARTICIONINTERIORHORIZONTAL")
-            || (tipoNorm.includes("PARTICION") && tipoNorm.includes("HORIZONTAL"))
-        ) {
-            superficieParticion += sup;
-        } else if (tipoNorm.includes("CUBIERTA")) {
+        if (tipoNorm.includes("CUBIERTA")) {
             superficieCubierta += sup;
+            // Cubierta se muestra aparte, NO suma a envolvente ni opacos
+        } else {
+            if (
+                tipoNorm.includes("PARTICIONINTERIORHORIZONTAL")
+                || (tipoNorm.includes("PARTICION") && tipoNorm.includes("HORIZONTAL"))
+            ) {
+                superficieParticion += sup;
+            }
+            superficieOpacos += sup;
+            superficieEnvolvente += sup;
         }
-        superficieOpacos += sup;
-        superficieEnvolvente += sup;
     }
 
     for (const el of elementosHuecos) {
