@@ -211,7 +211,7 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
     const tecnicoNif = normalizeDni(queryText(doc, ["DatosDelCertificador NIF"]));
     const tecnicoEntidadNif = normalizeDni(queryText(doc, ["DatosDelCertificador NIFEntidad"]));
 
-    const docInmueble = doc.querySelector("DatosDelInmueble") || doc.querySelector("Entrada") || doc;
+    const docInmueble = doc.querySelector("IdentificacionEdificio") || doc.querySelector("DatosDelInmueble") || doc.querySelector("Entrada") || doc;
     const zonaRaw = queryText(docInmueble, ["ZonaClimatica"]);
     const zonaKey = zonaRaw === "α3" ? "alpha3" : zonaRaw;
 
