@@ -1980,6 +1980,10 @@ export function CalculadoraTermica() {
         setClienteDni(payload.clienteDni || "");
         setClienteDireccionDni(payload.clienteDireccionDni || "");
         setXmlFileName(payload.xmlFileName || "");
+        setDireccionInmueble(payload.direccionInmueble || "");
+        setMunicipioInmueble(payload.municipioInmueble || "");
+        setCpInmueble(payload.cpInmueble || "");
+        setProvinciaInmueble(payload.provinciaInmueble || "");
         setFiltroMetodo(payload.filtroMetodo || {});
         setMaterialSearchByLayer(payload.materialSearchByLayer || {});
         setSoloFavoritosPorCapa(payload.soloFavoritosPorCapa || {});
@@ -2038,6 +2042,10 @@ export function CalculadoraTermica() {
                 clienteDni,
                 clienteDireccionDni,
                 xmlFileName,
+                direccionInmueble,
+                municipioInmueble,
+                cpInmueble,
+                provinciaInmueble,
                 supOpacos,
                 supHuecos,
                 elementosOpacosList,
