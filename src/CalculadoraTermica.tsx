@@ -80,6 +80,8 @@ interface ParsedCE3X {
     superficieParticion: number;
     superficieCubierta: number;
     superficieEnvolvente: number;
+    superficieOpacos: number;
+    superficieHuecos: number;
     rc: string;
     provincia: string;
     municipio: string;
@@ -205,20 +207,18 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
     const provincia = queryText(doc, ["Provincia"]) || "";
     const municipio = queryText(doc, ["Municipio"]) || "";
 
-    const elementos = [
-        ...doc.querySelectorAll(
-            "CerramientosOpacos Elemento, HuecosYLucernarios Elemento, HuecosyLucernarios Elemento",
-        ),
-    ];
+    const elementosOpacos = [...doc.querySelectorAll("CerramientosOpacos Elemento")];
+    const elementosHuecos = [...doc.querySelectorAll("HuecosYLucernarios Elemento, HuecosyLucernarios Elemento")];
 
     let superficieParticion = 0;
     let superficieCubierta = 0;
     let superficieEnvolvente = 0;
+    let superficieOpacos = 0;
+    let superficieHuecos = 0;
 
-    for (const el of elementos) {
+    for (const el of elementosOpacos) {
         const tipo = el.querySelector("Tipo")?.textContent?.trim() || "";
         const sup = parseDecimal(el.querySelector("Superficie")?.textContent);
-
         const tipoNorm = normalizeTextKey(tipo);
 
         if (
@@ -226,12 +226,17 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
             || (tipoNorm.includes("PARTICION") && tipoNorm.includes("HORIZONTAL"))
         ) {
             superficieParticion += sup;
-            superficieEnvolvente += sup;
         } else if (tipoNorm.includes("CUBIERTA")) {
             superficieCubierta += sup;
-        } else {
-            superficieEnvolvente += sup;
         }
+        superficieOpacos += sup;
+        superficieEnvolvente += sup;
+    }
+
+    for (const el of elementosHuecos) {
+        const sup = parseDecimal(el.querySelector("Superficie")?.textContent);
+        superficieHuecos += sup;
+        superficieEnvolvente += sup;
     }
 
     return {
@@ -244,6 +249,8 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         superficieParticion: roundTo(superficieParticion, 2),
         superficieCubierta: roundTo(superficieCubierta, 2),
         superficieEnvolvente: roundTo(superficieEnvolvente, 2),
+        superficieOpacos: roundTo(superficieOpacos, 2),
+        superficieHuecos: roundTo(superficieHuecos, 2),
         rc,
         provincia,
         municipio,
@@ -567,6 +574,8 @@ export function CalculadoraTermica() {
     const [areaNHE, setAreaNHE] = useState(25);
     const [supActuacion, setSupActuacion] = useState(25);
     const [supEnvolvente, setSupEnvolvente] = useState(120);
+    const [supOpacos, setSupOpacos] = useState(0);
+    const [supHuecos, setSupHuecos] = useState(0);
     const [zonaKey, setZonaKey] = useState("D3");
     const [alturaMsnm, setAlturaMsnm] = useState<string>(""); // Added
     const [resultado, setResultado] = useState<ResultadoTermico | null>(null);
@@ -950,6 +959,8 @@ export function CalculadoraTermica() {
             setSupActuacion(parsed.superficieParticion);
             setAreaNHE(parsed.superficieCubierta);
             setSupEnvolvente(parsed.superficieEnvolvente);
+            setSupOpacos(parsed.superficieOpacos);
+            setSupHuecos(parsed.superficieHuecos);
 
             let newZonaKey = parsed.zonaKey;
             let finalMsg = buildXmlImportSummary(parsed);
@@ -2849,19 +2860,31 @@ export function CalculadoraTermica() {
                                     </div>
                                 )}
                                 <div className="space-y-2 text-xs text-slate-300 bg-slate-900/50 p-3 rounded-lg border border-slate-800">
-                                    <p className="text-[10px] text-slate-500 mb-2 leading-tight">Desglose de superficies para verificar suma de cerramientos opacos y huecos:</p>
-                                    <div className="flex justify-between border-b border-slate-800 pb-1">
-                                        <span className="text-slate-400">Sup. Partición (Aislada):</span>
-                                        <span className="font-mono font-bold">{Number(areaHNH).toFixed(2)} m²</span>
-                                    </div>
-                                    <div className="flex justify-between border-b border-slate-800 pb-1">
-                                        <span className="text-slate-400">Sup. Actuación (Mejora):</span>
-                                        <span className="font-mono font-bold">{Number(supActuacion).toFixed(2)} m²</span>
-                                    </div>
-                                    <div className="flex justify-between pt-1">
-                                        <span className="text-amber-500 font-bold">Superficie Total Sumada:</span>
-                                        <span className="font-mono font-bold text-amber-400">{(Number(areaHNH) + Number(supActuacion)).toFixed(2)} m²</span>
-                                    </div>
+                                    <p className="text-[10px] text-slate-500 mb-2 leading-tight">Desglose de envolvente (del XML CE3X importado):</p>
+                                    {(supOpacos > 0 || supHuecos > 0) ? (
+                                        <>
+                                            <div className="flex justify-between border-b border-slate-800 pb-1">
+                                                <span className="text-slate-400">Cerramientos Opacos:</span>
+                                                <span className="font-mono font-bold">{Number(supOpacos).toFixed(2)} m²</span>
+                                            </div>
+                                            <div className="flex justify-between border-b border-slate-800 pb-1">
+                                                <span className="text-slate-400">Huecos y Lucernarios:</span>
+                                                <span className="font-mono font-bold">{Number(supHuecos).toFixed(2)} m²</span>
+                                            </div>
+                                            {Number(areaNHE) > 0 && (
+                                                <div className="flex justify-between border-b border-slate-800 pb-1">
+                                                    <span className="text-cyan-400">Cubierta (no suma):</span>
+                                                    <span className="font-mono font-bold text-cyan-300">{Number(areaNHE).toFixed(2)} m²</span>
+                                                </div>
+                                            )}
+                                            <div className="flex justify-between pt-1">
+                                                <span className="text-amber-500 font-bold">Envolvente Total:</span>
+                                                <span className="font-mono font-bold text-amber-400">{Number(supEnvolvente).toFixed(2)} m²</span>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <p className="text-[10px] text-slate-600 italic">Importa un XML CE3X para ver el desglose automático.</p>
+                                    )}
                                 </div>
                             </CardContent>
                         </Card>
