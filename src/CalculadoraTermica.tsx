@@ -553,15 +553,15 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 function getDraftPath(organizationId: string, rc: string): string {
-    return `${CERT_DRAFT_FOLDER}/${organizationId}/${normalizeRc(rc)}.json`;
+    return `${organizationId}/${CERT_DRAFT_FOLDER}/${normalizeRc(rc)}.json`;
 }
 
 function getIndexPath(organizationId: string): string {
-    return `${CERT_DRAFT_FOLDER}/${organizationId}/${CERT_INDEX_FILENAME}`;
+    return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_INDEX_FILENAME}`;
 }
 
 function getImportAuditPath(organizationId: string): string {
-    return `${CERT_DRAFT_FOLDER}/${organizationId}/${CERT_IMPORT_AUDIT_FILENAME}`;
+    return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_IMPORT_AUDIT_FILENAME}`;
 }
 
 function getLegacyDraftPath(organizationId: string, rc: string): string {
