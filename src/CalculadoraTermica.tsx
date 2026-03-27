@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import JSZip from "jszip";
 import {
     Calculator,
     Plus,
@@ -289,8 +290,49 @@ const CALC_STATE_STORAGE_KEY = "omnicatastro.calc-state.v1";
 const CERT_DRAFT_VERSION = 1;
 const CERT_DRAFT_FOLDER = "certificados";
 const CERT_INDEX_FILENAME = "_index.json";
+const CERT_IMPORT_AUDIT_FILENAME = "_import_audit.json";
+const BACKUP_ZIP_VERSION = 2;
+const LEGACY_CERT_PREFIX = "cert_";
 
 type CertDraftStatus = "pendiente" | "en_progreso" | "completado";
+type ImportMergeStrategy = "overwrite" | "skip" | "merge";
+type ImportAuditAction = "created" | "overwritten" | "merged" | "skipped" | "invalid" | "failed";
+
+interface BatchProgress {
+    mode: "export" | "import";
+    phase: string;
+    current: number;
+    total: number;
+    detail?: string;
+}
+
+interface ImportAuditEntry {
+    at: string;
+    importedByUserId: string | null;
+    importedByEmail: string | null;
+    sourceFile: string;
+    strategy: ImportMergeStrategy;
+    rc: string;
+    action: ImportAuditAction;
+    detail?: string;
+}
+
+interface BackupEnvelope {
+    version: number;
+    exportDate: string;
+    organizationId: string;
+    draftCount: number;
+    drafts: CertificateDraftPayload[];
+}
+
+interface BackupManifest {
+    version: number;
+    exportDate: string;
+    organizationId: string;
+    draftCount: number;
+    format: "zip";
+    includes: string[];
+}
 
 type QuickLayerPresetId = "hormigon" | "yeso" | "yeso_023" | "madera" | "aislante";
 
@@ -338,6 +380,7 @@ interface CertificateDraftPayload {
     supActuacion: number;
     supEnvolvente: number;
     zonaKey: string;
+    alturaMsnm?: number;
     scenarioI: Scenario;
     scenarioF: Scenario;
     caseI: Caso;
@@ -366,6 +409,89 @@ function normalizeRc(value: string): string {
     return value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
+function isValidDraftStatus(value: unknown): value is CertDraftStatus {
+    return value === "pendiente" || value === "en_progreso" || value === "completado";
+}
+
+function sanitizeDraftPayload(raw: unknown): { payload?: CertificateDraftPayload; error?: string } {
+    if (!isRecord(raw)) {
+        return { error: "No es un objeto JSON válido" };
+    }
+
+    const rc = normalizeRc(String(raw.rc ?? ""));
+    if (!rc) {
+        return { error: "Falta RC o no tiene formato válido" };
+    }
+
+    const status = isValidDraftStatus(raw.status) ? raw.status : "en_progreso";
+    const version = Number.isFinite(Number(raw.version)) ? Number(raw.version) : CERT_DRAFT_VERSION;
+    const updatedAt = typeof raw.updatedAt === "string" && raw.updatedAt.trim()
+        ? raw.updatedAt
+        : new Date().toISOString();
+
+    const payload: CertificateDraftPayload = {
+        version,
+        rc,
+        status,
+        updatedAt,
+        capas: Array.isArray(raw.capas) ? (raw.capas as CapaMaterial[]) : cloneInitialCapas(),
+        areaHNH: Number.isFinite(Number(raw.areaHNH)) ? Number(raw.areaHNH) : 25,
+        areaNHE: Number.isFinite(Number(raw.areaNHE)) ? Number(raw.areaNHE) : 25,
+        supActuacion: Number.isFinite(Number(raw.supActuacion)) ? Number(raw.supActuacion) : 25,
+        supEnvolvente: Number.isFinite(Number(raw.supEnvolvente)) ? Number(raw.supEnvolvente) : 120,
+        zonaKey: typeof raw.zonaKey === "string" && raw.zonaKey ? raw.zonaKey : "D3",
+        alturaMsnm: Number.isFinite(Number(raw.alturaMsnm)) ? Number(raw.alturaMsnm) : undefined,
+        scenarioI: raw.scenarioI === "cubierta_aislada" ? "cubierta_aislada" : "nada_aislado",
+        scenarioF: raw.scenarioF === "nada_aislado" ? "nada_aislado" : "particion_aislada",
+        caseI: raw.caseI === "ventilado" ? "ventilado" : "estanco",
+        caseF: raw.caseF === "ventilado" ? "ventilado" : "estanco",
+        ventilationLocked: typeof raw.ventilationLocked === "boolean" ? raw.ventilationLocked : true,
+        modoCE3X: !!raw.modoCE3X,
+        overrideUi: typeof raw.overrideUi === "string" ? raw.overrideUi : "",
+        overrideUf: typeof raw.overrideUf === "string" ? raw.overrideUf : "",
+        clienteNombre: typeof raw.clienteNombre === "string" ? raw.clienteNombre : "",
+        clienteDni: typeof raw.clienteDni === "string" ? raw.clienteDni : "",
+        clienteDireccionDni: typeof raw.clienteDireccionDni === "string" ? raw.clienteDireccionDni : "",
+        filtroMetodo: isRecord(raw.filtroMetodo) ? (raw.filtroMetodo as Record<number, string>) : {},
+        materialSearchByLayer: isRecord(raw.materialSearchByLayer)
+            ? (raw.materialSearchByLayer as Record<number, string>)
+            : {},
+        soloFavoritosPorCapa: isRecord(raw.soloFavoritosPorCapa)
+            ? (raw.soloFavoritosPorCapa as Record<number, boolean>)
+            : {},
+        capturas: isRecord(raw.capturas) ? (raw.capturas as CapturasState) : createEmptyCapturasState(),
+        resultado: isRecord(raw.resultado) ? (raw.resultado as unknown as ResultadoTermico) : null,
+    };
+
+    return { payload };
+}
+
+function mergeDraftPayload(base: CertificateDraftPayload, incoming: CertificateDraftPayload): CertificateDraftPayload {
+    return {
+        ...base,
+        ...incoming,
+        rc: incoming.rc || base.rc,
+        status: incoming.status || base.status,
+        updatedAt: incoming.updatedAt || base.updatedAt || new Date().toISOString(),
+        capas: Array.isArray(incoming.capas) && incoming.capas.length > 0 ? incoming.capas : base.capas,
+        capturas: isRecord(incoming.capturas) ? incoming.capturas : base.capturas,
+        resultado: incoming.resultado ?? base.resultado ?? null,
+    };
+}
+
+function pickMostRecentDraft(a: CertificateDraftPayload, b: CertificateDraftPayload): CertificateDraftPayload {
+    const aTime = Date.parse(a.updatedAt || "");
+    const bTime = Date.parse(b.updatedAt || "");
+    if (Number.isFinite(aTime) && Number.isFinite(bTime)) {
+        return bTime >= aTime ? b : a;
+    }
+    return b;
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -376,10 +502,22 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 function getDraftPath(organizationId: string, rc: string): string {
-    return `${organizationId}/${CERT_DRAFT_FOLDER}/cert_${normalizeRc(rc)}.json`;
+    return `${CERT_DRAFT_FOLDER}/${organizationId}/${normalizeRc(rc)}.json`;
 }
 
 function getIndexPath(organizationId: string): string {
+    return `${CERT_DRAFT_FOLDER}/${organizationId}/${CERT_INDEX_FILENAME}`;
+}
+
+function getImportAuditPath(organizationId: string): string {
+    return `${CERT_DRAFT_FOLDER}/${organizationId}/${CERT_IMPORT_AUDIT_FILENAME}`;
+}
+
+function getLegacyDraftPath(organizationId: string, rc: string): string {
+    return `${organizationId}/${CERT_DRAFT_FOLDER}/${LEGACY_CERT_PREFIX}${normalizeRc(rc)}.json`;
+}
+
+function getLegacyIndexPath(organizationId: string): string {
     return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_INDEX_FILENAME}`;
 }
 
@@ -419,6 +557,8 @@ export function CalculadoraTermica() {
     const [supActuacion, setSupActuacion] = useState(25);
     const [supEnvolvente, setSupEnvolvente] = useState(120);
     const [zonaKey, setZonaKey] = useState("D3");
+    const [alturaMsnm, setAlturaMsnm] = useState<string>(""); // Added
+    const [surfaceCalc, setSurfaceCalc] = useState<string>(""); // Added
     const [resultado, setResultado] = useState<ResultadoTermico | null>(null);
     const [copied, setCopied] = useState(false);
     const [materialesDB, setMaterialesDB] = useState<MaterialDB[]>([]);
@@ -455,6 +595,9 @@ export function CalculadoraTermica() {
     const [draftSaving, setDraftSaving] = useState(false);
     const [draftMsg, setDraftMsg] = useState<string | null>(null);
     const [draftError, setDraftError] = useState<string | null>(null);
+    const [backupImportStrategy, setBackupImportStrategy] = useState<ImportMergeStrategy>("merge");
+    const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+    const cancelBatchRef = useRef(false);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -921,6 +1064,39 @@ export function CalculadoraTermica() {
         setXmlImportMsg("Memoria local limpiada. Mantienes la sesión online, pero este formulario vuelve a estado manual.");
     };
 
+    const isCancelledError = (error: unknown): boolean => {
+        return error instanceof Error && error.message === "OPERACION_CANCELADA";
+    };
+
+    const throwIfCancelled = () => {
+        if (cancelBatchRef.current) {
+            throw new Error("OPERACION_CANCELADA");
+        }
+    };
+
+    const setBatchStep = (next: BatchProgress) => {
+        setBatchProgress(next);
+    };
+
+    const updateBatchStep = (patch: Partial<BatchProgress>) => {
+        setBatchProgress((prev) => {
+            if (!prev) return prev;
+            return { ...prev, ...patch };
+        });
+    };
+
+    const requestBatchCancel = () => {
+        cancelBatchRef.current = true;
+        updateBatchStep({ detail: "Cancelando... esperando finalizar la operación en curso." });
+    };
+
+    const truncateIssues = (issues: string[]): string => {
+        if (issues.length === 0) return "";
+        const top = issues.slice(0, 4).join(" | ");
+        if (issues.length <= 4) return top;
+        return `${top} | +${issues.length - 4} incidencias más`;
+    };
+
     const sortDrafts = (items: CertificateDraftIndexItem[]): CertificateDraftIndexItem[] => {
         const statusOrder: Record<CertDraftStatus, number> = {
             pendiente: 0,
@@ -943,18 +1119,83 @@ export function CalculadoraTermica() {
         return organizationId;
     };
 
+    const readStorageTextByCandidates = async (candidates: string[]): Promise<{ text: string; path: string } | null> => {
+        for (const candidate of candidates) {
+            const { data, error } = await supabase.storage.from("work_photos").download(candidate);
+            if (!error && data) {
+                const text = await data.text();
+                return { text, path: candidate };
+            }
+        }
+        return null;
+    };
+
     const loadDraftIndex = async (organizationId: string): Promise<CertificateDraftIndexItem[]> => {
-        const indexPath = getIndexPath(organizationId);
-        const { data, error } = await supabase.storage.from("work_photos").download(indexPath);
+        const resolved = await readStorageTextByCandidates([
+            getIndexPath(organizationId),
+            getLegacyIndexPath(organizationId),
+        ]);
+        if (!resolved) return [];
+
+        try {
+            const parsed = JSON.parse(resolved.text) as CertificateDraftIndexItem[];
+            if (!Array.isArray(parsed)) return [];
+            return parsed
+                .filter((it) => typeof it.rc === "string" && typeof it.updatedAt === "string")
+                .map((it) => ({
+                    ...it,
+                    rc: normalizeRc(it.rc),
+                    status: isValidDraftStatus(it.status) ? it.status : "en_progreso",
+                }));
+        } catch {
+            return [];
+        }
+    };
+
+    const loadDraftPayload = async (organizationId: string, rc: string): Promise<CertificateDraftPayload | null> => {
+        const normalizedRc = normalizeRc(rc);
+        const resolved = await readStorageTextByCandidates([
+            getDraftPath(organizationId, normalizedRc),
+            getLegacyDraftPath(organizationId, normalizedRc),
+        ]);
+        if (!resolved) return null;
+
+        try {
+            const raw = JSON.parse(resolved.text) as unknown;
+            const validated = sanitizeDraftPayload(raw);
+            if (!validated.payload) return null;
+            return validated.payload;
+        } catch {
+            return null;
+        }
+    };
+
+    const loadImportAudit = async (organizationId: string): Promise<ImportAuditEntry[]> => {
+        const auditPath = getImportAuditPath(organizationId);
+        const { data, error } = await supabase.storage.from("work_photos").download(auditPath);
         if (error || !data) return [];
 
         try {
             const text = await data.text();
-            const parsed = JSON.parse(text) as CertificateDraftIndexItem[];
-            if (!Array.isArray(parsed)) return [];
-            return parsed.filter((it) => typeof it.rc === "string" && typeof it.updatedAt === "string");
+            const parsed = JSON.parse(text) as ImportAuditEntry[];
+            return Array.isArray(parsed) ? parsed : [];
         } catch {
             return [];
+        }
+    };
+
+    const appendImportAudit = async (organizationId: string, entries: ImportAuditEntry[]) => {
+        if (entries.length === 0) return;
+        const current = await loadImportAudit(organizationId);
+        const merged = [...entries, ...current].slice(0, 800);
+        const auditPath = getImportAuditPath(organizationId);
+        const blob = new Blob([JSON.stringify(merged, null, 2)], { type: "application/json" });
+        const { error } = await supabase.storage.from("work_photos").upload(auditPath, blob, {
+            upsert: true,
+            contentType: "application/json",
+        });
+        if (error) {
+            throw error;
         }
     };
 
@@ -999,6 +1240,401 @@ export function CalculadoraTermica() {
         URL.revokeObjectURL(url);
     };
 
+    const exportarBackupJSON = async () => {
+        if (draftQueue.length === 0) {
+            alert("No hay certificados en la cola para exportar.");
+            return;
+        }
+
+        setDraftLoading(true);
+        setDraftError(null);
+        setDraftMsg(null);
+        cancelBatchRef.current = false;
+
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const draftsForExport: CertificateDraftPayload[] = [];
+            const exportIssues: string[] = [];
+
+            setBatchStep({
+                mode: "export",
+                phase: "Descargando borradores",
+                current: 0,
+                total: draftQueue.length,
+                detail: "Preparando exportación...",
+            });
+
+            for (let i = 0; i < draftQueue.length; i += 1) {
+                throwIfCancelled();
+                const item = draftQueue[i];
+                updateBatchStep({
+                    current: i,
+                    detail: `Descargando ${item.rc}...`,
+                });
+
+                const payload = await loadDraftPayload(organizationId, item.rc);
+                if (!payload) {
+                    exportIssues.push(`${item.rc}: no se pudo descargar o validar.`);
+                    continue;
+                }
+
+                draftsForExport.push(payload);
+                updateBatchStep({ current: i + 1 });
+            }
+
+            if (draftsForExport.length === 0) {
+                throw new Error("No se encontró ningún certificado válido para exportar.");
+            }
+
+            throwIfCancelled();
+
+            const exportDate = new Date().toISOString();
+            const backupData: BackupEnvelope = {
+                version: BACKUP_ZIP_VERSION,
+                exportDate,
+                organizationId,
+                draftCount: draftsForExport.length,
+                drafts: draftsForExport,
+            };
+
+            const zip = new JSZip();
+            const manifest: BackupManifest = {
+                version: BACKUP_ZIP_VERSION,
+                exportDate,
+                organizationId,
+                draftCount: draftsForExport.length,
+                format: "zip",
+                includes: ["manifest.json", "backup.json", "drafts/*.json"],
+            };
+            zip.file("manifest.json", JSON.stringify(manifest, null, 2));
+            zip.file("backup.json", JSON.stringify(backupData));
+
+            draftsForExport.forEach((draft) => {
+                zip.file(`drafts/${normalizeRc(draft.rc)}.json`, JSON.stringify(draft));
+            });
+
+            setBatchStep({
+                mode: "export",
+                phase: "Comprimiendo ZIP",
+                current: 0,
+                total: 100,
+                detail: "Aplicando compresión DEFLATE nivel 9...",
+            });
+
+            const zipBlob = await zip.generateAsync(
+                {
+                    type: "blob",
+                    compression: "DEFLATE",
+                    compressionOptions: { level: 9 },
+                },
+                (metadata) => {
+                    updateBatchStep({
+                        current: Math.round(metadata.percent),
+                        total: 100,
+                        detail: metadata.currentFile
+                            ? `Comprimiendo: ${metadata.currentFile}`
+                            : "Comprimiendo backup...",
+                    });
+                },
+            );
+
+            throwIfCancelled();
+
+            const url = URL.createObjectURL(zipBlob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `backup_lote_completo_${new Date().toISOString().slice(0, 10)}.zip`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            const warningText = exportIssues.length > 0
+                ? ` Omitidos ${exportIssues.length} borradores con incidencia.`
+                : "";
+            setDraftMsg(`Backup ZIP exportado (${draftsForExport.length}/${draftQueue.length}).${warningText}`);
+            if (exportIssues.length > 0) {
+                setDraftError(`Exportación parcial: ${truncateIssues(exportIssues)}`);
+            }
+        } catch (error: any) {
+            if (isCancelledError(error)) {
+                setDraftMsg("Exportación cancelada por el usuario.");
+            } else {
+                console.error("Error exportando backup", error);
+                setDraftError(error?.message ?? "Error al exportar el backup completo");
+            }
+        } finally {
+            cancelBatchRef.current = false;
+            setBatchProgress(null);
+            setDraftLoading(false);
+        }
+    };
+
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const importarBackupJSON = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setDraftLoading(true);
+        setDraftError(null);
+        setDraftMsg(null);
+        cancelBatchRef.current = false;
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const { data: userCtx } = await supabase.auth.getUser();
+            const importedByUserId = userCtx.user?.id ?? null;
+            const importedByEmail = userCtx.user?.email ?? null;
+
+            const importIssues: string[] = [];
+            const auditEntries: ImportAuditEntry[] = [];
+
+            let rawDrafts: unknown[] = [];
+            if (file.name.toLowerCase().endsWith(".zip")) {
+                setBatchStep({
+                    mode: "import",
+                    phase: "Leyendo ZIP",
+                    current: 0,
+                    total: 100,
+                    detail: "Cargando archivo ZIP...",
+                });
+                const zip = await JSZip.loadAsync(file);
+                throwIfCancelled();
+
+                const backupFile = zip.file("backup.json");
+                if (backupFile) {
+                    const backupText = await backupFile.async("string");
+                    const parsed = JSON.parse(backupText) as Partial<BackupEnvelope>;
+                    rawDrafts = Array.isArray(parsed.drafts) ? parsed.drafts : [];
+                } else {
+                    const draftFiles = Object.values(zip.files)
+                        .filter((entry) => !entry.dir && /^drafts\/.+\.json$/i.test(entry.name));
+
+                    setBatchStep({
+                        mode: "import",
+                        phase: "Extrayendo borradores",
+                        current: 0,
+                        total: draftFiles.length,
+                        detail: "Leyendo archivos internos...",
+                    });
+
+                    for (let i = 0; i < draftFiles.length; i += 1) {
+                        throwIfCancelled();
+                        const entry = draftFiles[i];
+                        const text = await entry.async("string");
+                        rawDrafts.push(JSON.parse(text));
+                        updateBatchStep({
+                            current: i + 1,
+                            detail: `Extraido ${entry.name}`,
+                        });
+                    }
+                }
+            } else {
+                const text = await file.text();
+                const parsed = JSON.parse(text) as Partial<BackupEnvelope> & { drafts?: unknown[] };
+                rawDrafts = Array.isArray(parsed.drafts) ? parsed.drafts : [];
+            }
+
+            if (rawDrafts.length === 0) {
+                throw new Error("El backup no contiene certificados.");
+            }
+
+            const validatedDrafts: CertificateDraftPayload[] = [];
+            setBatchStep({
+                mode: "import",
+                phase: "Validando estructura",
+                current: 0,
+                total: rawDrafts.length,
+                detail: "Comprobando payloads...",
+            });
+
+            for (let i = 0; i < rawDrafts.length; i += 1) {
+                throwIfCancelled();
+                const rawDraft = rawDrafts[i];
+                const validation = sanitizeDraftPayload(rawDraft);
+                if (!validation.payload) {
+                    const rcHint = isRecord(rawDraft) ? normalizeRc(String(rawDraft.rc ?? "")) : "SIN_RC";
+                    importIssues.push(`${rcHint}: ${validation.error ?? "payload inválido"}`);
+                    auditEntries.push({
+                        at: new Date().toISOString(),
+                        importedByUserId,
+                        importedByEmail,
+                        sourceFile: file.name,
+                        strategy: backupImportStrategy,
+                        rc: rcHint || "SIN_RC",
+                        action: "invalid",
+                        detail: validation.error,
+                    });
+                } else {
+                    validatedDrafts.push(validation.payload);
+                }
+
+                updateBatchStep({ current: i + 1 });
+            }
+
+            if (validatedDrafts.length === 0) {
+                throw new Error("Ningún certificado del backup supera la validación estructural.");
+            }
+
+            // Detectar duplicados internos por RC y conservar el más reciente.
+            const dedupedByRc = new Map<string, CertificateDraftPayload>();
+            let duplicateCount = 0;
+            for (const draft of validatedDrafts) {
+                const normalizedRc = normalizeRc(draft.rc);
+                const existing = dedupedByRc.get(normalizedRc);
+                if (existing) {
+                    duplicateCount += 1;
+                    dedupedByRc.set(normalizedRc, pickMostRecentDraft(existing, draft));
+                } else {
+                    dedupedByRc.set(normalizedRc, draft);
+                }
+            }
+
+            const draftsToRestore = Array.from(dedupedByRc.values());
+            let importedCount = 0;
+            let skippedCount = 0;
+            let mergedCount = 0;
+            let overwrittenCount = 0;
+            let failedCount = 0;
+
+            let indexItems = await loadDraftIndex(organizationId);
+
+            setBatchStep({
+                mode: "import",
+                phase: "Subiendo a Supabase",
+                current: 0,
+                total: draftsToRestore.length,
+                detail: "Aplicando estrategia de merge...",
+            });
+
+            for (let i = 0; i < draftsToRestore.length; i += 1) {
+                throwIfCancelled();
+                const incoming = draftsToRestore[i];
+                const rc = normalizeRc(incoming.rc);
+                const existsIdx = indexItems.findIndex((q) => normalizeRc(q.rc) === rc);
+                let payloadToStore = incoming;
+                let auditAction: ImportAuditAction = "created";
+
+                if (existsIdx >= 0) {
+                    if (backupImportStrategy === "skip") {
+                        skippedCount += 1;
+                        auditAction = "skipped";
+                        auditEntries.push({
+                            at: new Date().toISOString(),
+                            importedByUserId,
+                            importedByEmail,
+                            sourceFile: file.name,
+                            strategy: backupImportStrategy,
+                            rc,
+                            action: auditAction,
+                            detail: "Duplicado detectado. Se conserva el existente.",
+                        });
+                        updateBatchStep({ current: i + 1, detail: `Saltado ${rc}` });
+                        continue;
+                    }
+
+                    if (backupImportStrategy === "merge") {
+                        const existingPayload = await loadDraftPayload(organizationId, rc);
+                        if (existingPayload) {
+                            payloadToStore = mergeDraftPayload(existingPayload, incoming);
+                        }
+                        mergedCount += 1;
+                        auditAction = "merged";
+                    } else {
+                        overwrittenCount += 1;
+                        auditAction = "overwritten";
+                    }
+                }
+
+                const blob = new Blob([JSON.stringify(payloadToStore)], { type: "application/json" });
+                const filePath = getDraftPath(organizationId, rc);
+                const { error: uploadError } = await supabase.storage.from("work_photos").upload(filePath, blob, {
+                    upsert: true,
+                    contentType: "application/json",
+                });
+
+                if (uploadError) {
+                    failedCount += 1;
+                    importIssues.push(`${rc}: fallo subida (${uploadError.message})`);
+                    auditEntries.push({
+                        at: new Date().toISOString(),
+                        importedByUserId,
+                        importedByEmail,
+                        sourceFile: file.name,
+                        strategy: backupImportStrategy,
+                        rc,
+                        action: "failed",
+                        detail: uploadError.message,
+                    });
+                    updateBatchStep({ current: i + 1, detail: `Error en ${rc}` });
+                    continue;
+                }
+
+                importedCount += 1;
+                const newItem: CertificateDraftIndexItem = {
+                    rc,
+                    status: payloadToStore.status || "en_progreso",
+                    updatedAt: payloadToStore.updatedAt || new Date().toISOString(),
+                    clienteNombre: payloadToStore.clienteNombre || "",
+                    clienteDni: payloadToStore.clienteDni || "",
+                };
+
+                if (existsIdx >= 0) {
+                    indexItems[existsIdx] = newItem;
+                } else {
+                    indexItems.push(newItem);
+                }
+
+                auditEntries.push({
+                    at: new Date().toISOString(),
+                    importedByUserId,
+                    importedByEmail,
+                    sourceFile: file.name,
+                    strategy: backupImportStrategy,
+                    rc,
+                    action: auditAction,
+                });
+
+                updateBatchStep({
+                    current: i + 1,
+                    detail: `Procesado ${rc}`,
+                });
+            }
+
+            throwIfCancelled();
+
+            await saveDraftIndex(organizationId, indexItems);
+            await appendImportAudit(organizationId, auditEntries);
+
+            setDraftQueue(sortDrafts(indexItems));
+            const summary = [
+                `Importación completada: ${importedCount} aplicados`,
+                `${skippedCount} omitidos`,
+                `${mergedCount} merged`,
+                `${overwrittenCount} overwrite`,
+                `${failedCount} fallidos`,
+                `${duplicateCount} duplicados internos detectados`,
+            ].join(" · ");
+            setDraftMsg(summary);
+
+            if (importIssues.length > 0) {
+                setDraftError(`Importación con incidencias: ${truncateIssues(importIssues)}`);
+            }
+        } catch (error: any) {
+            if (isCancelledError(error)) {
+                setDraftMsg("Importación cancelada por el usuario.");
+            } else {
+                console.error("Error importando", error);
+                setDraftError(error?.message ?? "Error al importar el lote");
+            }
+        } finally {
+            cancelBatchRef.current = false;
+            setBatchProgress(null);
+            setDraftLoading(false);
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+        }
+    };
+
     const refreshDraftQueue = async () => {
         if (!supabase) return;
         setDraftLoading(true);
@@ -1021,9 +1657,8 @@ export function CalculadoraTermica() {
 
     useEffect(() => {
         if (!ventilationLocked) return;
-        setCaseI("estanco");
-        setCaseF("estanco");
-    }, [ventilationLocked]);
+        setCaseF(caseI);
+    }, [caseI, ventilationLocked]);
 
     const applyDraftPayload = (payload: CertificateDraftPayload) => {
         setExpedienteRc(payload.rc || "");
@@ -1034,6 +1669,7 @@ export function CalculadoraTermica() {
         setSupActuacion(payload.supActuacion ?? 25);
         setSupEnvolvente(payload.supEnvolvente ?? 120);
         setZonaKey(payload.zonaKey || "D3");
+        setAlturaMsnm(payload.alturaMsnm ? String(payload.alturaMsnm) : "");
         setScenarioI(payload.scenarioI || "nada_aislado");
         setScenarioF(payload.scenarioF || "particion_aislada");
         setCaseI(payload.caseI || "estanco");
@@ -1082,6 +1718,7 @@ export function CalculadoraTermica() {
                 supActuacion,
                 supEnvolvente,
                 zonaKey,
+                alturaMsnm: alturaMsnm ? Number(alturaMsnm) : undefined,
                 scenarioI,
                 scenarioF,
                 caseI,
@@ -1141,12 +1778,10 @@ export function CalculadoraTermica() {
         setDraftMsg(null);
         try {
             const organizationId = await resolveOrganizationOrThrow();
-            const draftPath = getDraftPath(organizationId, item.rc);
-            const { data, error } = await supabase.storage.from("work_photos").download(draftPath);
-            if (error || !data) throw new Error("No se pudo descargar el borrador seleccionado.");
-
-            const text = await data.text();
-            const payload = JSON.parse(text) as CertificateDraftPayload;
+            const payload = await loadDraftPayload(organizationId, item.rc);
+            if (!payload) {
+                throw new Error("No se pudo descargar o validar el borrador seleccionado.");
+            }
             applyDraftPayload(payload);
             setDraftMsg(`Cargado certificado ${item.rc}.`);
         } catch (error: any) {
@@ -1174,6 +1809,7 @@ export function CalculadoraTermica() {
         setSupActuacion(25);
         setSupEnvolvente(120);
         setZonaKey("D3");
+        setAlturaMsnm("");
         setScenarioI("nada_aislado");
         setScenarioF("particion_aislada");
         setCaseI("estanco");
@@ -1196,6 +1832,9 @@ export function CalculadoraTermica() {
     const queueTotal = draftQueue.length;
     const queueCompleted = draftQueue.filter((it) => it.status === "completado").length;
     const queuePending = queueTotal - queueCompleted;
+    const batchProgressPercent = batchProgress
+        ? (batchProgress.total > 0 ? Math.min(100, Math.round((batchProgress.current / batchProgress.total) * 100)) : 0)
+        : 0;
 
     const materialFlags = {
         hormigon: capas.some((c) => c.nombre.toLowerCase().includes("hormig")),
@@ -1314,24 +1953,90 @@ export function CalculadoraTermica() {
                             <FolderPlus className="h-3.5 w-3.5" />
                             Nuevo expediente
                         </button>
-                            <button
-                                onClick={() => exportarLoteCSV()}
-                                disabled={queueTotal === 0}
-                                className="ml-auto h-8 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                        <button
+                            onClick={() => exportarLoteCSV()}
+                            disabled={queueTotal === 0}
+                            className="ml-auto h-8 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                        >
+                            <FileDown className="h-3.5 w-3.5" />
+                            Lote CSV
+                        </button>
+                        <button
+                            onClick={() => exportarBackupJSON()}
+                            disabled={draftLoading || queueTotal === 0}
+                            className="h-8 px-3 rounded-md bg-cyan-900/30 border border-cyan-700/40 text-cyan-300 hover:bg-cyan-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                            title="Exportar lote completo con imágenes en ZIP comprimido"
+                        >
+                            <Save className="h-3.5 w-3.5" />
+                            Exportar ZIP
+                        </button>
+                        <div className="h-8 px-2 rounded-md border border-slate-700 bg-slate-900/40 flex items-center gap-2 text-[11px] text-slate-300">
+                            <span>Merge:</span>
+                            <select
+                                value={backupImportStrategy}
+                                onChange={(e) => setBackupImportStrategy(e.target.value as ImportMergeStrategy)}
+                                disabled={draftLoading}
+                                className="h-6 rounded bg-slate-900 border border-slate-700 px-1 text-[11px]"
+                                title="Estrategia al detectar RC duplicada durante importación"
                             >
-                                <FileDown className="h-3.5 w-3.5" />
-                                Exportar Lote CSV
-                            </button>
-                            <button
-                                onClick={() => archivarCompletados()}
-                                disabled={draftLoading || queueTotal === 0}
-                                className="h-8 px-3 rounded-md bg-rose-900/30 border border-rose-700/40 text-rose-300 hover:bg-rose-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
-                                title="Limpia los expedientes completados del lote actual"
-                            >
-                                <Archive className="h-3.5 w-3.5" />
-                                Archivar Completados
-                            </button>
+                                <option value="merge">merge</option>
+                                <option value="overwrite">overwrite</option>
+                                <option value="skip">skip</option>
+                            </select>
+                        </div>
+                        <input type="file" ref={fileInputRef} onChange={importarBackupJSON} accept=".json,.zip,application/zip" className="hidden" />
+                        <button
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={draftLoading}
+                            className="h-8 px-3 rounded-md bg-blue-900/30 border border-blue-700/40 text-blue-300 hover:bg-blue-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                            title="Importar backup JSON o ZIP"
+                        >
+                            <UploadCloud className="h-3.5 w-3.5" />
+                            Restaurar
+                        </button>
+                        <button
+                            onClick={() => archivarCompletados()}
+                            disabled={draftLoading || queueTotal === 0}
+                            className="h-8 px-3 rounded-md bg-rose-900/30 border border-rose-700/40 text-rose-300 hover:bg-rose-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                            title="Limpia los expedientes completados del lote actual"
+                        >
+                            <Archive className="h-3.5 w-3.5" />
+                            Archivar Completados
+                        </button>
                     </div>
+
+                    {batchProgress && (
+                        <div className="rounded-md border border-cyan-700/40 bg-cyan-900/10 px-3 py-2 space-y-2">
+                            <div className="flex items-center justify-between text-[11px] text-cyan-200">
+                                <span>
+                                    {batchProgress.mode === "export" ? "Exportación" : "Importación"}
+                                    {" · "}
+                                    {batchProgress.phase}
+                                </span>
+                                <span>
+                                    {batchProgress.current}/{batchProgress.total}
+                                    {" · "}
+                                    {batchProgressPercent}%
+                                </span>
+                            </div>
+                            <div className="h-2 rounded bg-slate-800 overflow-hidden">
+                                <div
+                                    className="h-full bg-cyan-400 transition-all duration-200"
+                                    style={{ width: `${batchProgressPercent}%` }}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <p className="text-[11px] text-cyan-100/90 truncate">{batchProgress.detail || "Procesando..."}</p>
+                                <button
+                                    onClick={requestBatchCancel}
+                                    className="h-7 px-2 rounded border border-cyan-600/50 text-cyan-200 hover:bg-cyan-800/30 text-[11px] inline-flex items-center gap-1"
+                                >
+                                    <X className="h-3 w-3" />
+                                    Cancelar
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
                     {draftMsg && (
                         <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-3 py-2 rounded-md">
@@ -1835,7 +2540,7 @@ export function CalculadoraTermica() {
                                     <p className="text-[9px] text-slate-600 mb-1">Sin cubiertas</p>
                                     <Input type="number" step="0.01" value={supEnvolvente} onChange={(e) => setSupEnvolvente(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
                                 </div>
-                                <div className="col-span-2 md:col-span-2">
+                                <div className="col-span-1 md:col-span-1">
                                     <label className="text-[10px] text-slate-500 uppercase font-bold">Zona Climática</label>
                                     <select
                                         value={zonaKey}
@@ -1848,6 +2553,22 @@ export function CalculadoraTermica() {
                                             </option>
                                         ))}
                                     </select>
+                                    {alturaMsnm && Number(alturaMsnm) > 1000 && (
+                                        <p className="text-[9px] text-amber-400 mt-1">
+                                            ¡Ojo! Altura ({alturaMsnm}m) alta. Revisa si cambia la severidad.
+                                        </p>
+                                    )}
+                                </div>
+                                <div className="col-span-1 md:col-span-1">
+                                    <label className="text-[10px] text-slate-500 uppercase font-bold">Altura (msnm)</label>
+                                    <p className="text-[9px] text-slate-600 mb-1">Impacta zona C.T.E.</p>
+                                    <Input
+                                        type="number"
+                                        value={alturaMsnm}
+                                        onChange={(e) => setAlturaMsnm(e.target.value)}
+                                        className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                        placeholder="Ej: 600"
+                                    />
                                 </div>
                             </div>
 
@@ -2018,6 +2739,97 @@ export function CalculadoraTermica() {
 
                 {/* Columna derecha: Resultado */}
                 <div className="space-y-4">
+                    {/* Sumador y Capturas rápidas */}
+                    <div className="grid grid-cols-1 gap-4">
+                        <Card className="bg-slate-900/40 border-slate-800">
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-[11px] text-slate-400 uppercase font-bold flex items-center gap-1">
+                                    <Calculator className="h-3 w-3" /> Sumador de Superficies
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-2">
+                                <div className="flex gap-2">
+                                    <Input
+                                        value={surfaceCalc}
+                                        onChange={(e) => setSurfaceCalc(e.target.value)}
+                                        placeholder="Ej: 10.5 + 4.2"
+                                        className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                    />
+                                    <div className="flex items-center justify-center w-16 h-8 text-xs font-bold font-mono bg-slate-900 rounded border border-slate-700 text-emerald-400">
+                                        {(() => {
+                                            try {
+                                                const res = new Function(`return ${surfaceCalc.replace(/[^0-9\+\-\*\/\.]/g, '')}`)();
+                                                return Number.isFinite(res) ? res.toFixed(2) : "--";
+                                            } catch {
+                                                return "--";
+                                            }
+                                        })()}
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => {
+                                            try {
+                                                const res = new Function(`return ${surfaceCalc.replace(/[^0-9\+\-\*\/\.]/g, '')}`)();
+                                                if (Number.isFinite(res)) setAreaHNH(Number(res.toFixed(2)));
+                                            } catch {}
+                                        }}
+                                        className="flex-1 h-7 text-[10px] rounded border border-blue-700/40 text-blue-300 hover:bg-blue-900/20"
+                                    >
+                                        Pasar a Partición
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            try {
+                                                const res = new Function(`return ${surfaceCalc.replace(/[^0-9\+\-\*\/\.]/g, '')}`)();
+                                                if (Number.isFinite(res)) setSupActuacion(Number(res.toFixed(2)));
+                                            } catch {}
+                                        }}
+                                        className="flex-1 h-7 text-[10px] rounded border border-purple-700/40 text-purple-300 hover:bg-purple-900/20"
+                                    >
+                                        Pasar a Actuación
+                                    </button>
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        {(capturas.ce3x_antes?.dataUrl || capturas.ce3x_despues?.dataUrl || capturas.cee_inicial?.dataUrl) && (
+                            <Card className="bg-slate-900/40 border-slate-800">
+                                <CardHeader className="pb-2">
+                                    <CardTitle className="text-[11px] text-slate-400 uppercase font-bold flex items-center gap-1">
+                                        <ZoomIn className="h-3 w-3" /> Validar Capturas Rápidas
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="flex gap-2 p-2 px-6 overflow-x-auto pb-4">
+                                    {capturas.ce3x_antes?.dataUrl && (
+                                        <div className="flex-none w-24 space-y-1 text-center cursor-zoom-in group border border-slate-800 p-1 rounded bg-slate-900/50">
+                                            <div className="w-full h-16 rounded overflow-hidden relative border border-slate-700 bg-black">
+                                                <img src={capturas.ce3x_antes.dataUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                                            </div>
+                                            <p className="text-[9px] text-slate-500 pt-1">CE3X Antes</p>
+                                        </div>
+                                    )}
+                                    {capturas.ce3x_despues?.dataUrl && (
+                                        <div className="flex-none w-24 space-y-1 text-center cursor-zoom-in group border border-slate-800 p-1 rounded bg-slate-900/50">
+                                            <div className="w-full h-16 rounded overflow-hidden relative border border-slate-700 bg-black">
+                                                <img src={capturas.ce3x_despues.dataUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                                            </div>
+                                            <p className="text-[9px] text-slate-500 pt-1">CE3X Desp</p>
+                                        </div>
+                                    )}
+                                    {capturas.cee_inicial?.dataUrl && (
+                                        <div className="flex-none w-24 space-y-1 text-center cursor-zoom-in group border border-slate-800 p-1 rounded bg-slate-900/50">
+                                            <div className="w-full h-16 rounded overflow-hidden relative border border-slate-700 bg-black">
+                                                <img src={capturas.cee_inicial.dataUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                                            </div>
+                                            <p className="text-[9px] text-slate-500 pt-1">Etiq. CEE</p>
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        )}
+                    </div>
+
                     {resultado ? (
                         <>
                             {/* KPI principal */}

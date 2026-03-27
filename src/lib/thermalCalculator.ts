@@ -178,7 +178,7 @@ function calcularR(capa: CapaMaterial): number {
   const rVal = Number(capa.r_valor);
   const esp = Number(capa.espesor);
   const lam = Number(capa.lambda_val);
-  
+
   if (rVal > 0) return rVal;
   if (esp > 0 && lam > 0) return esp / lam;
   return 0;
