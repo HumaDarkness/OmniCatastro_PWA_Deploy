@@ -211,14 +211,15 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
     const tecnicoNif = normalizeDni(queryText(doc, ["DatosDelCertificador NIF"]));
     const tecnicoEntidadNif = normalizeDni(queryText(doc, ["DatosDelCertificador NIFEntidad"]));
 
-    const zonaRaw = queryText(doc, ["ZonaClimatica"]);
+    const docInmueble = doc.querySelector("DatosDelInmueble") || doc.querySelector("Entrada") || doc;
+    const zonaRaw = queryText(docInmueble, ["ZonaClimatica"]);
     const zonaKey = zonaRaw === "α3" ? "alpha3" : zonaRaw;
 
-    const rc = queryText(doc, ["ReferenciaCatastral", "RefCatastral"]) || "";
-    const provincia = queryText(doc, ["Provincia"]) || "";
-    const municipio = queryText(doc, ["Municipio"]) || "";
-    const direccion = queryText(doc, ["Direccion", "Calle", "Domicilio"]) || "";
-    const codigoPostal = queryText(doc, ["CodigoPostal", "CP"]) || "";
+    const rc = queryText(docInmueble, ["ReferenciaCatastral", "RefCatastral"]) || "";
+    const provincia = queryText(docInmueble, ["Provincia"]) || "";
+    const municipio = queryText(docInmueble, ["Municipio"]) || "";
+    const direccion = queryText(docInmueble, ["Direccion", "Calle", "Domicilio"]) || "";
+    const codigoPostal = queryText(docInmueble, ["CodigoPostal", "CP"]) || "";
 
     const elementosOpacos = [...doc.querySelectorAll("CerramientosOpacos Elemento")];
     const elementosHuecos = [...doc.querySelectorAll("HuecosYLucernarios Elemento, HuecosyLucernarios Elemento")];
@@ -744,7 +745,7 @@ export function CalculadoraTermica() {
             if (typeof saved.supHuecos === "number") setSupHuecos(saved.supHuecos);
             if (Array.isArray(saved.elementosOpacosList)) setElementosOpacosList(saved.elementosOpacosList);
             if (Array.isArray(saved.elementosHuecosList)) setElementosHuecosList(saved.elementosHuecosList);
-            if (typeof saved.alturaMsnm === "string") setAlturaMsnm(saved.alturaMsnm);
+            if (saved.alturaMsnm !== undefined) setAlturaMsnm(String(saved.alturaMsnm));
             if (saved.filtroMetodo && typeof saved.filtroMetodo === "object") setFiltroMetodo(saved.filtroMetodo);
             if (saved.materialSearchByLayer && typeof saved.materialSearchByLayer === "object") {
                 setMaterialSearchByLayer(saved.materialSearchByLayer);
@@ -1264,12 +1265,16 @@ export function CalculadoraTermica() {
         });
 
         const fullClientName = [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2].filter(Boolean).join(" ").trim();
+        const fullAddress = [
+            direccionInmueble,
+            cpInmueble,
+            municipioInmueble,
+            provinciaInmueble
+        ].filter(Boolean).join(", ");
+
         const infoInmueble = [
             "DATOS DEL INMUEBLE",
-            direccionInmueble ? `Dirección: ${direccionInmueble}` : "",
-            municipioInmueble ? `Municipio: ${municipioInmueble}` : "",
-            cpInmueble ? `C.P.: ${cpInmueble}` : "",
-            provinciaInmueble ? `Provincia: ${provinciaInmueble}` : "",
+            fullAddress ? `Dirección: ${fullAddress}` : "",
             alturaMsnm ? `Altitud: ${alturaMsnm} msnm` : "",
             "",
         ].filter(v => v !== null && v !== undefined && v !== "").join("\n");
