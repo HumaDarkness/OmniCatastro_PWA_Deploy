@@ -439,7 +439,11 @@ interface CertificateDraftPayload {
     modoCE3X: boolean;
     overrideUi: string;
     overrideUf: string;
-    clienteNombre: string;
+    clienteNombre?: string;
+    clienteFirstName?: string;
+    clienteMiddleName?: string;
+    clienteLastName1?: string;
+    clienteLastName2?: string;
     clienteDni: string;
     clienteDireccionDni: string;
     xmlFileName?: string;
@@ -505,6 +509,10 @@ function sanitizeDraftPayload(raw: unknown): { payload?: CertificateDraftPayload
         overrideUi: typeof raw.overrideUi === "string" ? raw.overrideUi : "",
         overrideUf: typeof raw.overrideUf === "string" ? raw.overrideUf : "",
         clienteNombre: typeof raw.clienteNombre === "string" ? raw.clienteNombre : "",
+        clienteFirstName: typeof raw.clienteFirstName === "string" ? raw.clienteFirstName : "",
+        clienteMiddleName: typeof raw.clienteMiddleName === "string" ? raw.clienteMiddleName : "",
+        clienteLastName1: typeof raw.clienteLastName1 === "string" ? raw.clienteLastName1 : "",
+        clienteLastName2: typeof raw.clienteLastName2 === "string" ? raw.clienteLastName2 : "",
         clienteDni: typeof raw.clienteDni === "string" ? raw.clienteDni : "",
         clienteDireccionDni: typeof raw.clienteDireccionDni === "string" ? raw.clienteDireccionDni : "",
         filtroMetodo: isRecord(raw.filtroMetodo) ? (raw.filtroMetodo as Record<number, string>) : {},
@@ -589,7 +597,10 @@ interface CalcStateSnapshot {
     modoCE3X: boolean;
     overrideUi: string;
     overrideUf: string;
-    clienteNombre: string;
+    clienteFirstName: string;
+    clienteMiddleName: string;
+    clienteLastName1: string;
+    clienteLastName2: string;
     clienteDni: string;
     clienteDireccionDni: string;
     filtroMetodo: Record<number, string>;
@@ -633,7 +644,10 @@ export function CalculadoraTermica() {
     const [overrideUf, setOverrideUf] = useState("");
     const [capturas, setCapturas] = useState<CapturasState>(createEmptyCapturasState());
 
-    const [clienteNombre, setClienteNombre] = useState("");
+    const [clienteFirstName, setClienteFirstName] = useState("");
+    const [clienteMiddleName, setClienteMiddleName] = useState("");
+    const [clienteLastName1, setClienteLastName1] = useState("");
+    const [clienteLastName2, setClienteLastName2] = useState("");
     const [clienteDni, setClienteDni] = useState("");
     const [clienteDireccionDni, setClienteDireccionDni] = useState("");
     const [xmlImportMsg, setXmlImportMsg] = useState<string | null>(null);
@@ -682,7 +696,10 @@ export function CalculadoraTermica() {
             if (typeof saved.modoCE3X === "boolean") setModoCE3X(saved.modoCE3X);
             if (typeof saved.overrideUi === "string") setOverrideUi(saved.overrideUi);
             if (typeof saved.overrideUf === "string") setOverrideUf(saved.overrideUf);
-            if (typeof saved.clienteNombre === "string") setClienteNombre(saved.clienteNombre);
+            if (typeof saved.clienteFirstName === "string") setClienteFirstName(saved.clienteFirstName);
+            if (typeof saved.clienteMiddleName === "string") setClienteMiddleName(saved.clienteMiddleName);
+            if (typeof saved.clienteLastName1 === "string") setClienteLastName1(saved.clienteLastName1);
+            if (typeof saved.clienteLastName2 === "string") setClienteLastName2(saved.clienteLastName2);
             if (typeof saved.clienteDni === "string") setClienteDni(saved.clienteDni);
             if (typeof saved.clienteDireccionDni === "string") setClienteDireccionDni(saved.clienteDireccionDni);
             if (saved.filtroMetodo && typeof saved.filtroMetodo === "object") setFiltroMetodo(saved.filtroMetodo);
@@ -718,7 +735,10 @@ export function CalculadoraTermica() {
                 modoCE3X,
                 overrideUi,
                 overrideUf,
-                clienteNombre,
+                clienteFirstName,
+                clienteMiddleName,
+                clienteLastName1,
+                clienteLastName2,
                 clienteDni,
                 clienteDireccionDni,
                 filtroMetodo,
@@ -748,7 +768,10 @@ export function CalculadoraTermica() {
         modoCE3X,
         overrideUi,
         overrideUf,
-        clienteNombre,
+        clienteFirstName,
+        clienteMiddleName,
+        clienteLastName1,
+        clienteLastName2,
         clienteDni,
         clienteDireccionDni,
         filtroMetodo,
@@ -957,19 +980,13 @@ export function CalculadoraTermica() {
                 return;
             }
 
-            const fullName = [
-                client.first_name,
-                client.middle_name,
-                client.last_name_1,
-                client.last_name_2,
-            ]
-                .filter(Boolean)
-                .join(" ")
-                .replace(/\s+/g, " ")
-                .trim();
-
-            if (fullName) setClienteNombre(fullName);
+            setClienteFirstName(client.first_name || "");
+            setClienteMiddleName(client.middle_name || "");
+            setClienteLastName1(client.last_name_1 || "");
+            setClienteLastName2(client.last_name_2 || "");
             if (client.dni_address) setClienteDireccionDni(client.dni_address);
+            
+            const fullName = [client.first_name, client.middle_name, client.last_name_1, client.last_name_2].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
             setDniLookupMsg(`Cliente cargado desde BD: ${fullName || client.dni}`);
         } catch {
             setDniLookupMsg("Fallo inesperado al buscar DNI.");
@@ -983,38 +1000,49 @@ export function CalculadoraTermica() {
         const dni = normalizeDni(clienteDni);
         if (!dni) { setDniLookupMsg("Introduce un DNI para guardar el cliente."); return; }
         if (!supabase) { setDniLookupMsg("Supabase no está configurado."); return; }
-        if (!clienteNombre.trim()) { setDniLookupMsg("Introduce un nombre para guardar."); return; }
+        if (!clienteFirstName.trim() || !clienteLastName1.trim()) { setDniLookupMsg("Introduce al menos primer nombre y primer apellido."); return; }
 
         setSavingCliente(true);
         try {
             const organizationId = await resolveOrganizationOrThrow();
-            // Parsear nombre: "Juan Carlos García López" → first="Juan", middle="Carlos", last1="García", last2="López"
-            const parts = clienteNombre.trim().split(/\s+/);
-            let first_name = parts[0] || "";
-            let middle_name = "";
-            let last_name_1 = "";
-            let last_name_2 = "";
-            if (parts.length === 4) {
-                middle_name = parts[1];
-                last_name_1 = parts[2];
-                last_name_2 = parts[3];
-            } else if (parts.length === 3) {
-                last_name_1 = parts[1];
-                last_name_2 = parts[2];
-            } else if (parts.length === 2) {
-                last_name_1 = parts[1];
-            }
+            const first_name = clienteFirstName.trim();
+            const middle_name = clienteMiddleName.trim() || null;
+            const last_name_1 = clienteLastName1.trim();
+            const last_name_2 = clienteLastName2.trim() || null;
 
-            const { error } = await supabase
+            const { data: newClient, error } = await supabase
                 .from("clients")
                 .upsert(
                     { organization_id: organizationId, dni, first_name, middle_name, last_name_1, last_name_2, dni_address: clienteDireccionDni.trim() || null },
                     { onConflict: "organization_id,dni" }
-                );
+                )
+                .select()
+                .single();
 
             if (error) {
                 setDniLookupMsg(`Error al guardar: ${error.message}`);
-            } else {
+            } else if (newClient) {
+                if (capturas.dni_cliente) {
+                    try {
+                        setDniLookupMsg(`Subiendo imagen de DNI...`);
+                        const dniCaptura = capturas.dni_cliente;
+                        const response = await fetch(dniCaptura.dataUrl);
+                        const blob = await response.blob();
+                        const fileExt = dniCaptura.fileName.split('.').pop() || 'png';
+                        const fileName = `dni_front_${Date.now()}.${fileExt}`;
+                        const filePath = `${organizationId}/clients/${newClient.id}/${fileName}`;
+                        
+                        const { error: uploadError } = await supabase.storage
+                            .from('work_photos')
+                            .upload(filePath, blob, { upsert: true });
+                            
+                        if (!uploadError) {
+                            await supabase.from("clients").update({ dni_front_path: filePath }).eq("id", newClient.id);
+                        }
+                    } catch (err) {
+                        console.error("Error subiendo DNI:", err);
+                    }
+                }
                 setDniLookupMsg(`✅ Cliente ${first_name} ${last_name_1} guardado en BD.`);
             }
         } catch {
@@ -1028,7 +1056,10 @@ export function CalculadoraTermica() {
         if (!file) return;
 
         // Limpieza preventiva para no arrastrar datos de importaciones previas.
-        setClienteNombre("");
+        setClienteFirstName("");
+        setClienteMiddleName("");
+        setClienteLastName1("");
+        setClienteLastName2("");
         setClienteDni("");
         setDniLookupMsg(null);
 
@@ -1053,7 +1084,24 @@ export function CalculadoraTermica() {
                 setZonaKey(parsed.zonaKey);
             }
 
-            setClienteNombre(parsed.clienteNombre || "");
+            if (parsed.clienteNombre) {
+                const parts = parsed.clienteNombre.trim().split(/\s+/);
+                if (parts.length === 1) {
+                    setClienteFirstName(parts[0]);
+                } else if (parts.length === 2) {
+                    setClienteFirstName(parts[0]);
+                    setClienteLastName1(parts[1]);
+                } else if (parts.length === 3) {
+                    setClienteFirstName(parts[0]);
+                    setClienteLastName1(parts[1]);
+                    setClienteLastName2(parts[2]);
+                } else if (parts.length >= 4) {
+                    setClienteLastName2(parts.pop() || "");
+                    setClienteLastName1(parts.pop() || "");
+                    setClienteFirstName(parts.shift() || "");
+                    setClienteMiddleName(parts.join(" "));
+                }
+            }
             setClienteDni(parsed.clienteDni);
 
             if (parsed.clienteDni && supabase) {
@@ -1095,7 +1143,10 @@ export function CalculadoraTermica() {
             }
             
         } catch {
-            setClienteNombre("");
+            setClienteFirstName("");
+            setClienteMiddleName("");
+            setClienteLastName1("");
+            setClienteLastName2("");
             setClienteDni("");
             setXmlImportMsg("No se pudo importar el XML CE3X. Revisa el archivo.");
         }
@@ -1145,10 +1196,11 @@ export function CalculadoraTermica() {
             zonaKey: zonaKey,
         });
 
-        if (clienteNombre.trim() || clienteDni.trim()) {
+        const fullClientName = [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2].filter(Boolean).join(" ").trim();
+        if (fullClientName || clienteDni.trim()) {
             const bloqueCliente = [
                 "DATOS TITULAR",
-                `Nombre: ${clienteNombre.trim() || "(no indicado)"}`,
+                `Nombre: ${fullClientName || "(no indicado)"}`,
                 `DNI/NIE: ${clienteDni.trim() || "(no indicado)"}`,
                 clienteDireccionDni.trim() ? `Direccion DNI: ${clienteDireccionDni.trim()}` : "",
                 "",
@@ -1710,7 +1762,7 @@ export function CalculadoraTermica() {
                     rc,
                     status: payloadToStore.status || "en_progreso",
                     updatedAt: payloadToStore.updatedAt || new Date().toISOString(),
-                    clienteNombre: payloadToStore.clienteNombre || "",
+                    clienteNombre: payloadToStore.clienteNombre || [payloadToStore.clienteFirstName, payloadToStore.clienteMiddleName, payloadToStore.clienteLastName1, payloadToStore.clienteLastName2].filter(Boolean).join(" "),
                     clienteDni: payloadToStore.clienteDni || "",
                 };
 
@@ -1815,7 +1867,32 @@ export function CalculadoraTermica() {
         setModoCE3X(!!payload.modoCE3X);
         setOverrideUi(payload.overrideUi || "");
         setOverrideUf(payload.overrideUf || "");
-        setClienteNombre(payload.clienteNombre || "");
+        if (payload.clienteNombre && !payload.clienteFirstName && !payload.clienteLastName1) {
+            const parts = payload.clienteNombre.trim().split(/\s+/);
+            setClienteFirstName(parts[0] || "");
+            if (parts.length === 2) {
+                setClienteLastName1(parts[1]);
+                setClienteMiddleName("");
+                setClienteLastName2("");
+            } else if (parts.length === 3) {
+                setClienteLastName1(parts[1]);
+                setClienteLastName2(parts[2]);
+                setClienteMiddleName("");
+            } else if (parts.length >= 4) {
+                setClienteLastName1(parts[parts.length - 2]);
+                setClienteLastName2(parts[parts.length - 1]);
+                setClienteMiddleName(parts.slice(1, parts.length - 2).join(" "));
+            } else {
+                setClienteLastName1("");
+                setClienteLastName2("");
+                setClienteMiddleName("");
+            }
+        } else {
+            setClienteFirstName(payload.clienteFirstName || "");
+            setClienteMiddleName(payload.clienteMiddleName || "");
+            setClienteLastName1(payload.clienteLastName1 || "");
+            setClienteLastName2(payload.clienteLastName2 || "");
+        }
         setClienteDni(payload.clienteDni || "");
         setClienteDireccionDni(payload.clienteDireccionDni || "");
         setXmlFileName(payload.xmlFileName || "");
@@ -1869,7 +1946,11 @@ export function CalculadoraTermica() {
                 modoCE3X,
                 overrideUi,
                 overrideUf,
-                clienteNombre,
+                clienteFirstName,
+                clienteMiddleName,
+                clienteLastName1,
+                clienteLastName2,
+                clienteNombre: [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2].filter(Boolean).join(" "),
                 clienteDni,
                 clienteDireccionDni,
                 xmlFileName,
@@ -1898,7 +1979,7 @@ export function CalculadoraTermica() {
                     rc: rcNormalized,
                     status: finalStatus,
                     updatedAt: nowIso,
-                    clienteNombre: clienteNombre.trim(),
+                    clienteNombre: [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2].filter(Boolean).join(" "),
                     clienteDni: clienteDni.trim(),
                 },
                 ...currentIndex.filter((it) => normalizeRc(it.rc) !== rcNormalized),
@@ -1967,7 +2048,10 @@ export function CalculadoraTermica() {
         setModoCE3X(false);
         setOverrideUi("");
         setOverrideUf("");
-        setClienteNombre("");
+        setClienteFirstName("");
+        setClienteMiddleName("");
+        setClienteLastName1("");
+        setClienteLastName2("");
         setClienteDni("");
         setClienteDireccionDni("");
         setCapturas(createEmptyCapturasState());
@@ -2272,16 +2356,26 @@ export function CalculadoraTermica() {
                         </div>
                     )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <div className="md:col-span-2">
-                            <label className="text-[10px] text-slate-500 uppercase font-bold">Nombre cliente</label>
-                            <Input
-                                value={clienteNombre}
-                                onChange={(e) => setClienteNombre(e.target.value)}
-                                placeholder="Nombre completo del titular"
-                                className="h-9 bg-slate-900/50 border-slate-700 text-slate-200"
-                            />
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4">
+                        <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-bold">Primer Nombre *</label>
+                            <Input value={clienteFirstName} onChange={(e) => setClienteFirstName(e.target.value)} placeholder="Juan" className="h-9 bg-slate-900/50 border-slate-700 text-slate-200" />
                         </div>
+                        <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-bold">Segundo Nombre</label>
+                            <Input value={clienteMiddleName} onChange={(e) => setClienteMiddleName(e.target.value)} placeholder="Carlos" className="h-9 bg-slate-900/50 border-slate-700 text-slate-200" />
+                        </div>
+                        <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-bold">Primer Apellido *</label>
+                            <Input value={clienteLastName1} onChange={(e) => setClienteLastName1(e.target.value)} placeholder="García" className="h-9 bg-slate-900/50 border-slate-700 text-slate-200" />
+                        </div>
+                        <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-bold">Segundo Apellido</label>
+                            <Input value={clienteLastName2} onChange={(e) => setClienteLastName2(e.target.value)} placeholder="López" className="h-9 bg-slate-900/50 border-slate-700 text-slate-200" />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
                         <div>
                             <label className="text-[10px] text-slate-500 uppercase font-bold">DNI / NIE</label>
                             <div className="flex gap-2">
@@ -2301,7 +2395,7 @@ export function CalculadoraTermica() {
                                 </button>
                                 <button
                                     onClick={() => guardarCliente()}
-                                    disabled={savingCliente || !clienteNombre.trim() || !clienteDni.trim()}
+                                    disabled={savingCliente || !clienteFirstName.trim() || !clienteLastName1.trim() || !clienteDni.trim()}
                                     className="h-9 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-[11px] font-bold"
                                     title="Guardar cliente en base de datos"
                                 >
@@ -2309,16 +2403,15 @@ export function CalculadoraTermica() {
                                 </button>
                             </div>
                         </div>
-                    </div>
-
-                    <div>
-                        <label className="text-[10px] text-slate-500 uppercase font-bold">Dirección DNI (si aplica)</label>
-                        <Input
-                            value={clienteDireccionDni}
-                            onChange={(e) => setClienteDireccionDni(e.target.value)}
-                            placeholder="Direccion del documento"
-                            className="h-9 bg-slate-900/50 border-slate-700 text-slate-200"
-                        />
+                        <div>
+                            <label className="text-[10px] text-slate-500 uppercase font-bold">Dirección DNI (si aplica)</label>
+                            <Input
+                                value={clienteDireccionDni}
+                                onChange={(e) => setClienteDireccionDni(e.target.value)}
+                                placeholder="Direccion del documento"
+                                className="h-9 bg-slate-900/50 border-slate-700 text-slate-200"
+                            />
+                        </div>
                     </div>
 
                     <div className="rounded-md border border-indigo-500/20 bg-indigo-500/5 p-3">
