@@ -92,6 +92,8 @@ interface ParsedCE3X {
     rc: string;
     provincia: string;
     municipio: string;
+    direccion: string;
+    codigoPostal: string;
     elementosOpacosData: ElementoEnvolvente[];
     elementosHuecosData: ElementoEnvolvente[];
 }
@@ -215,6 +217,8 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
     const rc = queryText(doc, ["ReferenciaCatastral", "RefCatastral"]) || "";
     const provincia = queryText(doc, ["Provincia"]) || "";
     const municipio = queryText(doc, ["Municipio"]) || "";
+    const direccion = queryText(doc, ["Direccion", "Calle", "Domicilio"]) || "";
+    const codigoPostal = queryText(doc, ["CodigoPostal", "CP"]) || "";
 
     const elementosOpacos = [...doc.querySelectorAll("CerramientosOpacos Elemento")];
     const elementosHuecos = [...doc.querySelectorAll("HuecosYLucernarios Elemento, HuecosyLucernarios Elemento")];
@@ -280,6 +284,8 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         rc,
         provincia,
         municipio,
+        direccion,
+        codigoPostal,
         elementosOpacosData,
         elementosHuecosData,
     };
@@ -446,6 +452,10 @@ interface CertificateDraftPayload {
     clienteLastName2?: string;
     clienteDni: string;
     clienteDireccionDni: string;
+    direccionInmueble?: string;
+    municipioInmueble?: string;
+    cpInmueble?: string;
+    provinciaInmueble?: string;
     xmlFileName?: string;
     filtroMetodo: Record<number, string>;
     materialSearchByLayer: Record<number, string>;
@@ -515,6 +525,10 @@ function sanitizeDraftPayload(raw: unknown): { payload?: CertificateDraftPayload
         clienteLastName2: typeof raw.clienteLastName2 === "string" ? raw.clienteLastName2 : "",
         clienteDni: typeof raw.clienteDni === "string" ? raw.clienteDni : "",
         clienteDireccionDni: typeof raw.clienteDireccionDni === "string" ? raw.clienteDireccionDni : "",
+        direccionInmueble: typeof raw.direccionInmueble === "string" ? raw.direccionInmueble : "",
+        municipioInmueble: typeof raw.municipioInmueble === "string" ? raw.municipioInmueble : "",
+        cpInmueble: typeof raw.cpInmueble === "string" ? raw.cpInmueble : "",
+        provinciaInmueble: typeof raw.provinciaInmueble === "string" ? raw.provinciaInmueble : "",
         xmlFileName: typeof raw.xmlFileName === "string" ? raw.xmlFileName : "",
         supOpacos: typeof raw.supOpacos === "number" ? raw.supOpacos : 0,
         supHuecos: typeof raw.supHuecos === "number" ? raw.supHuecos : 0,
@@ -608,6 +622,10 @@ interface CalcStateSnapshot {
     clienteLastName2: string;
     clienteDni: string;
     clienteDireccionDni: string;
+    direccionInmueble: string;
+    municipioInmueble: string;
+    cpInmueble: string;
+    provinciaInmueble: string;
     xmlFileName: string;
     supOpacos: number;
     supHuecos: number;
@@ -663,6 +681,10 @@ export function CalculadoraTermica() {
     const [clienteDireccionDni, setClienteDireccionDni] = useState("");
     const [xmlImportMsg, setXmlImportMsg] = useState<string | null>(null);
     const [xmlFileName, setXmlFileName] = useState("");
+    const [direccionInmueble, setDireccionInmueble] = useState("");
+    const [municipioInmueble, setMunicipioInmueble] = useState("");
+    const [cpInmueble, setCpInmueble] = useState("");
+    const [provinciaInmueble, setProvinciaInmueble] = useState("");
     const [buscandoDni, setBuscandoDni] = useState(false);
     const [dniLookupMsg, setDniLookupMsg] = useState<string | null>(null);
     const [capturaPreview, setCapturaPreview] = useState<{
@@ -714,6 +736,10 @@ export function CalculadoraTermica() {
             if (typeof saved.clienteDni === "string") setClienteDni(saved.clienteDni);
             if (typeof saved.clienteDireccionDni === "string") setClienteDireccionDni(saved.clienteDireccionDni);
             if (typeof saved.xmlFileName === "string") setXmlFileName(saved.xmlFileName);
+            if (typeof saved.direccionInmueble === "string") setDireccionInmueble(saved.direccionInmueble);
+            if (typeof saved.municipioInmueble === "string") setMunicipioInmueble(saved.municipioInmueble);
+            if (typeof saved.cpInmueble === "string") setCpInmueble(saved.cpInmueble);
+            if (typeof saved.provinciaInmueble === "string") setProvinciaInmueble(saved.provinciaInmueble);
             if (typeof saved.supOpacos === "number") setSupOpacos(saved.supOpacos);
             if (typeof saved.supHuecos === "number") setSupHuecos(saved.supHuecos);
             if (Array.isArray(saved.elementosOpacosList)) setElementosOpacosList(saved.elementosOpacosList);
@@ -758,6 +784,10 @@ export function CalculadoraTermica() {
                 clienteLastName2,
                 clienteDni,
                 clienteDireccionDni,
+                direccionInmueble,
+                municipioInmueble,
+                cpInmueble,
+                provinciaInmueble,
                 xmlFileName,
                 supOpacos,
                 supHuecos,
@@ -797,6 +827,10 @@ export function CalculadoraTermica() {
         clienteLastName2,
         clienteDni,
         clienteDireccionDni,
+        direccionInmueble,
+        municipioInmueble,
+        cpInmueble,
+        provinciaInmueble,
         xmlFileName,
         supOpacos,
         supHuecos,
@@ -1145,6 +1179,10 @@ export function CalculadoraTermica() {
             if (parsed.rc) {
                 setExpedienteRc(parsed.rc);
             }
+            if (parsed.direccion) setDireccionInmueble(parsed.direccion);
+            if (parsed.municipio) setMunicipioInmueble(parsed.municipio);
+            if (parsed.codigoPostal) setCpInmueble(parsed.codigoPostal);
+            if (parsed.provincia) setProvinciaInmueble(parsed.provincia);
 
             // Integración Catastro Automática
             if (parsed.rc && parsed.provincia && parsed.municipio) {
@@ -1226,6 +1264,16 @@ export function CalculadoraTermica() {
         });
 
         const fullClientName = [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2].filter(Boolean).join(" ").trim();
+        const infoInmueble = [
+            "DATOS DEL INMUEBLE",
+            direccionInmueble ? `Dirección: ${direccionInmueble}` : "",
+            municipioInmueble ? `Municipio: ${municipioInmueble}` : "",
+            cpInmueble ? `C.P.: ${cpInmueble}` : "",
+            provinciaInmueble ? `Provincia: ${provinciaInmueble}` : "",
+            alturaMsnm ? `Altitud: ${alturaMsnm} msnm` : "",
+            "",
+        ].filter(v => v !== null && v !== undefined && v !== "").join("\n");
+
         if (fullClientName || clienteDni.trim()) {
             const bloqueCliente = [
                 "DATOS TITULAR",
@@ -1237,7 +1285,9 @@ export function CalculadoraTermica() {
                 .filter(Boolean)
                 .join("\n");
 
-            texto = `${bloqueCliente}\n${texto}`;
+            texto = `${bloqueCliente}\n${infoInmueble}\n${texto}`;
+        } else if (infoInmueble) {
+            texto = `${infoInmueble}\n${texto}`;
         }
 
         if (overrideUi.trim() || overrideUf.trim()) {

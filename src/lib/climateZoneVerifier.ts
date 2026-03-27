@@ -163,6 +163,7 @@ export async function fetchAltitudeAndProvince(rc: string, prov: string, muni: s
         if (!response.ok) throw new Error("API call failed");
         const xmlData = await response.text();
         
+        // 1. Intentar buscar <lat> y <lon> explícitos
         const latMatch = xmlData.match(/<lat>([\d\.-]+)<\/lat>/);
         const lonMatch = xmlData.match(/<lon>([\d\.-]+)<\/lon>/);
         
@@ -170,20 +171,40 @@ export async function fetchAltitudeAndProvince(rc: string, prov: string, muni: s
             lat = parseFloat(latMatch[1]);
             lon = parseFloat(lonMatch[1]);
         } else {
-            // Also check for geo with common format <geo>x,y</geo>
-            const geoMatch = xmlData.match(/<geo>([\d\.-]+),([\d\.-]+)<\/geo>/);
-            if (geoMatch) {
-                lat = parseFloat(geoMatch[1]);
-                lon = parseFloat(geoMatch[2]);
+            // 2. Intentar buscar <xcen> y <ycen> (muy común en respuestas de Catastro)
+            const xcenMatch = xmlData.match(/<xcen>([\d\.-]+)<\/xcen>/);
+            const ycenMatch = xmlData.match(/<ycen>([\d\.-]+)<\/ycen>/);
+            
+            if (xcenMatch && ycenMatch) {
+                const x = parseFloat(xcenMatch[1]);
+                const y = parseFloat(ycenMatch[1]);
+                
+                // Si los valores son pequeños (< 180), son geográficas directas (ETRS89 ~ WGS84)
+                if (Math.abs(x) < 180 && Math.abs(y) < 90) {
+                    lon = x;
+                    lat = y;
+                } else {
+                    // Son coordenadas UTM. Por ahora, si no tenemos conversor robusto JS (proj4),
+                    // avisaremos o intentaremos un fallback. 
+                    // En la mayoría de casos urbanos, Catastro devuelve geográficas si se pide EPSG:4258.
+                    console.warn("Detected UTM coordinates but no JS converter is present. Altitude might fail.");
+                }
             } else {
-                // If it returns UTM, we'd need a projection to convert it to lat/lon.
-                // We're skipping the exact formula port to save space, assuming it's usually standard lat/lon.
-                console.warn("Could not find lat/lon in catastro response.");
-                return { altitude: null, zone: null };
+                // 3. Fallback <geo>x,y</geo>
+                const geoMatch = xmlData.match(/<geo>([\d\.-]+),([\d\.-]+)<\/geo>/);
+                if (geoMatch) {
+                    lat = parseFloat(geoMatch[1]);
+                    lon = parseFloat(geoMatch[2]);
+                }
             }
         }
+
+        if (lat === null || lon === null) {
+            console.warn("Could not determine lat/lon from catastro response.");
+            return { altitude: null, zone: null };
+        }
         
-        // Call open-meteo
+        // Call open-meteo (Elevation API)
         const elevUrl = `https://api.open-meteo.com/v1/elevation?latitude=${lat}&longitude=${lon}`;
         const elevResponse = await fetch(elevUrl);
         if (!elevResponse.ok) throw new Error("Elevation API call failed");
@@ -192,12 +213,11 @@ export async function fetchAltitudeAndProvince(rc: string, prov: string, muni: s
         
         let altitude: number | null = null;
         if (elevData.elevation && elevData.elevation.length > 0) {
-            altitude = elevData.elevation[0];
+            altitude = Math.round(elevData.elevation[0]);
         }
         
         let zone: string | null = null;
         if (altitude !== null) {
-            // Get zone
             zone = obtenerZona(prov, altitude);
         }
         

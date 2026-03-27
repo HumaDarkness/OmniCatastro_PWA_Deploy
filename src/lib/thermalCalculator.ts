@@ -313,7 +313,9 @@ export function generarInformeTexto(params: ParamsInforme): string {
   lineas.push(`AE = Fp * (Ui − Uf) * s * G`);
   lineas.push(`AE = ${FP} * (${fmt2(resultado.ui_final)} − ${fmt2(resultado.uf_final)}) * ${fmt2(sup_actuacion)} * ${fmt2(g)} = ${Math.round(resultado.ahorro)} kWh`);
   lineas.push('');
+  lineas.push('────────────────────────────────────');
   lineas.push(`RESULTADO FINAL: ${Math.round(resultado.ahorro)} kWh`);
+  lineas.push('────────────────────────────────────');
 
   return lineas.join('\n');
 }
