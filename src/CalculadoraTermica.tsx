@@ -41,6 +41,7 @@ import {
 } from "./lib/thermalCalculator";
 import { generarPDFAnexoE1 } from "./lib/anexoE1Generator";
 import { getCurrentOrganizationId, supabase } from "./lib/supabase";
+import { fetchAltitudeAndProvince } from "./lib/climateZoneVerifier";
 import {
     CertificadoCapturasPanelControlado,
     createEmptyCapturasState,
@@ -79,6 +80,9 @@ interface ParsedCE3X {
     superficieParticion: number;
     superficieCubierta: number;
     superficieEnvolvente: number;
+    rc: string;
+    provincia: string;
+    municipio: string;
 }
 
 function parseDecimal(value: string | null | undefined): number {
@@ -197,6 +201,10 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
     const zonaRaw = queryText(doc, ["ZonaClimatica"]);
     const zonaKey = zonaRaw === "α3" ? "alpha3" : zonaRaw;
 
+    const rc = queryText(doc, ["ReferenciaCatastral", "RefCatastral"]) || "";
+    const provincia = queryText(doc, ["Provincia"]) || "";
+    const municipio = queryText(doc, ["Municipio"]) || "";
+
     const elementos = [
         ...doc.querySelectorAll(
             "CerramientosOpacos Elemento, HuecosYLucernarios Elemento, HuecosyLucernarios Elemento",
@@ -236,6 +244,9 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         superficieParticion: roundTo(superficieParticion, 2),
         superficieCubierta: roundTo(superficieCubierta, 2),
         superficieEnvolvente: roundTo(superficieEnvolvente, 2),
+        rc,
+        provincia,
+        municipio,
     };
 }
 
@@ -558,7 +569,6 @@ export function CalculadoraTermica() {
     const [supEnvolvente, setSupEnvolvente] = useState(120);
     const [zonaKey, setZonaKey] = useState("D3");
     const [alturaMsnm, setAlturaMsnm] = useState<string>(""); // Added
-    const [surfaceCalc, setSurfaceCalc] = useState<string>(""); // Added
     const [resultado, setResultado] = useState<ResultadoTermico | null>(null);
     const [copied, setCopied] = useState(false);
     const [materialesDB, setMaterialesDB] = useState<MaterialDB[]>([]);
@@ -941,12 +951,14 @@ export function CalculadoraTermica() {
             setAreaNHE(parsed.superficieCubierta);
             setSupEnvolvente(parsed.superficieEnvolvente);
 
+            let newZonaKey = parsed.zonaKey;
+            let finalMsg = buildXmlImportSummary(parsed);
+
             if (parsed.zonaKey && VALORES_G[parsed.zonaKey] !== undefined) {
                 setZonaKey(parsed.zonaKey);
             }
 
             setClienteNombre(parsed.clienteNombre || "");
-
             setClienteDni(parsed.clienteDni);
 
             if (parsed.clienteDni && supabase) {
@@ -954,9 +966,39 @@ export function CalculadoraTermica() {
             } else {
                 setDniLookupMsg("DNI de cliente no disponible en XML CE3X. Usa búsqueda manual.");
             }
-
+            
             setXmlFileName(file.name);
-            setXmlImportMsg(buildXmlImportSummary(parsed));
+            setXmlImportMsg(finalMsg);
+            
+            if (parsed.rc) {
+                setExpedienteRc(parsed.rc);
+            }
+
+            // Integración Catastro Automática
+            if (parsed.rc && parsed.provincia && parsed.municipio) {
+                 setXmlImportMsg(finalMsg + " Verificando datos climáticos con Catastro...");
+                 const { altitude, zone } = await fetchAltitudeAndProvince(parsed.rc, parsed.provincia, parsed.municipio);
+                 let catastroMsg = "";
+                 
+                 if (altitude !== null) {
+                     setAlturaMsnm(altitude.toString());
+                     catastroMsg += ` ✅ Altura Catastro: ${altitude}m.`;
+                 }
+                 if (zone !== null) {
+                     // Check mismatch
+                     if (newZonaKey && zone !== newZonaKey && VALORES_G[zone] !== undefined) {
+                         catastroMsg += ` ⚠️ ATENCIÓN: CE3X indica zona ${newZonaKey}, pero la real calculada es ${zone}. Por favor corrige en CE3X.`;
+                     } else {
+                         catastroMsg += ` ✅ Zona climática coincide (${zone}).`;
+                     }
+                 }
+                 if (catastroMsg) {
+                     setXmlImportMsg(finalMsg + catastroMsg);
+                 } else {
+                     setXmlImportMsg(finalMsg + " ⚠️ No se pudo verificar la altura / zona automáticamente.");
+                 }
+            }
+            
         } catch {
             setClienteNombre("");
             setClienteDni("");
@@ -2114,7 +2156,11 @@ export function CalculadoraTermica() {
                     </div>
 
                     {xmlImportMsg && (
-                        <div className="text-xs text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 px-3 py-2 rounded-md">
+                        <div className={`text-xs px-3 py-2 rounded-md border ${
+                            xmlImportMsg.includes("⚠️")
+                                ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
+                                : "text-cyan-300 bg-cyan-500/10 border-cyan-500/30"
+                        }`}>
                             {xmlImportMsg}
                         </div>
                     )}
@@ -2510,6 +2556,43 @@ export function CalculadoraTermica() {
                         </CardContent>
                     </Card>
 
+                    {/* Validar Capturas de CE3X */}
+                    {(capturas.ce3x_antes?.dataUrl || capturas.ce3x_despues?.dataUrl) && (
+                        <Card className="bg-slate-900/40 border-slate-800">
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-lg text-slate-200 flex items-center gap-2">
+                                    <ZoomIn className="h-5 w-5 text-indigo-400" />
+                                    Referencias visuales (CE3X)
+                                </CardTitle>
+                                <CardDescription className="text-slate-500">
+                                    Verifica la información mientras transcribes los parámetros del proyecto.
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                     {capturas.ce3x_antes?.dataUrl && (
+                                         <div className="space-y-2 text-center cursor-zoom-in group border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors" onClick={() => openCapturaPreview("ce3x_antes", "CE3X Antes")}>
+                                             <div className="w-full h-40 max-h-48 rounded-md overflow-hidden relative border border-slate-700 bg-black">
+                                                 <img src={capturas.ce3x_antes.dataUrl} className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-opacity" />
+                                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-sm font-bold">Ampliar</div>
+                                             </div>
+                                             <p className="text-xs text-slate-400 font-bold uppercase">Estado Actual (CE3X Antes)</p>
+                                         </div>
+                                     )}
+                                     {capturas.ce3x_despues?.dataUrl && (
+                                         <div className="space-y-2 text-center cursor-zoom-in group border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors" onClick={() => openCapturaPreview("ce3x_despues", "CE3X Después")}>
+                                             <div className="w-full h-40 max-h-48 rounded-md overflow-hidden relative border border-slate-700 bg-black">
+                                                 <img src={capturas.ce3x_despues.dataUrl} className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-opacity" />
+                                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-sm font-bold">Ampliar</div>
+                                             </div>
+                                             <p className="text-xs text-slate-400 font-bold uppercase">Estado Mejorado (CE3X Después)</p>
+                                         </div>
+                                     )}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+
                     {/* Parámetros del proyecto */}
                     <Card className="bg-slate-900/40 border-slate-800">
                         <CardHeader className="pb-3">
@@ -2598,11 +2681,16 @@ export function CalculadoraTermica() {
                         <CardContent className="space-y-4">
                             <div className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2">
                                 <div>
-                                    <p className="text-xs text-slate-300 font-semibold">Ventilación anclada por defecto</p>
-                                    <p className="text-[10px] text-slate-500">Antes y después se mantienen en estanco para acelerar el flujo típico de suelo.</p>
+                                    <p className="text-xs text-slate-300 font-semibold">Ventilación anclada (Sincronizada)</p>
+                                    <p className="text-[10px] text-slate-500">Al cambiar el caso ANTES, el caso DESPUÉS se ajustará igual.</p>
                                 </div>
                                 <button
-                                    onClick={() => setVentilationLocked((prev) => !prev)}
+                                    onClick={() => {
+                                        setVentilationLocked((prev) => {
+                                            if (!prev) setCaseF(caseI); // Sync immediately upon locking
+                                            return !prev;
+                                        });
+                                    }}
                                     className={`h-8 px-3 rounded-md border text-xs ${ventilationLocked
                                         ? "border-emerald-700/40 text-emerald-300 bg-emerald-900/20"
                                         : "border-amber-700/40 text-amber-300 bg-amber-900/20"
@@ -2629,8 +2717,11 @@ export function CalculadoraTermica() {
                                     </select>
                                     <select
                                         value={caseI}
-                                        onChange={(e) => setCaseI(e.target.value as Caso)}
-                                        disabled={ventilationLocked}
+                                        onChange={(e) => {
+                                            const val = e.target.value as Caso;
+                                            setCaseI(val);
+                                            if (ventilationLocked) setCaseF(val);
+                                        }}
                                         className="w-full h-9 bg-slate-900/50 border border-slate-700 text-slate-200 rounded-md px-3 text-xs"
                                     >
                                         {CASOS_VENTILACION.map((c) => (
@@ -2739,95 +2830,41 @@ export function CalculadoraTermica() {
 
                 {/* Columna derecha: Resultado */}
                 <div className="space-y-4">
-                    {/* Sumador y Capturas rápidas */}
+                    {/* Resumen de Superficies CEE */}
                     <div className="grid grid-cols-1 gap-4">
                         <Card className="bg-slate-900/40 border-slate-800">
                             <CardHeader className="pb-2">
-                                <CardTitle className="text-[11px] text-slate-400 uppercase font-bold flex items-center gap-1">
-                                    <Calculator className="h-3 w-3" /> Sumador de Superficies
+                                <CardTitle className="text-[11px] text-slate-400 uppercase font-bold flex items-center justify-between">
+                                    <span className="flex items-center gap-1"><ZoomIn className="h-3 w-3" /> Resumen CEE Inicial</span>
+                                    {capturas.cee_inicial?.dataUrl && (
+                                        <span className="text-[9px] text-emerald-400">Captura vinculada</span>
+                                    )}
                                 </CardTitle>
                             </CardHeader>
-                            <CardContent className="space-y-2">
-                                <div className="flex gap-2">
-                                    <Input
-                                        value={surfaceCalc}
-                                        onChange={(e) => setSurfaceCalc(e.target.value)}
-                                        placeholder="Ej: 10.5 + 4.2"
-                                        className="h-8 text-xs bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
-                                    />
-                                    <div className="flex items-center justify-center w-16 h-8 text-xs font-bold font-mono bg-slate-900 rounded border border-slate-700 text-emerald-400">
-                                        {(() => {
-                                            try {
-                                                const res = new Function(`return ${surfaceCalc.replace(/[^0-9\+\-\*\/\.]/g, '')}`)();
-                                                return Number.isFinite(res) ? res.toFixed(2) : "--";
-                                            } catch {
-                                                return "--";
-                                            }
-                                        })()}
+                            <CardContent className="space-y-3 p-3">
+                                 {capturas.cee_inicial?.dataUrl && (
+                                    <div className="w-full h-40 rounded overflow-hidden relative border border-slate-700 bg-black cursor-zoom-in group" onClick={() => openCapturaPreview("cee_inicial", "Etiqueta CEE Inicial")}>
+                                        <img src={capturas.cee_inicial.dataUrl} className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity" />
+                                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-xs font-bold">Ver Completa</div>
                                     </div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={() => {
-                                            try {
-                                                const res = new Function(`return ${surfaceCalc.replace(/[^0-9\+\-\*\/\.]/g, '')}`)();
-                                                if (Number.isFinite(res)) setAreaHNH(Number(res.toFixed(2)));
-                                            } catch {}
-                                        }}
-                                        className="flex-1 h-7 text-[10px] rounded border border-blue-700/40 text-blue-300 hover:bg-blue-900/20"
-                                    >
-                                        Pasar a Partición
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                            try {
-                                                const res = new Function(`return ${surfaceCalc.replace(/[^0-9\+\-\*\/\.]/g, '')}`)();
-                                                if (Number.isFinite(res)) setSupActuacion(Number(res.toFixed(2)));
-                                            } catch {}
-                                        }}
-                                        className="flex-1 h-7 text-[10px] rounded border border-purple-700/40 text-purple-300 hover:bg-purple-900/20"
-                                    >
-                                        Pasar a Actuación
-                                    </button>
+                                )}
+                                <div className="space-y-2 text-xs text-slate-300 bg-slate-900/50 p-3 rounded-lg border border-slate-800">
+                                    <p className="text-[10px] text-slate-500 mb-2 leading-tight">Desglose de superficies para verificar suma de cerramientos opacos y huecos:</p>
+                                    <div className="flex justify-between border-b border-slate-800 pb-1">
+                                        <span className="text-slate-400">Sup. Partición (Aislada):</span>
+                                        <span className="font-mono font-bold">{Number(areaHNH).toFixed(2)} m²</span>
+                                    </div>
+                                    <div className="flex justify-between border-b border-slate-800 pb-1">
+                                        <span className="text-slate-400">Sup. Actuación (Mejora):</span>
+                                        <span className="font-mono font-bold">{Number(supActuacion).toFixed(2)} m²</span>
+                                    </div>
+                                    <div className="flex justify-between pt-1">
+                                        <span className="text-amber-500 font-bold">Superficie Total Sumada:</span>
+                                        <span className="font-mono font-bold text-amber-400">{(Number(areaHNH) + Number(supActuacion)).toFixed(2)} m²</span>
+                                    </div>
                                 </div>
                             </CardContent>
                         </Card>
-
-                        {(capturas.ce3x_antes?.dataUrl || capturas.ce3x_despues?.dataUrl || capturas.cee_inicial?.dataUrl) && (
-                            <Card className="bg-slate-900/40 border-slate-800">
-                                <CardHeader className="pb-2">
-                                    <CardTitle className="text-[11px] text-slate-400 uppercase font-bold flex items-center gap-1">
-                                        <ZoomIn className="h-3 w-3" /> Validar Capturas Rápidas
-                                    </CardTitle>
-                                </CardHeader>
-                                <CardContent className="flex gap-2 p-2 px-6 overflow-x-auto pb-4">
-                                    {capturas.ce3x_antes?.dataUrl && (
-                                        <div className="flex-none w-24 space-y-1 text-center cursor-zoom-in group border border-slate-800 p-1 rounded bg-slate-900/50">
-                                            <div className="w-full h-16 rounded overflow-hidden relative border border-slate-700 bg-black">
-                                                <img src={capturas.ce3x_antes.dataUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
-                                            </div>
-                                            <p className="text-[9px] text-slate-500 pt-1">CE3X Antes</p>
-                                        </div>
-                                    )}
-                                    {capturas.ce3x_despues?.dataUrl && (
-                                        <div className="flex-none w-24 space-y-1 text-center cursor-zoom-in group border border-slate-800 p-1 rounded bg-slate-900/50">
-                                            <div className="w-full h-16 rounded overflow-hidden relative border border-slate-700 bg-black">
-                                                <img src={capturas.ce3x_despues.dataUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
-                                            </div>
-                                            <p className="text-[9px] text-slate-500 pt-1">CE3X Desp</p>
-                                        </div>
-                                    )}
-                                    {capturas.cee_inicial?.dataUrl && (
-                                        <div className="flex-none w-24 space-y-1 text-center cursor-zoom-in group border border-slate-800 p-1 rounded bg-slate-900/50">
-                                            <div className="w-full h-16 rounded overflow-hidden relative border border-slate-700 bg-black">
-                                                <img src={capturas.cee_inicial.dataUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
-                                            </div>
-                                            <p className="text-[9px] text-slate-500 pt-1">Etiq. CEE</p>
-                                        </div>
-                                    )}
-                                </CardContent>
-                            </Card>
-                        )}
                     </div>
 
                     {resultado ? (
