@@ -1331,6 +1331,7 @@ export function CalculadoraTermica() {
                                 <Archive className="h-3.5 w-3.5" />
                                 Archivar Completados
                             </button>
+                    </div>
 
                     {draftMsg && (
                         <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-3 py-2 rounded-md">
