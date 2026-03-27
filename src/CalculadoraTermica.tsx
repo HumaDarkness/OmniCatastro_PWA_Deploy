@@ -977,7 +977,7 @@ export function CalculadoraTermica() {
             const inProgress = draftQueue.filter(d => d.status !== "completado");
             await saveDraftIndex(organizationId, inProgress);
             setDraftQueue(inProgress);
-            setToastMessage("Expedientes completados archivados (eliminados de la cola).");
+            setDraftMsg("Expedientes completados archivados (eliminados de la cola).");
         } catch (e: any) {
             alert("Error al archivar: " + e.message);
         } finally {
