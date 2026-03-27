@@ -1009,7 +1009,7 @@ export function CalculadoraTermica() {
                 .from("clients")
                 .upsert(
                     { organization_id: organizationId, dni, first_name, middle_name, last_name_1, last_name_2, dni_address: clienteDireccionDni.trim() || null },
-                    { onConflict: "dni" }
+                    { onConflict: "organization_id,dni" }
                 );
 
             if (error) {
