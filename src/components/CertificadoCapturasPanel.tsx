@@ -61,6 +61,34 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
     return response.blob();
 }
 
+/**
+ * Convierte cualquier Blob de imagen a PNG para asegurar compatibilidad con el Portapapeles
+ */
+async function convertToPngBlob(blob: Blob): Promise<Blob> {
+    if (blob.type === "image/png") return blob;
+
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+                reject(new Error("No se pudo obtener el contexto del canvas"));
+                return;
+            }
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob((result) => {
+                if (result) resolve(result);
+                else reject(new Error("Error al exportar PNG"));
+            }, "image/png");
+        };
+        img.onerror = () => reject(new Error("Error al cargar imagen para conversion"));
+        img.src = URL.createObjectURL(blob);
+    });
+}
+
 export function CertificadoCapturasPanel() {
     const [capturas, setCapturas] = useState<CapturasState>(createEmptyCapturasState());
     const [copiedSlot, setCopiedSlot] = useState<SlotKey | null>(null);
@@ -119,14 +147,21 @@ export function CertificadoCapturasPanel() {
         }
 
         try {
-            const blob = await dataUrlToBlob(data.dataUrl);
-            const type = blob.type || data.mimeType || "image/png";
-            const item = new ClipboardItem({ [type]: blob });
+            let blob = await dataUrlToBlob(data.dataUrl);
+            
+            // Forzamos conversion a PNG si no lo es, para maxima compatibilidad con ClipboardItem
+            if (blob.type !== "image/png") {
+                blob = await convertToPngBlob(blob);
+            }
+
+            const item = new ClipboardItem({ "image/png": blob });
             await navigator.clipboard.write([item]);
+            
             setCopiedSlot(slot);
             window.setTimeout(() => setCopiedSlot(null), 1800);
-            setStatus(`Imagen copiada: ${data.fileName}`);
-        } catch {
+            setStatus(`Imagen copiada (PNG): ${data.fileName}`);
+        } catch (err) {
+            console.error("Clipboard Error:", err);
             setStatus("No se pudo copiar la imagen al portapapeles.");
         }
     };
@@ -331,14 +366,21 @@ export function CertificadoCapturasPanelControlado({
         }
 
         try {
-            const blob = await dataUrlToBlob(data.dataUrl);
-            const type = blob.type || data.mimeType || "image/png";
-            const item = new ClipboardItem({ [type]: blob });
+            let blob = await dataUrlToBlob(data.dataUrl);
+            
+            // Forzamos conversion a PNG si no lo es, para maxima compatibilidad con ClipboardItem
+            if (blob.type !== "image/png") {
+                blob = await convertToPngBlob(blob);
+            }
+
+            const item = new ClipboardItem({ "image/png": blob });
             await navigator.clipboard.write([item]);
+            
             setCopiedSlot(slot);
             window.setTimeout(() => setCopiedSlot(null), 1800);
-            setStatus(`Imagen copiada: ${data.fileName}`);
-        } catch {
+            setStatus(`Imagen copiada (PNG): ${data.fileName}`);
+        } catch (err) {
+            console.error("Clipboard Error:", err);
             setStatus("No se pudo copiar la imagen al portapapeles.");
         }
     };

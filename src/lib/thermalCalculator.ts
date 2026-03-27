@@ -141,7 +141,7 @@ function round(v: number, d: number): number {
 /**
  * Obtiene el coeficiente b de la Tabla 7 CTE DB-HE.
  *
- * ¿Qué es b? → Un \"descuento\" en la pérdida de calor porque entre
+ * ¿Qué es b? → Un "descuento" en la pérdida de calor porque entre
  * el piso y el cielo hay una buhardilla/cámara que frena el calor.
  * Cuanto más cerca de 1.0, más calor se escapa (peor).
  *
