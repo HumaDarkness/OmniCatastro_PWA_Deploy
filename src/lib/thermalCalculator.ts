@@ -141,7 +141,7 @@ function round(v: number, d: number): number {
 /**
  * Obtiene el coeficiente b de la Tabla 7 CTE DB-HE.
  *
- * ¿Qué es b? → Un "descuento" en la pérdida de calor porque entre
+ * ¿Qué es b? → Un \"descuento\" en la pérdida de calor porque entre
  * el piso y el cielo hay una buhardilla/cámara que frena el calor.
  * Cuanto más cerca de 1.0, más calor se escapa (peor).
  *
@@ -274,18 +274,24 @@ export function generarInformeTexto(params: ParamsInforme): string {
   lineas.push(`Ah-nh / Anh-e = ${fmt2(area_h_nh)} / ${fmt2(area_nh_e)} = ${fmt2(resultado.ratio)}`);
   lineas.push('');
 
+  const rIndividualesI = capasExistentes.map(c => calcularR(c));
+  const sumaRTextoI = rIndividualesI.map(v => fmt(v)).join(' + ');
+
   lineas.push('2. RESISTENCIA TOTAL Y TRANSMITANCIA INICIAL (ANTES)');
   lineas.push('──────────────────────────────────────────────────────');
   lineas.push('Capas existentes:');
   capasExistentes.forEach(c => {
     lineas.push(`  - ${c.nombre || 'Sin nombre'}: ${fmt(calcularR(c))} m²K/W`);
   });
-  lineas.push(`ΣR materiales (i) = ${fmt(resultado.r_mat_inicial)} m²K/W`);
+  lineas.push(`ΣR materiales (i) = ${sumaRTextoI} = ${fmt(resultado.r_mat_inicial)} m²K/W`);
   lineas.push(`RTi = ${fmt(resultado.r_mat_inicial)} + ${Rse} + ${Rsi} = ${fmt(resultado.rt_inicial)} m²K/W`);
   lineas.push(`Upi = 1 / ${fmt(resultado.rt_inicial)} = ${fmt(resultado.up_inicial)} W/m²K`);
   lineas.push(`bi = ${resultado.b_inicial} → Ui = ${fmt(resultado.up_inicial)} * ${resultado.b_inicial} = ${fmt2(resultado.ui_final)} W/m²K`);
   lineas.push('');
   lineas.push('');
+
+  const rIndividualesF = todasCapas.map(c => calcularR(c));
+  const sumaRTextoF = rIndividualesF.map(v => fmt(v)).join(' + ');
 
   lineas.push('3. RESISTENCIA TOTAL Y TRANSMITANCIA FINAL (DESPUÉS)');
   lineas.push('──────────────────────────────────────────────────────');
@@ -294,7 +300,7 @@ export function generarInformeTexto(params: ParamsInforme): string {
     const estado = c.es_nueva ? '[NUEVA]' : '[EXISTENTE]';
     lineas.push(`  - ${c.nombre || 'Sin nombre'} ${estado}: ${fmt(calcularR(c))} m²K/W`);
   });
-  lineas.push(`ΣR materiales (f) = ${fmt(resultado.r_mat_final)} m²K/W`);
+  lineas.push(`ΣR materiales (f) = ${sumaRTextoF} = ${fmt(resultado.r_mat_final)} m²K/W`);
   lineas.push(`RTf = ${fmt(resultado.r_mat_final)} + ${Rse} + ${Rsi} = ${fmt(resultado.rt_final)} m²K/W`);
   lineas.push(`Upf = 1 / ${fmt(resultado.rt_final)} = ${fmt(resultado.up_final)} W/m²K`);
   lineas.push(`bf = ${resultado.b_final} → Uf = ${fmt(resultado.up_final)} * ${resultado.b_final} = ${fmt2(resultado.uf_final)} W/m²K`);
