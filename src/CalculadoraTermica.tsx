@@ -400,6 +400,8 @@ interface CertificateDraftPayload {
     areaNHE: number;
     supActuacion: number;
     supEnvolvente: number;
+    supOpacos?: number;
+    supHuecos?: number;
     zonaKey: string;
     alturaMsnm?: number;
     scenarioI: Scenario;
@@ -413,6 +415,7 @@ interface CertificateDraftPayload {
     clienteNombre: string;
     clienteDni: string;
     clienteDireccionDni: string;
+    xmlFileName?: string;
     filtroMetodo: Record<number, string>;
     materialSearchByLayer: Record<number, string>;
     soloFavoritosPorCapa: Record<number, boolean>;
@@ -579,6 +582,7 @@ export function CalculadoraTermica() {
     const [supEnvolvente, setSupEnvolvente] = useState(120);
     const [supOpacos, setSupOpacos] = useState(0);
     const [supHuecos, setSupHuecos] = useState(0);
+    const [desgloseOpen, setDesgloseOpen] = useState(false);
     const [zonaKey, setZonaKey] = useState("D3");
     const [alturaMsnm, setAlturaMsnm] = useState<string>(""); // Added
     const [resultado, setResultado] = useState<ResultadoTermico | null>(null);
@@ -942,6 +946,51 @@ export function CalculadoraTermica() {
             setDniLookupMsg("Fallo inesperado al buscar DNI.");
         } finally {
             setBuscandoDni(false);
+        }
+    };
+
+    const [savingCliente, setSavingCliente] = useState(false);
+    const guardarCliente = async () => {
+        const dni = normalizeDni(clienteDni);
+        if (!dni) { setDniLookupMsg("Introduce un DNI para guardar el cliente."); return; }
+        if (!supabase) { setDniLookupMsg("Supabase no está configurado."); return; }
+        if (!clienteNombre.trim()) { setDniLookupMsg("Introduce un nombre para guardar."); return; }
+
+        setSavingCliente(true);
+        try {
+            // Parsear nombre: "Juan Carlos García López" → first="Juan", middle="Carlos", last1="García", last2="López"
+            const parts = clienteNombre.trim().split(/\s+/);
+            let first_name = parts[0] || "";
+            let middle_name = "";
+            let last_name_1 = "";
+            let last_name_2 = "";
+            if (parts.length === 4) {
+                middle_name = parts[1];
+                last_name_1 = parts[2];
+                last_name_2 = parts[3];
+            } else if (parts.length === 3) {
+                last_name_1 = parts[1];
+                last_name_2 = parts[2];
+            } else if (parts.length === 2) {
+                last_name_1 = parts[1];
+            }
+
+            const { error } = await supabase
+                .from("clients")
+                .upsert(
+                    { dni, first_name, middle_name, last_name_1, last_name_2, dni_address: clienteDireccionDni.trim() || null },
+                    { onConflict: "dni" }
+                );
+
+            if (error) {
+                setDniLookupMsg(`Error al guardar: ${error.message}`);
+            } else {
+                setDniLookupMsg(`✅ Cliente ${first_name} ${last_name_1} guardado en BD.`);
+            }
+        } catch {
+            setDniLookupMsg("Fallo inesperado al guardar cliente.");
+        } finally {
+            setSavingCliente(false);
         }
     };
 
@@ -1737,11 +1786,14 @@ export function CalculadoraTermica() {
         setClienteNombre(payload.clienteNombre || "");
         setClienteDni(payload.clienteDni || "");
         setClienteDireccionDni(payload.clienteDireccionDni || "");
+        setXmlFileName(payload.xmlFileName || "");
         setFiltroMetodo(payload.filtroMetodo || {});
         setMaterialSearchByLayer(payload.materialSearchByLayer || {});
         setSoloFavoritosPorCapa(payload.soloFavoritosPorCapa || {});
         setCapturas(payload.capturas || createEmptyCapturasState());
         setResultado(payload.resultado ?? null);
+        setSupOpacos(payload.supOpacos ?? 0);
+        setSupHuecos(payload.supHuecos ?? 0);
     };
 
     const saveCurrentDraft = async (statusOverride?: CertDraftStatus) => {
@@ -1786,6 +1838,9 @@ export function CalculadoraTermica() {
                 clienteNombre,
                 clienteDni,
                 clienteDireccionDni,
+                xmlFileName,
+                supOpacos,
+                supHuecos,
                 filtroMetodo,
                 materialSearchByLayer,
                 soloFavoritosPorCapa,
@@ -1864,6 +1919,8 @@ export function CalculadoraTermica() {
         setAreaNHE(25);
         setSupActuacion(25);
         setSupEnvolvente(120);
+        setSupOpacos(0);
+        setSupHuecos(0);
         setZonaKey("D3");
         setAlturaMsnm("");
         setScenarioI("nada_aislado");
@@ -2205,6 +2262,14 @@ export function CalculadoraTermica() {
                                     title="Buscar en base de datos"
                                 >
                                     {buscandoDni ? <Check className="h-4 w-4" /> : <Search className="h-4 w-4" />}
+                                </button>
+                                <button
+                                    onClick={() => guardarCliente()}
+                                    disabled={savingCliente || !clienteNombre.trim() || !clienteDni.trim()}
+                                    className="h-9 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-[11px] font-bold"
+                                    title="Guardar cliente en base de datos"
+                                >
+                                    {savingCliente ? "..." : "Guardar"}
                                 </button>
                             </div>
                         </div>
@@ -2620,17 +2685,12 @@ export function CalculadoraTermica() {
                                 <div>
                                     <label className="text-[10px] text-blue-400 uppercase font-bold">Superficie Partición (m²)</label>
                                     <p className="text-[9px] text-slate-600 mb-1">Lo que se aísla</p>
-                                    <Input type="number" step="0.01" value={areaHNH} onChange={(e) => setAreaHNH(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
+                                    <Input type="number" step="0.01" value={areaHNH} onChange={(e) => { setAreaHNH(e.target.value as any); setSupActuacion(e.target.value as any); }} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-amber-400 uppercase font-bold">Superficie Cubierta (m²)</label>
                                     <p className="text-[9px] text-slate-600 mb-1">Límite para coef. b</p>
                                     <Input type="number" step="0.01" value={areaNHE} onChange={(e) => setAreaNHE(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
-                                </div>
-                                <div>
-                                    <label className="text-[10px] text-slate-500 uppercase font-bold">Sup. Actuación (m²)</label>
-                                    <p className="text-[9px] text-slate-600 mb-1">Superficie a aislar</p>
-                                    <Input type="number" step="0.01" value={supActuacion} onChange={(e) => setSupActuacion(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-slate-500 uppercase font-bold">Envolvente Total (m²)</label>
@@ -2862,31 +2922,43 @@ export function CalculadoraTermica() {
                                         <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-xs font-bold">Ver Completa</div>
                                     </div>
                                 )}
-                                <div className="space-y-2 text-xs text-slate-300 bg-slate-900/50 p-3 rounded-lg border border-slate-800">
-                                    <p className="text-[10px] text-slate-500 mb-2 leading-tight">Desglose de envolvente (del XML CE3X importado):</p>
-                                    {(supOpacos > 0 || supHuecos > 0) ? (
-                                        <>
-                                            <div className="flex justify-between border-b border-slate-800 pb-1">
-                                                <span className="text-slate-400">Cerramientos Opacos:</span>
-                                                <span className="font-mono font-bold">{Number(supOpacos).toFixed(2)} m²</span>
-                                            </div>
-                                            <div className="flex justify-between border-b border-slate-800 pb-1">
-                                                <span className="text-slate-400">Huecos y Lucernarios:</span>
-                                                <span className="font-mono font-bold">{Number(supHuecos).toFixed(2)} m²</span>
-                                            </div>
-                                            {Number(areaNHE) > 0 && (
-                                                <div className="flex justify-between border-b border-slate-800 pb-1">
-                                                    <span className="text-cyan-400">Cubierta (no suma):</span>
-                                                    <span className="font-mono font-bold text-cyan-300">{Number(areaNHE).toFixed(2)} m²</span>
-                                                </div>
+                                <div
+                                    className="space-y-2 text-xs text-slate-300 bg-slate-900/50 rounded-lg border border-slate-800 overflow-hidden"
+                                >
+                                    <button
+                                        onClick={() => setDesgloseOpen(!desgloseOpen)}
+                                        className="w-full flex items-center justify-between px-3 py-2 text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+                                    >
+                                        <span>Desglose de envolvente (del XML CE3X importado)</span>
+                                        <span className="text-[9px]">{desgloseOpen ? "▲ Minimizar" : "▼ Expandir"}</span>
+                                    </button>
+                                    {desgloseOpen && (
+                                        <div className="px-3 pb-3 space-y-2">
+                                            {(supOpacos > 0 || supHuecos > 0) ? (
+                                                <>
+                                                    <div className="flex justify-between border-b border-slate-800 pb-1">
+                                                        <span className="text-slate-400">Cerramientos Opacos:</span>
+                                                        <span className="font-mono font-bold">{Number(supOpacos).toFixed(2)} m²</span>
+                                                    </div>
+                                                    <div className="flex justify-between border-b border-slate-800 pb-1">
+                                                        <span className="text-slate-400">Huecos y Lucernarios:</span>
+                                                        <span className="font-mono font-bold">{Number(supHuecos).toFixed(2)} m²</span>
+                                                    </div>
+                                                    {Number(areaNHE) > 0 && (
+                                                        <div className="flex justify-between border-b border-slate-800 pb-1">
+                                                            <span className="text-cyan-400">Cubierta (no suma):</span>
+                                                            <span className="font-mono font-bold text-cyan-300">{Number(areaNHE).toFixed(2)} m²</span>
+                                                        </div>
+                                                    )}
+                                                    <div className="flex justify-between pt-1">
+                                                        <span className="text-amber-500 font-bold">Envolvente Total:</span>
+                                                        <span className="font-mono font-bold text-amber-400">{Number(supEnvolvente).toFixed(2)} m²</span>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <p className="text-[10px] text-slate-600 italic">Importa un XML CE3X para ver el desglose automático.</p>
                                             )}
-                                            <div className="flex justify-between pt-1">
-                                                <span className="text-amber-500 font-bold">Envolvente Total:</span>
-                                                <span className="font-mono font-bold text-amber-400">{Number(supEnvolvente).toFixed(2)} m²</span>
-                                            </div>
-                                        </>
-                                    ) : (
-                                        <p className="text-[10px] text-slate-600 italic">Importa un XML CE3X para ver el desglose automático.</p>
+                                        </div>
                                     )}
                                 </div>
                             </CardContent>
