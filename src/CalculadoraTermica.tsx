@@ -25,6 +25,8 @@ import {
     Download,
     FolderPlus,
     CircleCheckBig,
+    Archive,
+    FileDown,
 } from "lucide-react";
 import {
     calcularAhorroCAE,
@@ -302,7 +304,7 @@ const QUICK_LAYER_PRESETS: Record<QuickLayerPresetId, { nombre: string; r: numbe
     yeso: { nombre: "Yeso", r: 0.036, espesor: 0.01, lambda: 0.43 },
     yeso_023: { nombre: "Yeso", r: 0.023, espesor: 0.01, lambda: 0.43 },
     madera: { nombre: "Madera", r: 0.069, espesor: 0.02, lambda: 0.13 },
-    aislante: { nombre: "SUPAFIL LOFT 045", r: 5.11, espesor: 0.23, lambda: 0.045 },
+    aislante: { nombre: "SUPAFIL LOFT 045", r: 5.111, espesor: 0.23, lambda: 0.045 },
 };
 
 const COMMON_LAYER_SETS: Record<CommonLayerSetId, Array<{ preset: QuickLayerPresetId; esNueva: boolean }>> = {
@@ -966,6 +968,37 @@ export function CalculadoraTermica() {
         if (error) throw error;
     };
 
+    const archivarCompletados = async () => {
+        if (!supabase) return;
+        if (!confirm("¿Seguro que deseas archivar/limpiar los expedientes completados del lote actual?")) return;
+        try {
+            setDraftLoading(true);
+            const organizationId = await resolveOrganizationOrThrow();
+            const inProgress = draftQueue.filter(d => d.status !== "completado");
+            await saveDraftIndex(organizationId, inProgress);
+            setDraftQueue(inProgress);
+            setToastMessage("Expedientes completados archivados (eliminados de la cola).");
+        } catch (e: any) {
+            alert("Error al archivar: " + e.message);
+        } finally {
+            setDraftLoading(false);
+        }
+    };
+
+    const exportarLoteCSV = () => {
+        let csv = "RC,Estado,Cliente Nombre,Cliente DNI,Actualizado\n";
+        draftQueue.forEach(d => {
+            csv += `${d.rc},${d.status},"${d.clienteNombre}","${d.clienteDni}",${new Date(d.updatedAt).toLocaleString()}\n`;
+        });
+        const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `lote_certificados_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
     const refreshDraftQueue = async () => {
         if (!supabase) return;
         setDraftLoading(true);
@@ -1281,13 +1314,23 @@ export function CalculadoraTermica() {
                             <FolderPlus className="h-3.5 w-3.5" />
                             Nuevo expediente
                         </button>
-                    </div>
-
-                    {draftError && (
-                        <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 px-3 py-2 rounded-md">
-                            {draftError}
-                        </div>
-                    )}
+                            <button
+                                onClick={() => exportarLoteCSV()}
+                                disabled={queueTotal === 0}
+                                className="ml-auto h-8 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                            >
+                                <FileDown className="h-3.5 w-3.5" />
+                                Exportar Lote CSV
+                            </button>
+                            <button
+                                onClick={() => archivarCompletados()}
+                                disabled={draftLoading || queueTotal === 0}
+                                className="h-8 px-3 rounded-md bg-rose-900/30 border border-rose-700/40 text-rose-300 hover:bg-rose-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                                title="Limpia los expedientes completados del lote actual"
+                            >
+                                <Archive className="h-3.5 w-3.5" />
+                                Archivar Completados
+                            </button>
 
                     {draftMsg && (
                         <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-3 py-2 rounded-md">
