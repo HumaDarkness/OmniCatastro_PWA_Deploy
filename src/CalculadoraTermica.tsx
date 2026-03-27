@@ -515,6 +515,11 @@ function sanitizeDraftPayload(raw: unknown): { payload?: CertificateDraftPayload
         clienteLastName2: typeof raw.clienteLastName2 === "string" ? raw.clienteLastName2 : "",
         clienteDni: typeof raw.clienteDni === "string" ? raw.clienteDni : "",
         clienteDireccionDni: typeof raw.clienteDireccionDni === "string" ? raw.clienteDireccionDni : "",
+        xmlFileName: typeof raw.xmlFileName === "string" ? raw.xmlFileName : "",
+        supOpacos: typeof raw.supOpacos === "number" ? raw.supOpacos : 0,
+        supHuecos: typeof raw.supHuecos === "number" ? raw.supHuecos : 0,
+        elementosOpacosList: Array.isArray(raw.elementosOpacosList) ? raw.elementosOpacosList : [],
+        elementosHuecosList: Array.isArray(raw.elementosHuecosList) ? raw.elementosHuecosList : [],
         filtroMetodo: isRecord(raw.filtroMetodo) ? (raw.filtroMetodo as Record<number, string>) : {},
         materialSearchByLayer: isRecord(raw.materialSearchByLayer)
             ? (raw.materialSearchByLayer as Record<number, string>)
@@ -603,6 +608,12 @@ interface CalcStateSnapshot {
     clienteLastName2: string;
     clienteDni: string;
     clienteDireccionDni: string;
+    xmlFileName: string;
+    supOpacos: number;
+    supHuecos: number;
+    elementosOpacosList: ElementoEnvolvente[];
+    elementosHuecosList: ElementoEnvolvente[];
+    alturaMsnm: string;
     filtroMetodo: Record<number, string>;
     materialSearchByLayer: Record<number, string>;
     soloFavoritosPorCapa: Record<number, boolean>;
@@ -702,6 +713,12 @@ export function CalculadoraTermica() {
             if (typeof saved.clienteLastName2 === "string") setClienteLastName2(saved.clienteLastName2);
             if (typeof saved.clienteDni === "string") setClienteDni(saved.clienteDni);
             if (typeof saved.clienteDireccionDni === "string") setClienteDireccionDni(saved.clienteDireccionDni);
+            if (typeof saved.xmlFileName === "string") setXmlFileName(saved.xmlFileName);
+            if (typeof saved.supOpacos === "number") setSupOpacos(saved.supOpacos);
+            if (typeof saved.supHuecos === "number") setSupHuecos(saved.supHuecos);
+            if (Array.isArray(saved.elementosOpacosList)) setElementosOpacosList(saved.elementosOpacosList);
+            if (Array.isArray(saved.elementosHuecosList)) setElementosHuecosList(saved.elementosHuecosList);
+            if (typeof saved.alturaMsnm === "string") setAlturaMsnm(saved.alturaMsnm);
             if (saved.filtroMetodo && typeof saved.filtroMetodo === "object") setFiltroMetodo(saved.filtroMetodo);
             if (saved.materialSearchByLayer && typeof saved.materialSearchByLayer === "object") {
                 setMaterialSearchByLayer(saved.materialSearchByLayer);
@@ -741,6 +758,12 @@ export function CalculadoraTermica() {
                 clienteLastName2,
                 clienteDni,
                 clienteDireccionDni,
+                xmlFileName,
+                supOpacos,
+                supHuecos,
+                elementosOpacosList,
+                elementosHuecosList,
+                alturaMsnm,
                 filtroMetodo,
                 materialSearchByLayer,
                 soloFavoritosPorCapa,
@@ -774,6 +797,12 @@ export function CalculadoraTermica() {
         clienteLastName2,
         clienteDni,
         clienteDireccionDni,
+        xmlFileName,
+        supOpacos,
+        supHuecos,
+        elementosOpacosList,
+        elementosHuecosList,
+        alturaMsnm,
         filtroMetodo,
         materialSearchByLayer,
         soloFavoritosPorCapa,
@@ -2204,7 +2233,7 @@ export function CalculadoraTermica() {
                             Exportar ZIP
                         </button>
                         <div className="h-8 px-2 rounded-md border border-slate-700 bg-slate-900/40 flex items-center gap-2 text-[11px] text-slate-300">
-                            <span>Merge:</span>
+                            <span>Acción al duplicar:</span>
                             <select
                                 value={backupImportStrategy}
                                 onChange={(e) => setBackupImportStrategy(e.target.value as ImportMergeStrategy)}
@@ -2212,9 +2241,9 @@ export function CalculadoraTermica() {
                                 className="h-6 rounded bg-slate-900 border border-slate-700 px-1 text-[11px]"
                                 title="Estrategia al detectar RC duplicada durante importación"
                             >
-                                <option value="merge">merge</option>
-                                <option value="overwrite">overwrite</option>
-                                <option value="skip">skip</option>
+                                <option value="merge">Fusionar datos</option>
+                                <option value="overwrite">Sobrescribir</option>
+                                <option value="skip">Omitir</option>
                             </select>
                         </div>
                         <input type="file" ref={fileInputRef} onChange={importarBackupJSON} accept=".json,.zip,application/zip" className="hidden" />
