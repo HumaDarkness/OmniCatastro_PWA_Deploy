@@ -958,6 +958,7 @@ export function CalculadoraTermica() {
 
         setSavingCliente(true);
         try {
+            const organizationId = await resolveOrganizationOrThrow();
             // Parsear nombre: "Juan Carlos García López" → first="Juan", middle="Carlos", last1="García", last2="López"
             const parts = clienteNombre.trim().split(/\s+/);
             let first_name = parts[0] || "";
@@ -978,7 +979,7 @@ export function CalculadoraTermica() {
             const { error } = await supabase
                 .from("clients")
                 .upsert(
-                    { dni, first_name, middle_name, last_name_1, last_name_2, dni_address: clienteDireccionDni.trim() || null },
+                    { organization_id: organizationId, dni, first_name, middle_name, last_name_1, last_name_2, dni_address: clienteDireccionDni.trim() || null },
                     { onConflict: "dni" }
                 );
 
