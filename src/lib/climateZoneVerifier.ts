@@ -151,8 +151,10 @@ export async function fetchAltitudeAndProvince(rc: string, prov: string, muni: s
     if (!rc || rc.length < 14) return { altitude: null, zone: null };
     const rc14 = rc.substring(0, 14);
     
-    // Call catastro API to get coordinates
-    const url = `https://ovc.catastro.meh.es/ovcservweb/OVCSWLocalizacionRC/OVCCoordenadas.asmx/Consulta_CPMRC?Provincia=${encodeURIComponent(prov)}&Municipio=${encodeURIComponent(muni)}&SRS=EPSG:4258&RC=${encodeURIComponent(rc14)}`;
+    // Call catastro API to get coordinates (Using AllOrigins proxy to avoid CORS)
+    const catastroUrl = `https://ovc.catastro.meh.es/ovcservweb/OVCSWLocalizacionRC/OVCCoordenadas.asmx/Consulta_CPMRC?Provincia=${encodeURIComponent(prov)}&Municipio=${encodeURIComponent(muni)}&SRS=EPSG:4258&RC=${encodeURIComponent(rc14)}`;
+    const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(catastroUrl)}`;
+    
     let lat: number | null = null;
     let lon: number | null = null;
     

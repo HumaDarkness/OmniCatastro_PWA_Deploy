@@ -70,6 +70,13 @@ interface ClienteBasico {
     dni_address: string | null;
 }
 
+interface ElementoEnvolvente {
+    nombre: string;
+    tipo: string;
+    superficie: number;
+    transmitancia: number;
+}
+
 interface ParsedCE3X {
     clienteNombre: string;
     clienteDni: string;
@@ -85,6 +92,8 @@ interface ParsedCE3X {
     rc: string;
     provincia: string;
     municipio: string;
+    elementosOpacosData: ElementoEnvolvente[];
+    elementosHuecosData: ElementoEnvolvente[];
 }
 
 function parseDecimal(value: string | null | undefined): number {
@@ -210,6 +219,7 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
     const elementosOpacos = [...doc.querySelectorAll("CerramientosOpacos Elemento")];
     const elementosHuecos = [...doc.querySelectorAll("HuecosYLucernarios Elemento, HuecosyLucernarios Elemento")];
 
+    const elementosOpacosData: ElementoEnvolvente[] = [];
     let superficieParticion = 0;
     let superficieCubierta = 0;
     let superficieEnvolvente = 0;
@@ -217,9 +227,14 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
     let superficieHuecos = 0;
 
     for (const el of elementosOpacos) {
+        const nombre = el.querySelector("Nombre")?.textContent?.trim() || "Opaco";
         const tipo = el.querySelector("Tipo")?.textContent?.trim() || "";
         const sup = parseDecimal(el.querySelector("Superficie")?.textContent);
+        const uNode = el.querySelector("U") || el.querySelector("Transmitancia");
+        const u = parseDecimal(uNode?.textContent);
         const tipoNorm = normalizeTextKey(tipo);
+
+        elementosOpacosData.push({ nombre, tipo, superficie: sup, transmitancia: u });
 
         if (tipoNorm.includes("CUBIERTA")) {
             superficieCubierta += sup;
@@ -236,8 +251,16 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         }
     }
 
+    const elementosHuecosData: ElementoEnvolvente[] = [];
     for (const el of elementosHuecos) {
+        const nombre = el.querySelector("Nombre")?.textContent?.trim() || "Hueco";
+        const tipo = el.querySelector("Tipo")?.textContent?.trim() || "";
         const sup = parseDecimal(el.querySelector("Superficie")?.textContent);
+        const uNode = el.querySelector("U") || el.querySelector("Transmitancia");
+        const u = parseDecimal(uNode?.textContent);
+
+        elementosHuecosData.push({ nombre, tipo, superficie: sup, transmitancia: u });
+
         superficieHuecos += sup;
         superficieEnvolvente += sup;
     }
@@ -257,6 +280,8 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         rc,
         provincia,
         municipio,
+        elementosOpacosData,
+        elementosHuecosData,
     };
 }
 
@@ -402,6 +427,8 @@ interface CertificateDraftPayload {
     supEnvolvente: number;
     supOpacos?: number;
     supHuecos?: number;
+    elementosOpacosList?: ElementoEnvolvente[];
+    elementosHuecosList?: ElementoEnvolvente[];
     zonaKey: string;
     alturaMsnm?: number;
     scenarioI: Scenario;
@@ -582,6 +609,8 @@ export function CalculadoraTermica() {
     const [supEnvolvente, setSupEnvolvente] = useState(120);
     const [supOpacos, setSupOpacos] = useState(0);
     const [supHuecos, setSupHuecos] = useState(0);
+    const [elementosOpacosList, setElementosOpacosList] = useState<ElementoEnvolvente[]>([]);
+    const [elementosHuecosList, setElementosHuecosList] = useState<ElementoEnvolvente[]>([]);
     const [desgloseOpen, setDesgloseOpen] = useState(false);
     const [zonaKey, setZonaKey] = useState("D3");
     const [alturaMsnm, setAlturaMsnm] = useState<string>(""); // Added
@@ -1014,6 +1043,8 @@ export function CalculadoraTermica() {
             setSupEnvolvente(parsed.superficieEnvolvente);
             setSupOpacos(parsed.superficieOpacos);
             setSupHuecos(parsed.superficieHuecos);
+            setElementosOpacosList(parsed.elementosOpacosData);
+            setElementosHuecosList(parsed.elementosHuecosData);
 
             let newZonaKey = parsed.zonaKey;
             let finalMsg = buildXmlImportSummary(parsed);
@@ -1795,6 +1826,8 @@ export function CalculadoraTermica() {
         setResultado(payload.resultado ?? null);
         setSupOpacos(payload.supOpacos ?? 0);
         setSupHuecos(payload.supHuecos ?? 0);
+        setElementosOpacosList(payload.elementosOpacosList || []);
+        setElementosHuecosList(payload.elementosHuecosList || []);
     };
 
     const saveCurrentDraft = async (statusOverride?: CertDraftStatus) => {
@@ -1842,6 +1875,8 @@ export function CalculadoraTermica() {
                 xmlFileName,
                 supOpacos,
                 supHuecos,
+                elementosOpacosList,
+                elementosHuecosList,
                 filtroMetodo,
                 materialSearchByLayer,
                 soloFavoritosPorCapa,
@@ -2934,30 +2969,82 @@ export function CalculadoraTermica() {
                                         <span className="text-[9px]">{desgloseOpen ? "▲ Minimizar" : "▼ Expandir"}</span>
                                     </button>
                                     {desgloseOpen && (
-                                        <div className="px-3 pb-3 space-y-2">
+                                        <div className="px-3 pb-3 space-y-3">
                                             {(supOpacos > 0 || supHuecos > 0) ? (
                                                 <>
-                                                    <div className="flex justify-between border-b border-slate-800 pb-1">
-                                                        <span className="text-slate-400">Cerramientos Opacos:</span>
-                                                        <span className="font-mono font-bold">{Number(supOpacos).toFixed(2)} m²</span>
-                                                    </div>
-                                                    <div className="flex justify-between border-b border-slate-800 pb-1">
-                                                        <span className="text-slate-400">Huecos y Lucernarios:</span>
-                                                        <span className="font-mono font-bold">{Number(supHuecos).toFixed(2)} m²</span>
-                                                    </div>
-                                                    {Number(areaNHE) > 0 && (
-                                                        <div className="flex justify-between border-b border-slate-800 pb-1">
-                                                            <span className="text-cyan-400">Cubierta (no suma):</span>
-                                                            <span className="font-mono font-bold text-cyan-300">{Number(areaNHE).toFixed(2)} m²</span>
+                                                    {elementosOpacosList.length > 0 && (
+                                                        <div className="space-y-1">
+                                                            <div className="flex justify-between items-center bg-slate-800/80 p-1 rounded">
+                                                                <span className="text-[11px] text-slate-300 font-semibold px-1">Cerramientos Opacos</span>
+                                                                <span className="font-mono text-[11px] font-bold text-slate-300 mr-1">{Number(supOpacos).toFixed(2)} m²</span>
+                                                            </div>
+                                                            <div className="overflow-x-auto rounded border border-slate-800">
+                                                                <table className="w-full text-[10px] text-left">
+                                                                    <thead className="bg-slate-900/80 text-slate-400">
+                                                                        <tr>
+                                                                            <th className="py-1 px-2 font-medium">Nombre</th>
+                                                                            <th className="py-1 px-2 font-medium">Tipo</th>
+                                                                            <th className="py-1 px-2 font-medium text-right">Sup.</th>
+                                                                            <th className="py-1 px-2 font-medium text-right">U</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody className="divide-y divide-slate-800/80 bg-slate-900/30">
+                                                                        {elementosOpacosList.map((el, i) => (
+                                                                            <tr key={i} className="text-slate-300 hover:bg-slate-800/50 transition-colors">
+                                                                                <td className="py-1 px-2 truncate max-w-[120px]" title={el.nombre}>{el.nombre}</td>
+                                                                                <td className="py-1 px-2 truncate max-w-[80px] text-slate-500" title={el.tipo}>{el.tipo}</td>
+                                                                                <td className="py-1 px-2 text-right font-mono">{el.superficie.toFixed(2)}</td>
+                                                                                <td className="py-1 px-2 text-right font-mono text-slate-500">{el.transmitancia ? el.transmitancia.toFixed(2) : "—"}</td>
+                                                                            </tr>
+                                                                        ))}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
                                                         </div>
                                                     )}
-                                                    <div className="flex justify-between pt-1">
-                                                        <span className="text-amber-500 font-bold">Envolvente Total:</span>
-                                                        <span className="font-mono font-bold text-amber-400">{Number(supEnvolvente).toFixed(2)} m²</span>
+
+                                                    {elementosHuecosList.length > 0 && (
+                                                        <div className="space-y-1">
+                                                            <div className="flex justify-between items-center bg-slate-800/80 p-1 rounded mt-2">
+                                                                <span className="text-[11px] text-slate-300 font-semibold px-1">Huecos y Lucernarios</span>
+                                                                <span className="font-mono text-[11px] font-bold text-slate-300 mr-1">{Number(supHuecos).toFixed(2)} m²</span>
+                                                            </div>
+                                                            <div className="overflow-x-auto rounded border border-slate-800">
+                                                                <table className="w-full text-[10px] text-left">
+                                                                    <thead className="bg-slate-900/80 text-slate-400">
+                                                                        <tr>
+                                                                            <th className="py-1 px-2 font-medium">Nombre</th>
+                                                                            <th className="py-1 px-2 font-medium text-right">Sup.</th>
+                                                                            <th className="py-1 px-2 font-medium text-right">U</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody className="divide-y divide-slate-800/80 bg-slate-900/30">
+                                                                        {elementosHuecosList.map((el, i) => (
+                                                                            <tr key={i} className="text-slate-300 hover:bg-slate-800/50 transition-colors">
+                                                                                <td className="py-1 px-2 truncate max-w-[140px]" title={el.nombre}>{el.nombre}</td>
+                                                                                <td className="py-1 px-2 text-right font-mono">{el.superficie.toFixed(2)}</td>
+                                                                                <td className="py-1 px-2 text-right font-mono text-slate-500">{el.transmitancia ? el.transmitancia.toFixed(2) : "—"}</td>
+                                                                            </tr>
+                                                                        ))}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {Number(areaNHE) > 0 && (
+                                                        <div className="flex justify-between bg-cyan-950/30 border border-cyan-900/50 rounded py-1.5 px-2 mt-2">
+                                                            <span className="text-cyan-400 font-semibold text-[11px]">Cubierta (no suma):</span>
+                                                            <span className="font-mono font-bold text-cyan-300 text-[11px]">{Number(areaNHE).toFixed(2)} m²</span>
+                                                        </div>
+                                                    )}
+                                                    <div className="flex justify-between items-center bg-amber-950/30 border border-amber-900/50 rounded py-1.5 px-2 mt-2">
+                                                        <span className="text-amber-500 font-bold text-[11px] uppercase">Envolvente Total:</span>
+                                                        <span className="font-mono font-bold text-amber-400 text-xs">{Number(supEnvolvente).toFixed(2)} m²</span>
                                                     </div>
                                                 </>
                                             ) : (
-                                                <p className="text-[10px] text-slate-600 italic">Importa un XML CE3X para ver el desglose automático.</p>
+                                                <p className="text-[10px] text-slate-600 italic text-center py-2">Importa un XML CE3X para ver el desglose detallado.</p>
                                             )}
                                         </div>
                                     )}
