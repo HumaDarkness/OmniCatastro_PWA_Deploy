@@ -742,6 +742,7 @@ export function CalculadoraTermica() {
     } | null>(null);
     const [draftQueue, setDraftQueue] = useState<CertificateDraftIndexItem[]>([]);
     const [archivedQueue, setArchivedQueue] = useState<CertificateDraftIndexItem[]>([]);
+    const [showArchivedQueuePanel, setShowArchivedQueuePanel] = useState(false);
     const [queueSearch, setQueueSearch] = useState("");
     const [archivedSearch, setArchivedSearch] = useState("");
     const [draftLoading, setDraftLoading] = useState(false);
@@ -3156,6 +3157,14 @@ export function CalculadoraTermica() {
         return "Pendiente";
     };
 
+    const toggleArchivedQueuePanel = () => {
+        setShowArchivedQueuePanel((prev) => {
+            const next = !prev;
+            if (!next) setArchivedSearch("");
+            return next;
+        });
+    };
+
     return (
         <div className="flex flex-col h-[calc(100vh-4rem)] p-6 gap-5 animate-in fade-in duration-500 overflow-y-auto">
             {/* Cabecera */}
@@ -3245,6 +3254,13 @@ export function CalculadoraTermica() {
                         <span className="px-2 py-1 rounded border border-amber-700/40 text-amber-300 bg-amber-900/20">Pendientes: {queuePending}</span>
                         <span className="px-2 py-1 rounded border border-emerald-700/40 text-emerald-300 bg-emerald-900/20">Completados: {queueCompleted}</span>
                         <span className="px-2 py-1 rounded border border-violet-700/40 text-violet-300 bg-violet-900/20">Archivados: {archivedTotal}</span>
+                        <button
+                            onClick={toggleArchivedQueuePanel}
+                            className="h-8 px-3 rounded-md bg-violet-900/20 border border-violet-700/40 text-violet-200 hover:bg-violet-800/40 inline-flex items-center gap-1"
+                            title="Muestra u oculta la cola archivada sin perderla"
+                        >
+                            {showArchivedQueuePanel ? "Ocultar archivados" : "Ver archivados"}
+                        </button>
                         <button
                             onClick={() => restaurarTodosArchivados()}
                             disabled={draftLoading || archivedTotal === 0}
@@ -3403,7 +3419,7 @@ export function CalculadoraTermica() {
                         </div>
                     )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <div className={`grid grid-cols-1 ${showArchivedQueuePanel ? "md:grid-cols-2" : ""} gap-2`}>
                         <div className="flex items-center gap-2">
                             <Input
                                 value={queueSearch}
@@ -3421,24 +3437,32 @@ export function CalculadoraTermica() {
                                 </button>
                             )}
                         </div>
-                        <div className="flex items-center gap-2">
-                            <Input
-                                value={archivedSearch}
-                                onChange={(e) => setArchivedSearch(e.target.value)}
-                                placeholder="Buscar en archivados (RC, nombre, DNI)"
-                                className="h-8 bg-violet-950/20 border-violet-800/40 text-violet-100 text-xs"
-                            />
-                            {archivedSearch.trim() && (
-                                <button
-                                    onClick={() => setArchivedSearch("")}
-                                    className="h-8 w-8 rounded-md border border-violet-700/40 text-violet-200 hover:text-white hover:border-violet-500 inline-flex items-center justify-center"
-                                    title="Limpiar búsqueda en archivados"
-                                >
-                                    <X className="h-3.5 w-3.5" />
-                                </button>
-                            )}
-                        </div>
+                        {showArchivedQueuePanel && (
+                            <div className="flex items-center gap-2">
+                                <Input
+                                    value={archivedSearch}
+                                    onChange={(e) => setArchivedSearch(e.target.value)}
+                                    placeholder="Buscar en archivados (RC, nombre, DNI)"
+                                    className="h-8 bg-violet-950/20 border-violet-800/40 text-violet-100 text-xs"
+                                />
+                                {archivedSearch.trim() && (
+                                    <button
+                                        onClick={() => setArchivedSearch("")}
+                                        className="h-8 w-8 rounded-md border border-violet-700/40 text-violet-200 hover:text-white hover:border-violet-500 inline-flex items-center justify-center"
+                                        title="Limpiar búsqueda en archivados"
+                                    >
+                                        <X className="h-3.5 w-3.5" />
+                                    </button>
+                                )}
+                            </div>
+                        )}
                     </div>
+
+                    {!showArchivedQueuePanel && archivedTotal > 0 && (
+                        <p className="text-[11px] text-violet-200/70">
+                            Archivados ocultos para no mezclar el lote actual. Usa "Ver archivados" cuando necesites recuperar alguno.
+                        </p>
+                    )}
 
                     <div className="rounded-md border border-slate-800 bg-slate-950/30 max-h-52 overflow-y-auto">
                         {draftLoading ? (
@@ -3476,49 +3500,51 @@ export function CalculadoraTermica() {
                         )}
                     </div>
 
-                    <div className="rounded-md border border-violet-900/40 bg-violet-950/20 max-h-44 overflow-y-auto">
-                        {archivedQueue.length === 0 ? (
-                            <div className="px-3 py-3 text-xs text-violet-200/70">Sin expedientes archivados.</div>
-                        ) : filteredArchivedQueue.length === 0 ? (
-                            <div className="px-3 py-3 text-xs text-violet-200/70">Sin coincidencias en archivados para "{archivedSearch}".</div>
-                        ) : (
-                            <div className="divide-y divide-violet-900/40">
-                                {filteredArchivedQueue.map((item) => (
-                                    <div key={`archived-${item.rc}`} className="px-3 py-2 flex items-center gap-2">
-                                        <button
-                                            onClick={() => loadDraft(item)}
-                                            className="text-left flex-1 min-w-0"
-                                            title="Cargar expediente archivado en el formulario"
-                                        >
-                                            <p className="text-xs text-violet-100 font-mono truncate">{item.rc}</p>
-                                            <p className="text-[11px] text-violet-200/70 truncate">
-                                                {item.clienteNombre || "Sin nombre"}
-                                                {item.clienteDni ? ` · ${item.clienteDni}` : ""}
-                                                {` · ${new Date(item.updatedAt).toLocaleString()}`}
-                                            </p>
-                                        </button>
-                                        <button
-                                            onClick={() => restaurarArchivado(item)}
-                                            disabled={draftLoading}
-                                            className="h-7 px-2 rounded-md bg-violet-900/30 border border-violet-700/40 text-violet-200 hover:bg-violet-800/40 disabled:opacity-40 text-[11px] inline-flex items-center gap-1"
-                                            title="Restaurar este expediente a la cola activa"
-                                        >
-                                            <RefreshCcw className="h-3 w-3" />
-                                            Restaurar
-                                        </button>
-                                        <span className={`px-2 py-1 rounded border text-[10px] ${item.status === "completado"
-                                            ? "border-emerald-700/40 text-emerald-300 bg-emerald-900/20"
-                                            : item.status === "en_progreso"
-                                                ? "border-amber-700/40 text-amber-300 bg-amber-900/20"
-                                                : "border-slate-700 text-slate-300 bg-slate-900/20"
-                                            }`}>
-                                            {draftStatusLabel(item.status)}
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+                    {showArchivedQueuePanel && (
+                        <div className="rounded-md border border-violet-900/40 bg-violet-950/20 max-h-44 overflow-y-auto">
+                            {archivedQueue.length === 0 ? (
+                                <div className="px-3 py-3 text-xs text-violet-200/70">Sin expedientes archivados.</div>
+                            ) : filteredArchivedQueue.length === 0 ? (
+                                <div className="px-3 py-3 text-xs text-violet-200/70">Sin coincidencias en archivados para "{archivedSearch}".</div>
+                            ) : (
+                                <div className="divide-y divide-violet-900/40">
+                                    {filteredArchivedQueue.map((item) => (
+                                        <div key={`archived-${item.rc}`} className="px-3 py-2 flex items-center gap-2">
+                                            <button
+                                                onClick={() => loadDraft(item)}
+                                                className="text-left flex-1 min-w-0"
+                                                title="Cargar expediente archivado en el formulario"
+                                            >
+                                                <p className="text-xs text-violet-100 font-mono truncate">{item.rc}</p>
+                                                <p className="text-[11px] text-violet-200/70 truncate">
+                                                    {item.clienteNombre || "Sin nombre"}
+                                                    {item.clienteDni ? ` · ${item.clienteDni}` : ""}
+                                                    {` · ${new Date(item.updatedAt).toLocaleString()}`}
+                                                </p>
+                                            </button>
+                                            <button
+                                                onClick={() => restaurarArchivado(item)}
+                                                disabled={draftLoading}
+                                                className="h-7 px-2 rounded-md bg-violet-900/30 border border-violet-700/40 text-violet-200 hover:bg-violet-800/40 disabled:opacity-40 text-[11px] inline-flex items-center gap-1"
+                                                title="Restaurar este expediente a la cola activa"
+                                            >
+                                                <RefreshCcw className="h-3 w-3" />
+                                                Restaurar
+                                            </button>
+                                            <span className={`px-2 py-1 rounded border text-[10px] ${item.status === "completado"
+                                                ? "border-emerald-700/40 text-emerald-300 bg-emerald-900/20"
+                                                : item.status === "en_progreso"
+                                                    ? "border-amber-700/40 text-amber-300 bg-amber-900/20"
+                                                    : "border-slate-700 text-slate-300 bg-slate-900/20"
+                                                }`}>
+                                                {draftStatusLabel(item.status)}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 
