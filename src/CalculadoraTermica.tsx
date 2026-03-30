@@ -2938,6 +2938,76 @@ export function CalculadoraTermica() {
         setDraftMsg(`Expediente ${rcNormalized} completado y archivado. Listo para el siguiente.`);
     };
 
+    const prepararSiguienteLote = async () => {
+        const completedInUi = draftQueue.filter((item) => item.status === "completado").length;
+        const pendingInUi = draftQueue.length - completedInUi;
+        const summaryChunks: string[] = [];
+
+        if (completedInUi > 0) {
+            summaryChunks.push(`${completedInUi} completado(s) se archivaran`);
+        }
+        if (pendingInUi > 0) {
+            summaryChunks.push(`${pendingInUi} pendiente(s) quedaran en cola activa`);
+        }
+
+        if (summaryChunks.length > 0) {
+            const ok = confirm(`Preparar siguiente lote: ${summaryChunks.join(" · ")}. ¿Continuar?`);
+            if (!ok) return;
+        }
+
+        if (!supabase) {
+            resetForNewCertificate();
+            setQueueSearch("");
+            setArchivedSearch("");
+            setDraftMsg("Pantalla preparada para el siguiente lote (modo local).");
+            return;
+        }
+
+        setDraftLoading(true);
+        setDraftError(null);
+        setDraftMsg(null);
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const [activeRaw, archivedRaw] = await Promise.all([
+                loadDraftIndex(organizationId),
+                loadArchivedDraftIndex(organizationId),
+            ]);
+
+            const { active, archived } = reconcileQueueIndexes(activeRaw, archivedRaw);
+            const completedActive = active.filter((item) => item.status === "completado");
+            const activeWithoutCompleted = active.filter((item) => item.status !== "completado");
+            const archivedUpdated = completedActive.length > 0 ? mergeDraftIndexes(archived, completedActive) : archived;
+
+            const persistTasks: Promise<unknown>[] = [];
+            if (!indexesAreEqual(activeRaw, activeWithoutCompleted)) {
+                persistTasks.push(saveDraftIndex(organizationId, activeWithoutCompleted));
+            }
+            if (!indexesAreEqual(archivedRaw, archivedUpdated)) {
+                persistTasks.push(saveArchivedDraftIndex(organizationId, archivedUpdated));
+            }
+            if (persistTasks.length > 0) {
+                await Promise.all(persistTasks);
+            }
+
+            setDraftQueue(sortDrafts(activeWithoutCompleted));
+            setArchivedQueue(sortDrafts(archivedUpdated));
+            setQueueSearch("");
+            setArchivedSearch("");
+            resetForNewCertificate();
+
+            const archivedMsg = completedActive.length > 0
+                ? `${completedActive.length} completado(s) archivado(s). `
+                : "";
+            setDraftMsg(
+                `${archivedMsg}Pantalla lista para el proximo lote. Activos: ${activeWithoutCompleted.length} · Archivados: ${archivedUpdated.length}.`,
+            );
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudo preparar la pantalla para el siguiente lote.");
+        } finally {
+            setDraftLoading(false);
+        }
+    };
+
     const queueTotal = draftQueue.length;
     const queueCompleted = draftQueue.filter((it) => it.status === "completado").length;
     const queuePending = queueTotal - queueCompleted;
@@ -3094,6 +3164,15 @@ export function CalculadoraTermica() {
                         >
                             <FolderPlus className="h-3.5 w-3.5" />
                             Nuevo expediente
+                        </button>
+                        <button
+                            onClick={() => prepararSiguienteLote()}
+                            disabled={draftLoading || draftSaving}
+                            className="h-8 px-3 rounded-md bg-sky-900/30 border border-sky-700/40 text-sky-300 hover:bg-sky-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                            title="Archiva completados activos, limpia el formulario y deja la cola lista para arrancar otro lote"
+                        >
+                            <ArrowRight className="h-3.5 w-3.5" />
+                            Preparar siguiente lote
                         </button>
                         <button
                             onClick={() => exportarLoteCSV()}
