@@ -147,15 +147,12 @@ export function obtenerZona(provincia: string, altura: number): string | null {
 }
 
 
-export async function fetchAltitudeAndProvince(rc: string, prov: string, _muni: string): Promise<{ altitude: number | null, zone: string | null }> {
+export async function fetchAltitudeAndProvince(rc: string, prov: string, muni: string): Promise<{ altitude: number | null, zone: string | null }> {
     if (!rc || rc.length < 14) return { altitude: null, zone: null };
     const rc14 = rc.substring(0, 14);
     
     // Call catastro API to get coordinates (Using AllOrigins proxy to avoid CORS)
-    // IMPORTANT: We omit Provincia&Municipio because CE3X municipality names often don't match
-    // the exact Catastro registry names, causing "EL MUNICIPIO NO EXISTE" errors.
-    // The RC alone is sufficient to identify the property.
-    const catastroUrl = `https://ovc.catastro.meh.es/ovcservweb/OVCSWLocalizacionRC/OVCCoordenadas.asmx/Consulta_CPMRC?Provincia=&Municipio=&SRS=EPSG:4258&RC=${encodeURIComponent(rc14)}`;
+    const catastroUrl = `https://ovc.catastro.meh.es/ovcservweb/OVCSWLocalizacionRC/OVCCoordenadas.asmx/Consulta_CPMRC?Provincia=${encodeURIComponent(prov)}&Municipio=${encodeURIComponent(muni)}&SRS=EPSG:4258&RC=${encodeURIComponent(rc14)}`;
     const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(catastroUrl)}`;
     
     let lat: number | null = null;

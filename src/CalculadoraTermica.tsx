@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import JSZip from "jszip";
 import {
     Calculator,
@@ -131,6 +131,16 @@ function normalizeTextKey(value: string): string {
         .toUpperCase();
 }
 
+function isCubiertaTipo(tipo: string): boolean {
+    return normalizeTextKey(tipo).includes("CUBIERTA");
+}
+
+function isParticionHorizontalTipo(tipo: string): boolean {
+    const tipoNorm = normalizeTextKey(tipo);
+    return tipoNorm.includes("PARTICIONINTERIORHORIZONTAL")
+        || (tipoNorm.includes("PARTICION") && tipoNorm.includes("HORIZONTAL"));
+}
+
 function isEnvelopeElementLabel(value: string): boolean {
     const normalized = normalizeTextKey(value);
     const blockedFragments = [
@@ -241,14 +251,11 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
 
         elementosOpacosData.push({ nombre, tipo, superficie: sup, transmitancia: u });
 
-        if (tipoNorm.includes("CUBIERTA")) {
+        if (isCubiertaTipo(tipoNorm)) {
             superficieCubierta += sup;
             // Cubierta se muestra aparte, NO suma a envolvente ni opacos
         } else {
-            if (
-                tipoNorm.includes("PARTICIONINTERIORHORIZONTAL")
-                || (tipoNorm.includes("PARTICION") && tipoNorm.includes("HORIZONTAL"))
-            ) {
+            if (isParticionHorizontalTipo(tipoNorm)) {
                 superficieParticion += sup;
             }
             superficieOpacos += sup;
@@ -267,8 +274,11 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         elementosHuecosData.push({ nombre, tipo, superficie: sup, transmitancia: u });
 
         superficieHuecos += sup;
-        superficieEnvolvente += sup;
     }
+
+    // Envolvente para cálculo/ratio: opacos sin cubierta.
+    // Los huecos se registran y muestran aparte para evitar doble conteo
+    // en XML CE3X donde los muros pueden venir ya con huecos incorporados.
 
     return {
         clienteNombre,
@@ -309,6 +319,10 @@ function buildXmlImportSummary(parsed: ParsedCE3X): string {
         parts.push(`Técnico detectado (referencia): ${parsed.tecnicoNombre}.`);
     }
 
+    parts.push(
+        `Envolvente aplicada: opacos sin cubierta (${parsed.superficieEnvolvente.toFixed(2)} m²). Huecos detectados aparte: ${parsed.superficieHuecos.toFixed(2)} m².`,
+    );
+
     return parts.join(" ");
 }
 const ZONAS_CLIMATICAS = Object.entries(VALORES_G).map(([zona, g]) => {
@@ -343,6 +357,7 @@ const CALC_STATE_STORAGE_KEY = "omnicatastro.calc-state.v1";
 const CERT_DRAFT_VERSION = 1;
 const CERT_DRAFT_FOLDER = "certificados";
 const CERT_INDEX_FILENAME = "_index.json";
+const CERT_ARCHIVE_INDEX_FILENAME = "_archived_index.json";
 const CERT_IMPORT_AUDIT_FILENAME = "_import_audit.json";
 const BACKUP_ZIP_VERSION = 2;
 const LEGACY_CERT_PREFIX = "cert_";
@@ -352,7 +367,7 @@ type ImportMergeStrategy = "overwrite" | "skip" | "merge";
 type ImportAuditAction = "created" | "overwritten" | "merged" | "skipped" | "invalid" | "failed";
 
 interface BatchProgress {
-    mode: "export" | "import";
+    mode: "export" | "import" | "repair";
     phase: string;
     current: number;
     total: number;
@@ -571,6 +586,15 @@ function pickMostRecentDraft(a: CertificateDraftPayload, b: CertificateDraftPayl
     return b;
 }
 
+function pickMostRecentIndexItem(a: CertificateDraftIndexItem, b: CertificateDraftIndexItem): CertificateDraftIndexItem {
+    const aTime = Date.parse(a.updatedAt || "");
+    const bTime = Date.parse(b.updatedAt || "");
+    if (Number.isFinite(aTime) && Number.isFinite(bTime)) {
+        return bTime >= aTime ? b : a;
+    }
+    return b;
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -586,6 +610,10 @@ function getDraftPath(organizationId: string, rc: string): string {
 
 function getIndexPath(organizationId: string): string {
     return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_INDEX_FILENAME}`;
+}
+
+function getArchiveIndexPath(organizationId: string): string {
+    return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_ARCHIVE_INDEX_FILENAME}`;
 }
 
 function getImportAuditPath(organizationId: string): string {
@@ -694,6 +722,9 @@ export function CalculadoraTermica() {
         dataUrl: string;
     } | null>(null);
     const [draftQueue, setDraftQueue] = useState<CertificateDraftIndexItem[]>([]);
+    const [archivedQueue, setArchivedQueue] = useState<CertificateDraftIndexItem[]>([]);
+    const [queueSearch, setQueueSearch] = useState("");
+    const [archivedSearch, setArchivedSearch] = useState("");
     const [draftLoading, setDraftLoading] = useState(false);
     const [draftSaving, setDraftSaving] = useState(false);
     const [draftMsg, setDraftMsg] = useState<string | null>(null);
@@ -1049,7 +1080,7 @@ export function CalculadoraTermica() {
             setClienteLastName1(client.last_name_1 || "");
             setClienteLastName2(client.last_name_2 || "");
             if (client.dni_address) setClienteDireccionDni(client.dni_address);
-            
+
             const fullName = [client.first_name, client.middle_name, client.last_name_1, client.last_name_2].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
             setDniLookupMsg(`Cliente cargado desde BD: ${fullName || client.dni}`);
         } catch {
@@ -1095,11 +1126,11 @@ export function CalculadoraTermica() {
                         const fileExt = dniCaptura.fileName.split('.').pop() || 'png';
                         const fileName = `dni_front_${Date.now()}.${fileExt}`;
                         const filePath = `${organizationId}/clients/${newClient.id}/${fileName}`;
-                        
+
                         const { error: uploadError } = await supabase.storage
                             .from('work_photos')
                             .upload(filePath, blob, { upsert: true });
-                            
+
                         if (!uploadError) {
                             await supabase.from("clients").update({ dni_front_path: filePath }).eq("id", newClient.id);
                         }
@@ -1173,10 +1204,10 @@ export function CalculadoraTermica() {
             } else {
                 setDniLookupMsg("DNI de cliente no disponible en XML CE3X. Usa búsqueda manual.");
             }
-            
+
             setXmlFileName(file.name);
             setXmlImportMsg(finalMsg);
-            
+
             if (parsed.rc) {
                 setExpedienteRc(parsed.rc);
             }
@@ -1185,31 +1216,33 @@ export function CalculadoraTermica() {
             if (parsed.codigoPostal) setCpInmueble(parsed.codigoPostal);
             if (parsed.provincia) setProvinciaInmueble(parsed.provincia);
 
-            // Integración Catastro Automática
-            if (parsed.rc && parsed.provincia && parsed.municipio) {
-                 setXmlImportMsg(finalMsg + " Verificando datos climáticos con Catastro...");
-                 const { altitude, zone } = await fetchAltitudeAndProvince(parsed.rc, parsed.provincia, parsed.municipio);
-                 let catastroMsg = "";
-                 
-                 if (altitude !== null) {
-                     setAlturaMsnm(altitude.toString());
-                     catastroMsg += ` ✅ Altura Catastro: ${altitude}m.`;
-                 }
-                 if (zone !== null) {
-                     // Check mismatch
-                     if (newZonaKey && zone !== newZonaKey && VALORES_G[zone] !== undefined) {
-                         catastroMsg += ` ⚠️ ATENCIÓN: CE3X indica zona ${newZonaKey}, pero la real calculada es ${zone}. Por favor corrige en CE3X.`;
-                     } else {
-                         catastroMsg += ` ✅ Zona climática coincide (${zone}).`;
-                     }
-                 }
-                 if (catastroMsg) {
-                     setXmlImportMsg(finalMsg + catastroMsg);
-                 } else {
-                     setXmlImportMsg(finalMsg + " ⚠️ No se pudo verificar la altura / zona automáticamente.");
-                 }
+            // Integración Catastro automática: la altitud puede resolverse solo con RC.
+            if (parsed.rc) {
+                setXmlImportMsg(finalMsg + " Verificando datos climáticos con Catastro...");
+                const { altitude, zone } = await fetchAltitudeAndProvince(parsed.rc, parsed.provincia || "", parsed.municipio || "");
+                let catastroMsg = "";
+
+                if (altitude !== null) {
+                    setAlturaMsnm(altitude.toString());
+                    catastroMsg += ` ✅ Altura Catastro: ${altitude}m.`;
+                }
+                if (zone !== null) {
+                    // Check mismatch
+                    if (newZonaKey && zone !== newZonaKey && VALORES_G[zone] !== undefined) {
+                        catastroMsg += ` ⚠️ ATENCIÓN: CE3X indica zona ${newZonaKey}, pero la real calculada es ${zone}. Por favor corrige en CE3X.`;
+                    } else {
+                        catastroMsg += ` ✅ Zona climática coincide (${zone}).`;
+                    }
+                } else if (altitude !== null && !parsed.provincia) {
+                    catastroMsg += " ℹ️ Zona no calculada: el XML no incluye provincia.";
+                }
+                if (catastroMsg) {
+                    setXmlImportMsg(finalMsg + catastroMsg);
+                } else {
+                    setXmlImportMsg(finalMsg + " ⚠️ No se pudo verificar la altura / zona automáticamente.");
+                }
             }
-            
+
         } catch {
             setClienteFirstName("");
             setClienteMiddleName("");
@@ -1370,6 +1403,11 @@ export function CalculadoraTermica() {
         return `${top} | +${issues.length - 4} incidencias más`;
     };
 
+    const toFiniteNumber = (value: unknown, fallback = 0): number => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    };
+
     const sortDrafts = (items: CertificateDraftIndexItem[]): CertificateDraftIndexItem[] => {
         const statusOrder: Record<CertDraftStatus, number> = {
             pendiente: 0,
@@ -1382,6 +1420,83 @@ export function CalculadoraTermica() {
             if (statusDiff !== 0) return statusDiff;
             return b.updatedAt.localeCompare(a.updatedAt);
         });
+    };
+
+    const normalizeDraftIndexItems = (items: CertificateDraftIndexItem[]): CertificateDraftIndexItem[] => {
+        return items
+            .filter((it) => typeof it?.rc === "string")
+            .map((it) => {
+                const normalizedRc = normalizeRc(String(it.rc ?? ""));
+                return {
+                    rc: normalizedRc,
+                    status: isValidDraftStatus(it.status) ? it.status : "en_progreso",
+                    updatedAt: typeof it.updatedAt === "string" && it.updatedAt.trim() ? it.updatedAt : new Date().toISOString(),
+                    clienteNombre: typeof it.clienteNombre === "string" ? it.clienteNombre : "",
+                    clienteDni: typeof it.clienteDni === "string" ? it.clienteDni : "",
+                };
+            })
+            .filter((it) => Boolean(it.rc));
+    };
+
+    const mergeDraftIndexes = (...groups: CertificateDraftIndexItem[][]): CertificateDraftIndexItem[] => {
+        const mergedByRc = new Map<string, CertificateDraftIndexItem>();
+
+        groups.flat().forEach((item) => {
+            const normalizedRc = normalizeRc(item.rc || "");
+            if (!normalizedRc) return;
+
+            const normalizedItem: CertificateDraftIndexItem = {
+                ...item,
+                rc: normalizedRc,
+                status: isValidDraftStatus(item.status) ? item.status : "en_progreso",
+                updatedAt: typeof item.updatedAt === "string" && item.updatedAt.trim() ? item.updatedAt : new Date().toISOString(),
+                clienteNombre: typeof item.clienteNombre === "string" ? item.clienteNombre : "",
+                clienteDni: typeof item.clienteDni === "string" ? item.clienteDni : "",
+            };
+
+            const existing = mergedByRc.get(normalizedRc);
+            if (!existing) {
+                mergedByRc.set(normalizedRc, normalizedItem);
+                return;
+            }
+
+            mergedByRc.set(normalizedRc, pickMostRecentIndexItem(existing, normalizedItem));
+        });
+
+        return sortDrafts(Array.from(mergedByRc.values()));
+    };
+
+    const indexesAreEqual = (a: CertificateDraftIndexItem[], b: CertificateDraftIndexItem[]): boolean => {
+        const stable = (items: CertificateDraftIndexItem[]) => JSON.stringify(
+            sortDrafts(items).map((it) => ({
+                rc: normalizeRc(it.rc),
+                status: isValidDraftStatus(it.status) ? it.status : "en_progreso",
+                updatedAt: it.updatedAt,
+                clienteNombre: it.clienteNombre || "",
+                clienteDni: it.clienteDni || "",
+            })),
+        );
+        return stable(a) === stable(b);
+    };
+
+    const reconcileQueueIndexes = (
+        activeItems: CertificateDraftIndexItem[],
+        archivedItems: CertificateDraftIndexItem[],
+    ): { active: CertificateDraftIndexItem[]; archived: CertificateDraftIndexItem[] } => {
+        const active = mergeDraftIndexes(activeItems);
+        const activeRcSet = new Set(active.map((it) => normalizeRc(it.rc)));
+        const archived = mergeDraftIndexes(archivedItems).filter((it) => !activeRcSet.has(normalizeRc(it.rc)));
+        return { active, archived };
+    };
+
+    const queueItemMatchesSearch = (item: CertificateDraftIndexItem, searchValue: string): boolean => {
+        const normalizedSearch = searchValue.trim().toLowerCase();
+        if (!normalizedSearch) return true;
+        return (
+            item.rc.toLowerCase().includes(normalizedSearch)
+            || (item.clienteNombre || "").toLowerCase().includes(normalizedSearch)
+            || (item.clienteDni || "").toLowerCase().includes(normalizedSearch)
+        );
     };
 
     const resolveOrganizationOrThrow = async (): Promise<string> => {
@@ -1413,13 +1528,20 @@ export function CalculadoraTermica() {
         try {
             const parsed = JSON.parse(resolved.text) as CertificateDraftIndexItem[];
             if (!Array.isArray(parsed)) return [];
-            return parsed
-                .filter((it) => typeof it.rc === "string" && typeof it.updatedAt === "string")
-                .map((it) => ({
-                    ...it,
-                    rc: normalizeRc(it.rc),
-                    status: isValidDraftStatus(it.status) ? it.status : "en_progreso",
-                }));
+            return normalizeDraftIndexItems(parsed);
+        } catch {
+            return [];
+        }
+    };
+
+    const loadArchivedDraftIndex = async (organizationId: string): Promise<CertificateDraftIndexItem[]> => {
+        const resolved = await readStorageTextByCandidates([getArchiveIndexPath(organizationId)]);
+        if (!resolved) return [];
+
+        try {
+            const parsed = JSON.parse(resolved.text) as CertificateDraftIndexItem[];
+            if (!Array.isArray(parsed)) return [];
+            return normalizeDraftIndexItems(parsed);
         } catch {
             return [];
         }
@@ -1472,8 +1594,7 @@ export function CalculadoraTermica() {
         }
     };
 
-    const saveDraftIndex = async (organizationId: string, items: CertificateDraftIndexItem[]) => {
-        const indexPath = getIndexPath(organizationId);
+    const saveIndexFile = async (indexPath: string, items: CertificateDraftIndexItem[]) => {
         const blob = new Blob([JSON.stringify(sortDrafts(items), null, 2)], { type: "application/json" });
         const { error } = await supabase.storage.from("work_photos").upload(indexPath, blob, {
             upsert: true,
@@ -1482,19 +1603,416 @@ export function CalculadoraTermica() {
         if (error) throw error;
     };
 
-    const archivarCompletados = async () => {
-        if (!supabase) return;
-        if (!confirm("¿Seguro que deseas archivar/limpiar los expedientes completados del lote actual?")) return;
+    const saveDraftIndex = async (organizationId: string, items: CertificateDraftIndexItem[]) => {
+        await saveIndexFile(getIndexPath(organizationId), items);
+    };
+
+    const saveArchivedDraftIndex = async (organizationId: string, items: CertificateDraftIndexItem[]) => {
+        await saveIndexFile(getArchiveIndexPath(organizationId), items);
+    };
+
+    const archivarCompletados = async (
+        options?: { onlyRc?: string; skipConfirm?: boolean },
+    ): Promise<boolean> => {
+        if (!supabase) return false;
         try {
             setDraftLoading(true);
+            setDraftError(null);
+            setDraftMsg(null);
             const organizationId = await resolveOrganizationOrThrow();
-            const inProgress = draftQueue.filter(d => d.status !== "completado");
-            await saveDraftIndex(organizationId, inProgress);
-            setDraftQueue(inProgress);
-            setDraftMsg("Expedientes completados archivados (eliminados de la cola).");
-        } catch (e: any) {
-            alert("Error al archivar: " + e.message);
+            const [activeRaw, archivedRaw] = await Promise.all([
+                loadDraftIndex(organizationId),
+                loadArchivedDraftIndex(organizationId),
+            ]);
+            const { active, archived } = reconcileQueueIndexes(activeRaw, archivedRaw);
+
+            const onlyRcNormalized = options?.onlyRc ? normalizeRc(options.onlyRc) : "";
+            const completedItems = active.filter(
+                (d) => d.status === "completado" && (!onlyRcNormalized || normalizeRc(d.rc) === onlyRcNormalized),
+            );
+            if (completedItems.length === 0) {
+                setDraftQueue(active);
+                setArchivedQueue(archived);
+                setDraftMsg(onlyRcNormalized
+                    ? `El expediente ${onlyRcNormalized} no esta completado en la cola activa.`
+                    : "No hay expedientes completados para archivar.");
+                return false;
+            }
+
+            if (!options?.skipConfirm) {
+                const confirmMessage = onlyRcNormalized
+                    ? `¿Seguro que deseas archivar el expediente ${onlyRcNormalized}?`
+                    : `¿Seguro que deseas archivar ${completedItems.length} expediente(s) completado(s) del lote actual?`;
+                if (!confirm(confirmMessage)) return false;
+            }
+
+            const inProgress = onlyRcNormalized
+                ? active.filter((d) => normalizeRc(d.rc) !== onlyRcNormalized)
+                : active.filter((d) => d.status !== "completado");
+            const mergedArchived = mergeDraftIndexes(archived, completedItems);
+
+            await Promise.all([
+                saveDraftIndex(organizationId, inProgress),
+                saveArchivedDraftIndex(organizationId, mergedArchived),
+            ]);
+
+            setDraftQueue(sortDrafts(inProgress));
+            setArchivedQueue(sortDrafts(mergedArchived));
+            setDraftMsg(onlyRcNormalized
+                ? `Expediente ${onlyRcNormalized} archivado. Puedes restaurarlo en cualquier momento.`
+                : `${completedItems.length} expediente(s) archivado(s). Puedes restaurarlos en cualquier momento.`);
+            return true;
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudieron archivar los expedientes completados.");
+            return false;
         } finally {
+            setDraftLoading(false);
+        }
+    };
+
+    const repararArchivadosEnvolvente = async () => {
+        if (!supabase) return;
+        if (archivedQueue.length === 0) {
+            setDraftMsg("No hay expedientes archivados para revisar.");
+            return;
+        }
+
+        const confirmed = confirm(
+            `Se revisaran ${archivedQueue.length} expediente(s) archivado(s) para corregir S (envolvente) sin sumar huecos y recalcular resultados. ¿Continuar?`,
+        );
+        if (!confirmed) return;
+
+        setDraftLoading(true);
+        setDraftError(null);
+        setDraftMsg(null);
+        cancelBatchRef.current = false;
+
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const [activeRaw, archivedRaw] = await Promise.all([
+                loadDraftIndex(organizationId),
+                loadArchivedDraftIndex(organizationId),
+            ]);
+            const { active, archived } = reconcileQueueIndexes(activeRaw, archivedRaw);
+
+            if (archived.length === 0) {
+                setDraftQueue(active);
+                setArchivedQueue(archived);
+                setDraftMsg("No hay expedientes archivados para revisar.");
+                return;
+            }
+
+            const issues: string[] = [];
+            const nowIso = new Date().toISOString();
+            const updatedMeta = new Map<string, { updatedAt: string; clienteNombre: string; clienteDni: string; status: CertDraftStatus }>();
+
+            const auditRows: Array<{
+                rc: string;
+                status: CertDraftStatus;
+                oldS: number;
+                newS: number;
+                huecos: number;
+                opacos: number;
+                oldPart: number;
+                newPart: number;
+                oldAct: number;
+                newAct: number;
+                oldPct: number;
+                newPct: number;
+                oldAhorro: number;
+                newAhorro: number;
+                source: string;
+                action: string;
+                note: string;
+            }> = [];
+
+            let updatedCount = 0;
+            let unchangedCount = 0;
+            let failedCount = 0;
+
+            setBatchStep({
+                mode: "repair",
+                phase: "Auditando archivados",
+                current: 0,
+                total: archived.length,
+                detail: "Analizando superficies y resultados...",
+            });
+
+            for (let i = 0; i < archived.length; i += 1) {
+                throwIfCancelled();
+                const item = archived[i];
+                const rc = normalizeRc(item.rc);
+
+                updateBatchStep({
+                    current: i,
+                    detail: `Revisando ${rc}...`,
+                });
+
+                const payload = await loadDraftPayload(organizationId, rc);
+                if (!payload) {
+                    failedCount += 1;
+                    issues.push(`${rc}: no se pudo descargar o validar payload.`);
+                    auditRows.push({
+                        rc,
+                        status: item.status,
+                        oldS: 0,
+                        newS: 0,
+                        huecos: 0,
+                        opacos: 0,
+                        oldPart: 0,
+                        newPart: 0,
+                        oldAct: 0,
+                        newAct: 0,
+                        oldPct: 0,
+                        newPct: 0,
+                        oldAhorro: 0,
+                        newAhorro: 0,
+                        source: "sin_payload",
+                        action: "error",
+                        note: "No se pudo cargar el borrador",
+                    });
+                    updateBatchStep({ current: i + 1 });
+                    continue;
+                }
+
+                const opacosList = Array.isArray(payload.elementosOpacosList) ? payload.elementosOpacosList : [];
+                const opacosNoCubiertaFromList = roundTo(
+                    opacosList.reduce((sum, el) => {
+                        const sup = toFiniteNumber(el?.superficie, 0);
+                        return isCubiertaTipo(el?.tipo || "") ? sum : sum + sup;
+                    }, 0),
+                    2,
+                );
+                const cubiertaFromList = roundTo(
+                    opacosList.reduce((sum, el) => {
+                        const sup = toFiniteNumber(el?.superficie, 0);
+                        return isCubiertaTipo(el?.tipo || "") ? sum + sup : sum;
+                    }, 0),
+                    2,
+                );
+                const particionFromList = roundTo(
+                    opacosList.reduce((sum, el) => {
+                        const sup = toFiniteNumber(el?.superficie, 0);
+                        return isParticionHorizontalTipo(el?.tipo || "") ? sum + sup : sum;
+                    }, 0),
+                    2,
+                );
+
+                const oldS = roundTo(toFiniteNumber(payload.supEnvolvente, 0), 2);
+                const oldOpacos = roundTo(toFiniteNumber(payload.supOpacos, 0), 2);
+                const oldHuecos = roundTo(toFiniteNumber(payload.supHuecos, 0), 2);
+                const oldPart = roundTo(toFiniteNumber(payload.areaHNH, 0), 2);
+                const oldAct = roundTo(toFiniteNumber(payload.supActuacion, oldPart), 2);
+                const oldPct = oldS > 0 ? roundTo((oldAct / oldS) * 100, 2) : 0;
+                const oldAhorro = Math.round(toFiniteNumber(payload.resultado?.ahorro, 0));
+
+                let newS = oldS;
+                let source = "supEnvolvente";
+                if (opacosNoCubiertaFromList > 0) {
+                    newS = opacosNoCubiertaFromList;
+                    source = "opacos_list";
+                } else if (oldOpacos > 0) {
+                    newS = oldOpacos;
+                    source = "supOpacos";
+                } else if (oldS > 0 && oldHuecos > 0) {
+                    newS = roundTo(Math.max(oldS - oldHuecos, 0), 2);
+                    source = "S-huecos";
+                }
+
+                const oldNHE = roundTo(toFiniteNumber(payload.areaNHE, 0), 2);
+                const newPart = particionFromList > 0 ? particionFromList : oldPart;
+                const newAct = newPart > 0 ? newPart : oldAct;
+                const newNHE = cubiertaFromList > 0 ? cubiertaFromList : oldNHE;
+
+                const zonaValida = payload.zonaKey && VALORES_G[payload.zonaKey] !== undefined
+                    ? payload.zonaKey
+                    : "D3";
+
+                const recalculated = calcularAhorroCAE({
+                    capas: Array.isArray(payload.capas) ? payload.capas : [],
+                    area_h_nh: newPart > 0 ? newPart : 25,
+                    area_nh_e: newNHE > 0 ? newNHE : 25,
+                    superficie_actuacion: newAct > 0 ? newAct : 25,
+                    g: VALORES_G[zonaValida],
+                    sup_envolvente_total: newS > 0 ? newS : 120,
+                    scenario_i: payload.scenarioI || "nada_aislado",
+                    scenario_f: payload.scenarioF || "particion_aislada",
+                    case_i: payload.caseI || "estanco",
+                    case_f: payload.caseF || "estanco",
+                    modoCE3X: !!payload.modoCE3X,
+                });
+
+                const newPct = newS > 0 ? roundTo((newAct / newS) * 100, 2) : 0;
+                const newAhorro = Math.round(toFiniteNumber(recalculated.ahorro, 0));
+
+                const changed =
+                    Math.abs(newS - oldS) > 0.01
+                    || Math.abs(newPart - oldPart) > 0.01
+                    || Math.abs(newAct - oldAct) > 0.01
+                    || Math.abs(newNHE - oldNHE) > 0.01;
+
+                let action = "sin_cambios";
+                let note = "No requiere ajuste";
+
+                if (changed) {
+                    const repairedPayload: CertificateDraftPayload = {
+                        ...payload,
+                        updatedAt: nowIso,
+                        areaHNH: newPart > 0 ? newPart : payload.areaHNH,
+                        areaNHE: newNHE > 0 ? newNHE : payload.areaNHE,
+                        supActuacion: newAct > 0 ? newAct : payload.supActuacion,
+                        supEnvolvente: newS > 0 ? newS : payload.supEnvolvente,
+                        supOpacos: newS > 0 ? newS : payload.supOpacos,
+                        resultado: recalculated,
+                    };
+
+                    const blob = new Blob([JSON.stringify(repairedPayload, null, 2)], { type: "application/json" });
+                    const { error: uploadError } = await supabase.storage.from("work_photos").upload(
+                        getDraftPath(organizationId, rc),
+                        blob,
+                        {
+                            upsert: true,
+                            contentType: "application/json",
+                        },
+                    );
+
+                    if (uploadError) {
+                        failedCount += 1;
+                        action = "error";
+                        note = `Error guardando: ${uploadError.message}`;
+                        issues.push(`${rc}: ${uploadError.message}`);
+                    } else {
+                        updatedCount += 1;
+                        action = "corregido";
+                        note = "S ajustada y resultado recalculado";
+                        updatedMeta.set(rc, {
+                            updatedAt: repairedPayload.updatedAt,
+                            clienteNombre: repairedPayload.clienteNombre || [
+                                repairedPayload.clienteFirstName,
+                                repairedPayload.clienteMiddleName,
+                                repairedPayload.clienteLastName1,
+                                repairedPayload.clienteLastName2,
+                            ].filter(Boolean).join(" "),
+                            clienteDni: repairedPayload.clienteDni || "",
+                            status: repairedPayload.status,
+                        });
+                    }
+                } else {
+                    unchangedCount += 1;
+                }
+
+                auditRows.push({
+                    rc,
+                    status: payload.status,
+                    oldS,
+                    newS,
+                    huecos: oldHuecos,
+                    opacos: oldOpacos,
+                    oldPart,
+                    newPart,
+                    oldAct,
+                    newAct,
+                    oldPct,
+                    newPct,
+                    oldAhorro,
+                    newAhorro,
+                    source,
+                    action,
+                    note,
+                });
+
+                updateBatchStep({
+                    current: i + 1,
+                    detail: `${rc}: ${action}`,
+                });
+            }
+
+            if (updatedMeta.size > 0) {
+                const archivedUpdated = archived.map((item) => {
+                    const key = normalizeRc(item.rc);
+                    const meta = updatedMeta.get(key);
+                    if (!meta) return item;
+                    return {
+                        ...item,
+                        updatedAt: meta.updatedAt,
+                        clienteNombre: meta.clienteNombre || item.clienteNombre,
+                        clienteDni: meta.clienteDni || item.clienteDni,
+                        status: meta.status,
+                    };
+                });
+                await saveArchivedDraftIndex(organizationId, archivedUpdated);
+                setArchivedQueue(sortDrafts(archivedUpdated));
+            } else {
+                setArchivedQueue(sortDrafts(archived));
+            }
+            setDraftQueue(sortDrafts(active));
+
+            if (auditRows.length > 0) {
+                const toCsvCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+                const header = [
+                    "RC",
+                    "Estado",
+                    "S_anterior",
+                    "S_corregida",
+                    "Huecos",
+                    "Opacos",
+                    "Particion_anterior",
+                    "Particion_corregida",
+                    "Actuacion_anterior",
+                    "Actuacion_corregida",
+                    "%_envolvente_anterior",
+                    "%_envolvente_corregido",
+                    "Ahorro_anterior_kWh",
+                    "Ahorro_corregido_kWh",
+                    "Fuente_S",
+                    "Accion",
+                    "Nota",
+                ].join(",");
+
+                const rows = auditRows.map((row) => [
+                    row.rc,
+                    row.status,
+                    row.oldS.toFixed(2),
+                    row.newS.toFixed(2),
+                    row.huecos.toFixed(2),
+                    row.opacos.toFixed(2),
+                    row.oldPart.toFixed(2),
+                    row.newPart.toFixed(2),
+                    row.oldAct.toFixed(2),
+                    row.newAct.toFixed(2),
+                    row.oldPct.toFixed(2),
+                    row.newPct.toFixed(2),
+                    row.oldAhorro,
+                    row.newAhorro,
+                    row.source,
+                    row.action,
+                    row.note,
+                ].map(toCsvCell).join(","));
+
+                const csv = [header, ...rows].join("\n");
+                const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `auditoria_reparacion_envolvente_${new Date().toISOString().slice(0, 10)}.csv`;
+                link.click();
+                URL.revokeObjectURL(url);
+            }
+
+            const summary = `Revisión completada: ${updatedCount} corregido(s), ${unchangedCount} sin cambio, ${failedCount} con error.`;
+            setDraftMsg(`${summary} Se descargó un CSV de auditoría para corregir PDFs.`);
+            if (issues.length > 0) {
+                setDraftError(`Incidencias detectadas: ${truncateIssues(issues)}`);
+            }
+        } catch (error: any) {
+            if (isCancelledError(error)) {
+                setDraftMsg("Reparación cancelada por el usuario.");
+            } else {
+                setDraftError(error?.message ?? "No se pudo completar la reparación de archivados.");
+            }
+        } finally {
+            cancelBatchRef.current = false;
+            setBatchProgress(null);
             setDraftLoading(false);
         }
     };
@@ -1875,9 +2393,16 @@ export function CalculadoraTermica() {
             throwIfCancelled();
 
             await saveDraftIndex(organizationId, indexItems);
+            const archivedBeforeImport = await loadArchivedDraftIndex(organizationId);
+            const importedRcSet = new Set(indexItems.map((it) => normalizeRc(it.rc)));
+            const archivedAfterImport = archivedBeforeImport.filter((it) => !importedRcSet.has(normalizeRc(it.rc)));
+            if (archivedAfterImport.length !== archivedBeforeImport.length) {
+                await saveArchivedDraftIndex(organizationId, archivedAfterImport);
+            }
             await appendImportAudit(organizationId, auditEntries);
 
             setDraftQueue(sortDrafts(indexItems));
+            setArchivedQueue(sortDrafts(archivedAfterImport));
             const summary = [
                 `Importación completada: ${importedCount} aplicados`,
                 `${skippedCount} omitidos`,
@@ -1914,8 +2439,26 @@ export function CalculadoraTermica() {
         setDraftError(null);
         try {
             const organizationId = await resolveOrganizationOrThrow();
-            const indexItems = await loadDraftIndex(organizationId);
-            setDraftQueue(sortDrafts(indexItems));
+            const [indexItemsRaw, archivedItemsRaw] = await Promise.all([
+                loadDraftIndex(organizationId),
+                loadArchivedDraftIndex(organizationId),
+            ]);
+
+            const { active, archived } = reconcileQueueIndexes(indexItemsRaw, archivedItemsRaw);
+
+            const persistTasks: Promise<unknown>[] = [];
+            if (!indexesAreEqual(indexItemsRaw, active)) {
+                persistTasks.push(saveDraftIndex(organizationId, active));
+            }
+            if (!indexesAreEqual(archivedItemsRaw, archived)) {
+                persistTasks.push(saveArchivedDraftIndex(organizationId, archived));
+            }
+            if (persistTasks.length > 0) {
+                await Promise.all(persistTasks);
+            }
+
+            setDraftQueue(active);
+            setArchivedQueue(archived);
         } catch (error: any) {
             setDraftError(error?.message ?? "No se pudo cargar la cola de certificados.");
         } finally {
@@ -1995,15 +2538,18 @@ export function CalculadoraTermica() {
         setElementosHuecosList(payload.elementosHuecosList || []);
     };
 
-    const saveCurrentDraft = async (statusOverride?: CertDraftStatus) => {
+    const saveCurrentDraft = async (
+        statusOverride?: CertDraftStatus,
+        options?: { suppressSuccessMessage?: boolean },
+    ): Promise<boolean> => {
         const rcNormalized = normalizeRc(expedienteRc);
         if (!rcNormalized) {
             setDraftError("Debes indicar Referencia Catastral para guardar el certificado.");
-            return;
+            return false;
         }
         if (!supabase) {
             setDraftError("Supabase no está configurado en esta sesión.");
-            return;
+            return false;
         }
 
         setDraftSaving(true);
@@ -2065,27 +2611,42 @@ export function CalculadoraTermica() {
             });
             if (error) throw error;
 
-            const currentIndex = await loadDraftIndex(organizationId);
-            const merged: CertificateDraftIndexItem[] = [
-                {
-                    rc: rcNormalized,
-                    status: finalStatus,
-                    updatedAt: nowIso,
-                    clienteNombre: [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2].filter(Boolean).join(" "),
-                    clienteDni: clienteDni.trim(),
-                },
-                ...currentIndex.filter((it) => normalizeRc(it.rc) !== rcNormalized),
-            ];
+            const [activeRaw, archivedRaw] = await Promise.all([
+                loadDraftIndex(organizationId),
+                loadArchivedDraftIndex(organizationId),
+            ]);
 
-            await saveDraftIndex(organizationId, merged);
+            const { active, archived } = reconcileQueueIndexes(activeRaw, archivedRaw);
+            const updatedItem: CertificateDraftIndexItem = {
+                rc: rcNormalized,
+                status: finalStatus,
+                updatedAt: nowIso,
+                clienteNombre: [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2].filter(Boolean).join(" "),
+                clienteDni: clienteDni.trim(),
+            };
+
+            const merged = mergeDraftIndexes(active, [updatedItem]);
+            const archivedFiltered = archived.filter((it) => normalizeRc(it.rc) !== rcNormalized);
+
+            const persistTasks: Promise<unknown>[] = [saveDraftIndex(organizationId, merged)];
+            if (!indexesAreEqual(archivedRaw, archivedFiltered)) {
+                persistTasks.push(saveArchivedDraftIndex(organizationId, archivedFiltered));
+            }
+            await Promise.all(persistTasks);
+
             setCertStatus(finalStatus);
             setExpedienteRc(rcNormalized);
             setDraftQueue(sortDrafts(merged));
-            setDraftMsg(finalStatus === "completado"
-                ? `Certificado ${rcNormalized} marcado como completado y guardado.`
-                : `Borrador ${rcNormalized} guardado correctamente.`);
+            setArchivedQueue(sortDrafts(archivedFiltered));
+            if (!options?.suppressSuccessMessage) {
+                setDraftMsg(finalStatus === "completado"
+                    ? `Certificado ${rcNormalized} marcado como completado y guardado.`
+                    : `Borrador ${rcNormalized} guardado correctamente.`);
+            }
+            return true;
         } catch (error: any) {
             setDraftError(error?.message ?? "No se pudo guardar el borrador.");
+            return false;
         } finally {
             setDraftSaving(false);
         }
@@ -2106,6 +2667,82 @@ export function CalculadoraTermica() {
             setDraftMsg(`Cargado certificado ${item.rc}.`);
         } catch (error: any) {
             setDraftError(error?.message ?? "No se pudo cargar el borrador.");
+        } finally {
+            setDraftLoading(false);
+        }
+    };
+
+    const restaurarArchivado = async (item: CertificateDraftIndexItem) => {
+        if (!supabase) return;
+        setDraftLoading(true);
+        setDraftError(null);
+        setDraftMsg(null);
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const [activeRaw, archivedRaw] = await Promise.all([
+                loadDraftIndex(organizationId),
+                loadArchivedDraftIndex(organizationId),
+            ]);
+
+            const { active, archived } = reconcileQueueIndexes(activeRaw, archivedRaw);
+
+            const rcNormalized = normalizeRc(item.rc);
+            const archivedItem = archived.find((it) => normalizeRc(it.rc) === rcNormalized) ?? item;
+            const archivedRemaining = archived.filter((it) => normalizeRc(it.rc) !== rcNormalized);
+            const restored = mergeDraftIndexes(active, [archivedItem]);
+
+            await Promise.all([
+                saveDraftIndex(organizationId, restored),
+                saveArchivedDraftIndex(organizationId, archivedRemaining),
+            ]);
+
+            setDraftQueue(restored);
+            setArchivedQueue(sortDrafts(archivedRemaining));
+            setDraftMsg(`Expediente ${item.rc} restaurado a la cola activa.`);
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudo restaurar el expediente archivado.");
+        } finally {
+            setDraftLoading(false);
+        }
+    };
+
+    const restaurarTodosArchivados = async () => {
+        if (!supabase) return;
+        if (archivedQueue.length === 0) {
+            setDraftMsg("No hay expedientes archivados para restaurar.");
+            return;
+        }
+        if (!confirm(`¿Restaurar ${archivedQueue.length} expediente(s) archivado(s) a la cola activa?`)) return;
+
+        setDraftLoading(true);
+        setDraftError(null);
+        setDraftMsg(null);
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const [activeRaw, archivedRaw] = await Promise.all([
+                loadDraftIndex(organizationId),
+                loadArchivedDraftIndex(organizationId),
+            ]);
+
+            const { active, archived } = reconcileQueueIndexes(activeRaw, archivedRaw);
+
+            if (archived.length === 0) {
+                setArchivedQueue([]);
+                setDraftMsg("No hay expedientes archivados disponibles en nube.");
+                return;
+            }
+
+            const restored = mergeDraftIndexes(active, archived);
+            await Promise.all([
+                saveDraftIndex(organizationId, restored),
+                saveArchivedDraftIndex(organizationId, []),
+            ]);
+
+            setDraftQueue(restored);
+            setArchivedQueue([]);
+            setDraftMsg(`${archived.length} expediente(s) restaurado(s) a la cola activa.`);
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudieron restaurar los expedientes archivados.");
         } finally {
             setDraftLoading(false);
         }
@@ -2154,12 +2791,43 @@ export function CalculadoraTermica() {
         setDraftError(null);
     };
 
+    const guardarSueltoRapido = async () => {
+        const rcNormalized = normalizeRc(expedienteRc);
+        if (!rcNormalized) {
+            setDraftError("Debes indicar Referencia Catastral para guardar el certificado.");
+            return;
+        }
+
+        const saved = await saveCurrentDraft("completado", { suppressSuccessMessage: true });
+        if (!saved) return;
+
+        const archived = await archivarCompletados({ onlyRc: rcNormalized, skipConfirm: true });
+        if (!archived) return;
+
+        resetForNewCertificate();
+        setDraftMsg(`Expediente ${rcNormalized} completado y archivado. Listo para el siguiente.`);
+    };
+
     const queueTotal = draftQueue.length;
     const queueCompleted = draftQueue.filter((it) => it.status === "completado").length;
     const queuePending = queueTotal - queueCompleted;
+    const archivedTotal = archivedQueue.length;
+    const filteredDraftQueue = useMemo(
+        () => draftQueue.filter((item) => queueItemMatchesSearch(item, queueSearch)),
+        [draftQueue, queueSearch],
+    );
+    const filteredArchivedQueue = useMemo(
+        () => archivedQueue.filter((item) => queueItemMatchesSearch(item, archivedSearch)),
+        [archivedQueue, archivedSearch],
+    );
     const batchProgressPercent = batchProgress
         ? (batchProgress.total > 0 ? Math.min(100, Math.round((batchProgress.current / batchProgress.total) * 100)) : 0)
         : 0;
+    const batchModeLabel = batchProgress?.mode === "export"
+        ? "Exportación"
+        : batchProgress?.mode === "import"
+            ? "Importación"
+            : "Reparación";
 
     const materialFlags = {
         hormigon: capas.some((c) => c.nombre.toLowerCase().includes("hormig")),
@@ -2228,7 +2896,7 @@ export function CalculadoraTermica() {
                                 <option value="completado">Completado</option>
                             </select>
                         </div>
-                        <div className="md:col-span-2 grid grid-cols-2 gap-2 items-end">
+                        <div className="md:col-span-2 grid grid-cols-3 gap-2 items-end">
                             <button
                                 onClick={() => saveCurrentDraft()}
                                 disabled={draftSaving}
@@ -2245,6 +2913,15 @@ export function CalculadoraTermica() {
                                 <CircleCheckBig className="h-3.5 w-3.5" />
                                 Guardar + completar
                             </button>
+                            <button
+                                onClick={() => guardarSueltoRapido()}
+                                disabled={draftSaving || draftLoading}
+                                className="h-9 px-3 rounded-md bg-violet-900/30 border border-violet-700/40 text-violet-300 hover:bg-violet-800/40 disabled:opacity-40 text-xs inline-flex items-center justify-center gap-1"
+                                title="Pensado para trabajo suelto: guarda, completa y archiva en un solo paso"
+                            >
+                                <Archive className="h-3.5 w-3.5" />
+                                Suelto rapido
+                            </button>
                         </div>
                     </div>
 
@@ -2252,10 +2929,20 @@ export function CalculadoraTermica() {
                         <span className="px-2 py-1 rounded border border-slate-700 text-slate-300 bg-slate-900/40">Total: {queueTotal}</span>
                         <span className="px-2 py-1 rounded border border-amber-700/40 text-amber-300 bg-amber-900/20">Pendientes: {queuePending}</span>
                         <span className="px-2 py-1 rounded border border-emerald-700/40 text-emerald-300 bg-emerald-900/20">Completados: {queueCompleted}</span>
+                        <span className="px-2 py-1 rounded border border-violet-700/40 text-violet-300 bg-violet-900/20">Archivados: {archivedTotal}</span>
+                        <button
+                            onClick={() => restaurarTodosArchivados()}
+                            disabled={draftLoading || archivedTotal === 0}
+                            className="h-8 px-3 rounded-md bg-violet-900/30 border border-violet-700/40 text-violet-300 hover:bg-violet-800/40 disabled:opacity-40 inline-flex items-center gap-1"
+                            title="Restaura todos los expedientes archivados a la cola"
+                        >
+                            <RefreshCcw className="h-3.5 w-3.5" />
+                            Restaurar archivados
+                        </button>
                         <button
                             onClick={() => refreshDraftQueue()}
                             disabled={draftLoading}
-                            className="ml-auto h-8 px-3 rounded-md bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 disabled:opacity-40 inline-flex items-center gap-1"
+                            className="h-8 px-3 rounded-md bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 disabled:opacity-40 inline-flex items-center gap-1"
                         >
                             <RefreshCcw className="h-3.5 w-3.5" />
                             Refrescar cola
@@ -2321,12 +3008,21 @@ export function CalculadoraTermica() {
                         </button>
                         <button
                             onClick={() => archivarCompletados()}
-                            disabled={draftLoading || queueTotal === 0}
+                            disabled={draftLoading || queueCompleted === 0}
                             className="h-8 px-3 rounded-md bg-rose-900/30 border border-rose-700/40 text-rose-300 hover:bg-rose-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
-                            title="Limpia los expedientes completados del lote actual"
+                            title="Mueve a archivados los expedientes completados de la cola activa"
                         >
                             <Archive className="h-3.5 w-3.5" />
                             Archivar Completados
+                        </button>
+                        <button
+                            onClick={() => repararArchivadosEnvolvente()}
+                            disabled={draftLoading || archivedTotal === 0}
+                            className="h-8 px-3 rounded-md bg-orange-900/30 border border-orange-700/40 text-orange-300 hover:bg-orange-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                            title="Audita archivados, corrige S sin huecos y recalcula automáticamente"
+                        >
+                            <Zap className="h-3.5 w-3.5" />
+                            Reparar S archivados
                         </button>
                     </div>
 
@@ -2334,7 +3030,7 @@ export function CalculadoraTermica() {
                         <div className="rounded-md border border-cyan-700/40 bg-cyan-900/10 px-3 py-2 space-y-2">
                             <div className="flex items-center justify-between text-[11px] text-cyan-200">
                                 <span>
-                                    {batchProgress.mode === "export" ? "Exportación" : "Importación"}
+                                    {batchModeLabel}
                                     {" · "}
                                     {batchProgress.phase}
                                 </span>
@@ -2374,14 +3070,53 @@ export function CalculadoraTermica() {
                         </div>
                     )}
 
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div className="flex items-center gap-2">
+                            <Input
+                                value={queueSearch}
+                                onChange={(e) => setQueueSearch(e.target.value)}
+                                placeholder="Buscar en cola activa (RC, nombre, DNI)"
+                                className="h-8 bg-slate-900/50 border-slate-700 text-slate-200 text-xs"
+                            />
+                            {queueSearch.trim() && (
+                                <button
+                                    onClick={() => setQueueSearch("")}
+                                    className="h-8 w-8 rounded-md border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 inline-flex items-center justify-center"
+                                    title="Limpiar búsqueda activa"
+                                >
+                                    <X className="h-3.5 w-3.5" />
+                                </button>
+                            )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Input
+                                value={archivedSearch}
+                                onChange={(e) => setArchivedSearch(e.target.value)}
+                                placeholder="Buscar en archivados (RC, nombre, DNI)"
+                                className="h-8 bg-violet-950/20 border-violet-800/40 text-violet-100 text-xs"
+                            />
+                            {archivedSearch.trim() && (
+                                <button
+                                    onClick={() => setArchivedSearch("")}
+                                    className="h-8 w-8 rounded-md border border-violet-700/40 text-violet-200 hover:text-white hover:border-violet-500 inline-flex items-center justify-center"
+                                    title="Limpiar búsqueda en archivados"
+                                >
+                                    <X className="h-3.5 w-3.5" />
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
                     <div className="rounded-md border border-slate-800 bg-slate-950/30 max-h-52 overflow-y-auto">
                         {draftLoading ? (
                             <div className="px-3 py-3 text-xs text-slate-400">Cargando cola de certificados...</div>
                         ) : draftQueue.length === 0 ? (
                             <div className="px-3 py-3 text-xs text-slate-500">Sin expedientes en cola. Guarda el primero para iniciar el lote.</div>
+                        ) : filteredDraftQueue.length === 0 ? (
+                            <div className="px-3 py-3 text-xs text-slate-500">Sin coincidencias en cola activa para "{queueSearch}".</div>
                         ) : (
                             <div className="divide-y divide-slate-800">
-                                {draftQueue.map((item) => (
+                                {filteredDraftQueue.map((item) => (
                                     <div key={item.rc} className="px-3 py-2 flex items-center gap-2">
                                         <button
                                             onClick={() => loadDraft(item)}
@@ -2393,6 +3128,50 @@ export function CalculadoraTermica() {
                                                 {item.clienteDni ? ` · ${item.clienteDni}` : ""}
                                                 {` · ${new Date(item.updatedAt).toLocaleString()}`}
                                             </p>
+                                        </button>
+                                        <span className={`px-2 py-1 rounded border text-[10px] ${item.status === "completado"
+                                            ? "border-emerald-700/40 text-emerald-300 bg-emerald-900/20"
+                                            : item.status === "en_progreso"
+                                                ? "border-amber-700/40 text-amber-300 bg-amber-900/20"
+                                                : "border-slate-700 text-slate-300 bg-slate-900/20"
+                                            }`}>
+                                            {draftStatusLabel(item.status)}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="rounded-md border border-violet-900/40 bg-violet-950/20 max-h-44 overflow-y-auto">
+                        {archivedQueue.length === 0 ? (
+                            <div className="px-3 py-3 text-xs text-violet-200/70">Sin expedientes archivados.</div>
+                        ) : filteredArchivedQueue.length === 0 ? (
+                            <div className="px-3 py-3 text-xs text-violet-200/70">Sin coincidencias en archivados para "{archivedSearch}".</div>
+                        ) : (
+                            <div className="divide-y divide-violet-900/40">
+                                {filteredArchivedQueue.map((item) => (
+                                    <div key={`archived-${item.rc}`} className="px-3 py-2 flex items-center gap-2">
+                                        <button
+                                            onClick={() => loadDraft(item)}
+                                            className="text-left flex-1 min-w-0"
+                                            title="Cargar expediente archivado en el formulario"
+                                        >
+                                            <p className="text-xs text-violet-100 font-mono truncate">{item.rc}</p>
+                                            <p className="text-[11px] text-violet-200/70 truncate">
+                                                {item.clienteNombre || "Sin nombre"}
+                                                {item.clienteDni ? ` · ${item.clienteDni}` : ""}
+                                                {` · ${new Date(item.updatedAt).toLocaleString()}`}
+                                            </p>
+                                        </button>
+                                        <button
+                                            onClick={() => restaurarArchivado(item)}
+                                            disabled={draftLoading}
+                                            className="h-7 px-2 rounded-md bg-violet-900/30 border border-violet-700/40 text-violet-200 hover:bg-violet-800/40 disabled:opacity-40 text-[11px] inline-flex items-center gap-1"
+                                            title="Restaurar este expediente a la cola activa"
+                                        >
+                                            <RefreshCcw className="h-3 w-3" />
+                                            Restaurar
                                         </button>
                                         <span className={`px-2 py-1 rounded border text-[10px] ${item.status === "completado"
                                             ? "border-emerald-700/40 text-emerald-300 bg-emerald-900/20"
@@ -2439,11 +3218,10 @@ export function CalculadoraTermica() {
                     </div>
 
                     {xmlImportMsg && (
-                        <div className={`text-xs px-3 py-2 rounded-md border ${
-                            xmlImportMsg.includes("⚠️")
-                                ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
-                                : "text-cyan-300 bg-cyan-500/10 border-cyan-500/30"
-                        }`}>
+                        <div className={`text-xs px-3 py-2 rounded-md border ${xmlImportMsg.includes("⚠️")
+                            ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
+                            : "text-cyan-300 bg-cyan-500/10 border-cyan-500/30"
+                            }`}>
                             {xmlImportMsg}
                         </div>
                     )}
@@ -2870,24 +3648,24 @@ export function CalculadoraTermica() {
                             </CardHeader>
                             <CardContent>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                     {capturas.ce3x_antes?.dataUrl && (
-                                         <div className="space-y-2 text-center cursor-zoom-in group border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors" onClick={() => openCapturaPreview("ce3x_antes", "CE3X Antes")}>
-                                             <div className="w-full h-40 max-h-48 rounded-md overflow-hidden relative border border-slate-700 bg-black">
-                                                 <img src={capturas.ce3x_antes.dataUrl} className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-opacity" />
-                                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-sm font-bold">Ampliar</div>
-                                             </div>
-                                             <p className="text-xs text-slate-400 font-bold uppercase">Estado Actual (CE3X Antes)</p>
-                                         </div>
-                                     )}
-                                     {capturas.ce3x_despues?.dataUrl && (
-                                         <div className="space-y-2 text-center cursor-zoom-in group border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors" onClick={() => openCapturaPreview("ce3x_despues", "CE3X Después")}>
-                                             <div className="w-full h-40 max-h-48 rounded-md overflow-hidden relative border border-slate-700 bg-black">
-                                                 <img src={capturas.ce3x_despues.dataUrl} className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-opacity" />
-                                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-sm font-bold">Ampliar</div>
-                                             </div>
-                                             <p className="text-xs text-slate-400 font-bold uppercase">Estado Mejorado (CE3X Después)</p>
-                                         </div>
-                                     )}
+                                    {capturas.ce3x_antes?.dataUrl && (
+                                        <div className="space-y-2 text-center cursor-zoom-in group border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors" onClick={() => openCapturaPreview("ce3x_antes", "CE3X Antes")}>
+                                            <div className="w-full h-40 max-h-48 rounded-md overflow-hidden relative border border-slate-700 bg-black">
+                                                <img src={capturas.ce3x_antes.dataUrl} className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-opacity" />
+                                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-sm font-bold">Ampliar</div>
+                                            </div>
+                                            <p className="text-xs text-slate-400 font-bold uppercase">Estado Actual (CE3X Antes)</p>
+                                        </div>
+                                    )}
+                                    {capturas.ce3x_despues?.dataUrl && (
+                                        <div className="space-y-2 text-center cursor-zoom-in group border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors" onClick={() => openCapturaPreview("ce3x_despues", "CE3X Después")}>
+                                            <div className="w-full h-40 max-h-48 rounded-md overflow-hidden relative border border-slate-700 bg-black">
+                                                <img src={capturas.ce3x_despues.dataUrl} className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-opacity" />
+                                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-sm font-bold">Ampliar</div>
+                                            </div>
+                                            <p className="text-xs text-slate-400 font-bold uppercase">Estado Mejorado (CE3X Después)</p>
+                                        </div>
+                                    )}
                                 </div>
                             </CardContent>
                         </Card>
@@ -2915,7 +3693,7 @@ export function CalculadoraTermica() {
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-slate-500 uppercase font-bold">Envolvente Total (m²)</label>
-                                    <p className="text-[9px] text-slate-600 mb-1">Sin cubiertas</p>
+                                    <p className="text-[9px] text-slate-600 mb-1">Sin cubiertas ni huecos (anti doble conteo CE3X)</p>
                                     <Input type="number" step="0.01" value={supEnvolvente} onChange={(e) => setSupEnvolvente(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
                                 </div>
                                 <div className="col-span-1 md:col-span-1">
@@ -3137,7 +3915,7 @@ export function CalculadoraTermica() {
                                 </CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-3 p-3">
-                                 {capturas.cee_inicial?.dataUrl && (
+                                {capturas.cee_inicial?.dataUrl && (
                                     <div className="w-full h-40 rounded overflow-hidden relative border border-slate-700 bg-black cursor-zoom-in group" onClick={() => openCapturaPreview("cee_inicial", "Etiqueta CEE Inicial")}>
                                         <img src={capturas.cee_inicial.dataUrl} className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity" />
                                         <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-xs font-bold">Ver Completa</div>
@@ -3227,6 +4005,9 @@ export function CalculadoraTermica() {
                                                         <span className="text-amber-500 font-bold text-[11px] uppercase">Envolvente Total:</span>
                                                         <span className="font-mono font-bold text-amber-400 text-xs">{Number(supEnvolvente).toFixed(2)} m²</span>
                                                     </div>
+                                                    <p className="text-[9px] text-slate-500 text-right -mt-1">
+                                                        S = opacos sin cubierta; huecos solo informativos.
+                                                    </p>
                                                 </>
                                             ) : (
                                                 <p className="text-[10px] text-slate-600 italic text-center py-2">Importa un XML CE3X para ver el desglose detallado.</p>
