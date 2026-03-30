@@ -621,11 +621,23 @@ function getImportAuditPath(organizationId: string): string {
 }
 
 function getLegacyDraftPath(organizationId: string, rc: string): string {
+    return `${CERT_DRAFT_FOLDER}/${organizationId}/${normalizeRc(rc)}.json`;
+}
+
+function getLegacyPrefixedDraftPath(organizationId: string, rc: string): string {
+    return `${CERT_DRAFT_FOLDER}/${organizationId}/${LEGACY_CERT_PREFIX}${normalizeRc(rc)}.json`;
+}
+
+function getCurrentPrefixedDraftPath(organizationId: string, rc: string): string {
     return `${organizationId}/${CERT_DRAFT_FOLDER}/${LEGACY_CERT_PREFIX}${normalizeRc(rc)}.json`;
 }
 
 function getLegacyIndexPath(organizationId: string): string {
-    return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_INDEX_FILENAME}`;
+    return `${CERT_DRAFT_FOLDER}/${organizationId}/${CERT_INDEX_FILENAME}`;
+}
+
+function getLegacyArchiveIndexPath(organizationId: string): string {
+    return `${CERT_DRAFT_FOLDER}/${organizationId}/${CERT_ARCHIVE_INDEX_FILENAME}`;
 }
 
 interface CalcStateSnapshot {
@@ -1535,7 +1547,10 @@ export function CalculadoraTermica() {
     };
 
     const loadArchivedDraftIndex = async (organizationId: string): Promise<CertificateDraftIndexItem[]> => {
-        const resolved = await readStorageTextByCandidates([getArchiveIndexPath(organizationId)]);
+        const resolved = await readStorageTextByCandidates([
+            getArchiveIndexPath(organizationId),
+            getLegacyArchiveIndexPath(organizationId),
+        ]);
         if (!resolved) return [];
 
         try {
@@ -1547,11 +1562,114 @@ export function CalculadoraTermica() {
         }
     };
 
+    const listDraftRcCandidatesFromFolder = async (folderPath: string): Promise<string[]> => {
+        const allCandidates = new Set<string>();
+        const pageSize = 100;
+        let offset = 0;
+
+        while (true) {
+            const { data, error } = await supabase.storage.from("work_photos").list(folderPath, {
+                limit: pageSize,
+                offset,
+            });
+
+            if (error || !data || data.length === 0) {
+                break;
+            }
+
+            data.forEach((entry) => {
+                const rawName = typeof entry.name === "string" ? entry.name : "";
+                if (!rawName || !rawName.endsWith(".json")) return;
+                if (
+                    rawName === CERT_INDEX_FILENAME
+                    || rawName === CERT_ARCHIVE_INDEX_FILENAME
+                    || rawName === CERT_IMPORT_AUDIT_FILENAME
+                ) {
+                    return;
+                }
+
+                const stem = rawName.slice(0, -5);
+                const rcCandidate = stem.startsWith(LEGACY_CERT_PREFIX)
+                    ? stem.slice(LEGACY_CERT_PREFIX.length)
+                    : stem;
+                const normalized = normalizeRc(rcCandidate);
+                if (normalized) {
+                    allCandidates.add(normalized);
+                }
+            });
+
+            if (data.length < pageSize) {
+                break;
+            }
+            offset += pageSize;
+        }
+
+        return Array.from(allCandidates.values());
+    };
+
+    const recoverIndexesFromStoredDrafts = async (
+        organizationId: string,
+    ): Promise<{ active: CertificateDraftIndexItem[]; archived: CertificateDraftIndexItem[]; recoveredCount: number }> => {
+        const folderCandidates = [
+            `${organizationId}/${CERT_DRAFT_FOLDER}`,
+            `${CERT_DRAFT_FOLDER}/${organizationId}`,
+        ];
+
+        const rcSet = new Set<string>();
+        for (const folder of folderCandidates) {
+            const rcCandidates = await listDraftRcCandidatesFromFolder(folder);
+            rcCandidates.forEach((rc) => rcSet.add(rc));
+        }
+
+        if (rcSet.size === 0) {
+            return { active: [], archived: [], recoveredCount: 0 };
+        }
+
+        const activeRecovered: CertificateDraftIndexItem[] = [];
+        const archivedRecovered: CertificateDraftIndexItem[] = [];
+
+        for (const rc of rcSet) {
+            const payload = await loadDraftPayload(organizationId, rc);
+            if (!payload) continue;
+
+            const item: CertificateDraftIndexItem = {
+                rc,
+                status: isValidDraftStatus(payload.status) ? payload.status : "en_progreso",
+                updatedAt: payload.updatedAt || new Date().toISOString(),
+                clienteNombre: payload.clienteNombre || [
+                    payload.clienteFirstName,
+                    payload.clienteMiddleName,
+                    payload.clienteLastName1,
+                    payload.clienteLastName2,
+                ].filter(Boolean).join(" "),
+                clienteDni: payload.clienteDni || "",
+            };
+
+            if (item.status === "completado") {
+                archivedRecovered.push(item);
+            } else {
+                activeRecovered.push(item);
+            }
+        }
+
+        const active = mergeDraftIndexes(activeRecovered);
+        const archived = mergeDraftIndexes(archivedRecovered)
+            .filter((it) => !active.some((activeItem) => normalizeRc(activeItem.rc) === normalizeRc(it.rc)));
+
+        return {
+            active,
+            archived,
+            recoveredCount: active.length + archived.length,
+        };
+    };
+
     const loadDraftPayload = async (organizationId: string, rc: string): Promise<CertificateDraftPayload | null> => {
         const normalizedRc = normalizeRc(rc);
         const resolved = await readStorageTextByCandidates([
             getDraftPath(organizationId, normalizedRc),
+            getCurrentPrefixedDraftPath(organizationId, normalizedRc),
             getLegacyDraftPath(organizationId, normalizedRc),
+            getLegacyPrefixedDraftPath(organizationId, normalizedRc),
         ]);
         if (!resolved) return null;
 
@@ -2444,7 +2562,19 @@ export function CalculadoraTermica() {
                 loadArchivedDraftIndex(organizationId),
             ]);
 
-            const { active, archived } = reconcileQueueIndexes(indexItemsRaw, archivedItemsRaw);
+            let { active, archived } = reconcileQueueIndexes(indexItemsRaw, archivedItemsRaw);
+
+            if (active.length === 0 && archived.length === 0) {
+                const recovered = await recoverIndexesFromStoredDrafts(organizationId);
+                if (recovered.recoveredCount > 0) {
+                    active = recovered.active;
+                    archived = recovered.archived;
+                    setDraftMsg(
+                        `Se recuperaron ${recovered.recoveredCount} expediente(s) desde nube. `
+                        + "Completados quedaron en Archivados y pendientes en cola activa.",
+                    );
+                }
+            }
 
             const persistTasks: Promise<unknown>[] = [];
             if (!indexesAreEqual(indexItemsRaw, active)) {
