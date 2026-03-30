@@ -2938,6 +2938,36 @@ export function CalculadoraTermica() {
         setDraftMsg(`Expediente ${rcNormalized} completado y archivado. Listo para el siguiente.`);
     };
 
+    const copiarDatosClavePDF = async () => {
+        const rcNormalized = normalizeRc(expedienteRc);
+        if (!rcNormalized) {
+            setDraftError("Debes indicar Referencia Catastral antes de copiar datos para PDF.");
+            return;
+        }
+
+        const porcentajeEnvolvente = supEnvolvente > 0
+            ? roundTo((supActuacion / supEnvolvente) * 100, 2)
+            : 0;
+        const ahorro = Math.round(toFiniteNumber(resultado?.ahorro, 0));
+
+        const resumen = [
+            `RC: ${rcNormalized}`,
+            `S envolvente (m2): ${roundTo(supEnvolvente, 2).toFixed(2)}`,
+            `% envolvente: ${porcentajeEnvolvente.toFixed(2)}`,
+            `Particion HNH (m2): ${roundTo(areaHNH, 2).toFixed(2)}`,
+            `Superficie actuacion (m2): ${roundTo(supActuacion, 2).toFixed(2)}`,
+            `Ahorro (kWh): ${ahorro}`,
+        ].join("\n");
+
+        try {
+            await navigator.clipboard.writeText(resumen);
+            setDraftError(null);
+            setDraftMsg(`Datos clave del expediente ${rcNormalized} copiados al portapapeles.`);
+        } catch {
+            setDraftError("No se pudo copiar al portapapeles. Revisa permisos del navegador.");
+        }
+    };
+
     const prepararSiguienteLote = async () => {
         const completedInUi = draftQueue.filter((item) => item.status === "completado").length;
         const pendingInUi = draftQueue.length - completedInUi;
@@ -3175,6 +3205,15 @@ export function CalculadoraTermica() {
                             Preparar siguiente lote
                         </button>
                         <button
+                            onClick={() => copiarDatosClavePDF()}
+                            disabled={draftLoading || draftSaving}
+                            className="h-8 px-3 rounded-md bg-teal-900/30 border border-teal-700/40 text-teal-300 hover:bg-teal-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                            title="Copia RC, S, % envolvente y ahorro para pegar en PDF sin errores"
+                        >
+                            <Copy className="h-3.5 w-3.5" />
+                            Copiar datos PDF
+                        </button>
+                        <button
                             onClick={() => exportarLoteCSV()}
                             disabled={queueTotal === 0}
                             className="ml-auto h-8 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
@@ -3213,7 +3252,7 @@ export function CalculadoraTermica() {
                             title="Importar backup JSON o ZIP"
                         >
                             <UploadCloud className="h-3.5 w-3.5" />
-                            Restaurar
+                            Importar backup
                         </button>
                         <button
                             onClick={() => archivarCompletados()}
