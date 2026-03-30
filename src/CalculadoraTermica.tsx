@@ -1252,22 +1252,41 @@ export function CalculadoraTermica() {
             // Integración Catastro automática: la altitud puede resolverse solo con RC.
             if (parsed.rc) {
                 setXmlImportMsg(finalMsg + " Verificando datos climáticos con Catastro...");
-                const { altitude, zone } = await fetchAltitudeAndProvince(parsed.rc, parsed.provincia || "", parsed.municipio || "");
+                const { altitude, zone, zoneProvince, detectedProvince } = await fetchAltitudeAndProvince(
+                    parsed.rc,
+                    parsed.provincia || "",
+                    parsed.municipio || "",
+                );
                 let catastroMsg = "";
+
+                if (detectedProvince && !parsed.provincia) {
+                    setProvinciaInmueble(detectedProvince);
+                    catastroMsg += ` ✅ Provincia detectada en Catastro: ${detectedProvince}.`;
+                }
 
                 if (altitude !== null) {
                     setAlturaMsnm(altitude.toString());
                     catastroMsg += ` ✅ Altura Catastro: ${altitude}m.`;
                 }
                 if (zone !== null) {
-                    // Check mismatch
-                    if (newZonaKey && zone !== newZonaKey && VALORES_G[zone] !== undefined) {
-                        catastroMsg += ` ⚠️ ATENCIÓN: CE3X indica zona ${newZonaKey}, pero la real calculada es ${zone}. Por favor corrige en CE3X.`;
-                    } else {
-                        catastroMsg += ` ✅ Zona climática coincide (${zone}).`;
+                    const zoneKnown = VALORES_G[zone] !== undefined;
+                    if (zoneKnown) {
+                        setZonaKey(zone);
                     }
-                } else if (altitude !== null && !parsed.provincia) {
-                    catastroMsg += " ℹ️ Zona no calculada: el XML no incluye provincia.";
+
+                    if (newZonaKey && zone !== newZonaKey && zoneKnown) {
+                        catastroMsg += ` ⚠️ ATENCIÓN: CE3X indica zona ${newZonaKey}, pero Catastro calcula ${zone}. Se actualizó la zona en el formulario.`;
+                    } else if (newZonaKey) {
+                        catastroMsg += ` ✅ Zona climática coincide (${zone}).`;
+                    } else {
+                        catastroMsg += ` ✅ Zona climática calculada automáticamente: ${zone}${zoneProvince ? ` (${zoneProvince})` : ""}.`;
+                    }
+                } else if (altitude !== null) {
+                    if (zoneProvince) {
+                        catastroMsg += ` ℹ️ Altura calculada, pero no se pudo mapear la zona para provincia ${zoneProvince}.`;
+                    } else {
+                        catastroMsg += " ℹ️ Altura calculada, pero no se pudo determinar provincia para obtener zona climática.";
+                    }
                 }
                 if (catastroMsg) {
                     setXmlImportMsg(finalMsg + catastroMsg);
