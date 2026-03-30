@@ -107,14 +107,12 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
         return null;
     })();
 
-    const renderView = () => {
+    const renderNonCalculatorView = () => {
         switch (activeView) {
             case "central-documental":
                 return <CentralDocumental />;
             case "consulta-catastral":
                 return <ConsultaCatastral />;
-            case "calculadora":
-                return <CalculadoraTermica />;
             case "clientes":
                 return <ClientesView />;
             case "mis-proyectos":
@@ -266,7 +264,12 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
                     </div>
 
                     <div className="flex-1 overflow-hidden">
-                        {renderView()}
+                        <div className={activeView === "calculadora" ? "h-full" : "hidden"}>
+                            <CalculadoraTermica />
+                        </div>
+                        <div className={activeView === "calculadora" ? "hidden" : "h-full"}>
+                            {renderNonCalculatorView()}
+                        </div>
                     </div>
                 </div>
             </main>
