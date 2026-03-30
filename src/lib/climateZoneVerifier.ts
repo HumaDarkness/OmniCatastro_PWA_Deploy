@@ -1,4 +1,6 @@
 // climateZoneVerifier.ts
+import proj4 from "proj4";
+
 export const ZONES_DATA: Record<string, { limit: number; newZone: string }[]> = {
     "Albacete": [{ limit: 50, newZone: "C3" }, { limit: 500, newZone: "D3" }, { limit: 1000, newZone: "E1" }, { limit: 1301, newZone: "E1" }],
     "Alicante/Alacant": [{ limit: 250, newZone: "B4" }, { limit: 700, newZone: "C3" }, { limit: 1301, newZone: "D3" }],
@@ -146,31 +148,70 @@ export function obtenerZona(provincia: string, altura: number): string | null {
     return thresholds[thresholds.length - 1].newZone;
 }
 
+const UTM_ZONE_28_PROVINCES = ["palmas", "tenerife"];
+const EPSG_25830 = "EPSG:25830";
+const EPSG_25828 = "EPSG:25828";
+let proj4DefsReady = false;
 
-function queryXmlText(doc: Document, selectors: string[]): string {
-    for (const selector of selectors) {
-        const value = doc.querySelector(selector)?.textContent?.trim();
-        if (value) {
-            return value;
+function ensureProj4Defs() {
+    if (proj4DefsReady) return;
+    // ETRS89 / UTM zone 30N (peninsula + Baleares)
+    proj4.defs(EPSG_25830, "+proj=utm +zone=30 +ellps=GRS80 +units=m +no_defs");
+    // ETRS89 / UTM zone 28N (Canarias)
+    proj4.defs(EPSG_25828, "+proj=utm +zone=28 +ellps=GRS80 +units=m +no_defs");
+    proj4DefsReady = true;
+}
+
+function likelyGeographicXY(x: number, y: number): boolean {
+    return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) < 180 && Math.abs(y) < 90;
+}
+
+function resolveUtmZoneByProvince(provinceHint: string): 28 | 30 {
+    const normalized = normalizeText(provinceHint);
+    const isCanary = UTM_ZONE_28_PROVINCES.some((token) => normalized.includes(token));
+    return isCanary ? 28 : 30;
+}
+
+function convertUtmToWgs84(
+    x: number,
+    y: number,
+    provinceHint: string,
+): { lat: number; lon: number } | null {
+    try {
+        ensureProj4Defs();
+        const zone = resolveUtmZoneByProvince(provinceHint);
+        const sourceEpsg = zone === 28 ? EPSG_25828 : EPSG_25830;
+        const [lon, lat] = proj4(sourceEpsg, "EPSG:4326", [x, y]);
+
+        if (!likelyGeographicXY(lon, lat)) {
+            return null;
         }
+
+        return { lat, lon };
+    } catch (error) {
+        console.warn("UTM -> WGS84 conversion failed", error);
+        return null;
     }
-    return "";
+}
+
+function queryXmlTag(xmlData: string, tag: string): string {
+    const regex = new RegExp(`<(?:\\w+:)?${tag}>([^<]+)</(?:\\w+:)?${tag}>`, "i");
+    const match = xmlData.match(regex);
+    return match?.[1]?.trim() ?? "";
 }
 
 function extractProvinceFromCatastroXml(xmlData: string): string {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(xmlData, "application/xml");
+    const provinceFromTag =
+        queryXmlTag(xmlData, "np")
+        || queryXmlTag(xmlData, "nprov")
+        || queryXmlTag(xmlData, "provincia")
+        || queryXmlTag(xmlData, "Provincia");
 
-    if (doc.querySelector("parsererror")) {
-        return "";
-    }
-
-    const provinceFromTag = queryXmlText(doc, ["np", "nprov", "provincia", "Provincia"]);
     if (provinceFromTag) {
         return provinceFromTag;
     }
 
-    const ldt = queryXmlText(doc, ["ldt", "LDT"]);
+    const ldt = queryXmlTag(xmlData, "ldt") || queryXmlTag(xmlData, "LDT");
     if (ldt) {
         const match = ldt.match(/\(([^()]+)\)\s*$/);
         if (match?.[1]) {
@@ -179,6 +220,76 @@ function extractProvinceFromCatastroXml(xmlData: string): string {
     }
 
     return "";
+}
+
+function extractCoordinatesFromCatastroXml(
+    xmlData: string,
+    provinceHint: string,
+): { lat: number; lon: number } | null {
+    const latRaw = queryXmlTag(xmlData, "lat");
+    const lonRaw = queryXmlTag(xmlData, "lon");
+
+    if (latRaw && lonRaw) {
+        const lat = Number.parseFloat(latRaw);
+        const lon = Number.parseFloat(lonRaw);
+        if (likelyGeographicXY(lon, lat)) {
+            return { lat, lon };
+        }
+    }
+
+    const xRaw = queryXmlTag(xmlData, "xcen");
+    const yRaw = queryXmlTag(xmlData, "ycen");
+    if (xRaw && yRaw) {
+        const x = Number.parseFloat(xRaw);
+        const y = Number.parseFloat(yRaw);
+        if (likelyGeographicXY(x, y)) {
+            return { lat: y, lon: x };
+        }
+
+        const converted = convertUtmToWgs84(x, y, provinceHint);
+        if (converted) {
+            return converted;
+        }
+    }
+
+    const geoMatch = xmlData.match(/<(?:\w+:)?geo>([-\d.]+),([-\d.]+)<\/(?:\w+:)?geo>/i);
+    if (geoMatch) {
+        const lat = Number.parseFloat(geoMatch[1]);
+        const lon = Number.parseFloat(geoMatch[2]);
+        if (likelyGeographicXY(lon, lat)) {
+            return { lat, lon };
+        }
+    }
+
+    return null;
+}
+
+async function fetchCatastroCoordinatesXml(catastroUrl: string): Promise<string> {
+    const candidates = [
+        catastroUrl,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(catastroUrl)}`,
+    ];
+
+    let lastError: unknown = null;
+    for (const candidateUrl of candidates) {
+        try {
+            const response = await fetch(candidateUrl);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const text = await response.text();
+            if (text.includes("<consulta_coordenadas") || text.includes("<coordenadas")) {
+                return text;
+            }
+
+            throw new Error("Respuesta no reconocida de Catastro");
+        } catch (error) {
+            lastError = error;
+        }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("No fue posible consultar coordenadas en Catastro");
 }
 
 
@@ -192,62 +303,25 @@ export async function fetchAltitudeAndProvince(
     }
     const rc14 = rc.substring(0, 14);
 
-    // Call catastro API to get coordinates (Using AllOrigins proxy to avoid CORS)
+    // Call Catastro API to get coordinates.
+    // We try direct call first (Catastro now serves CORS headers) and keep proxy fallback.
     // IMPORTANT: We omit Provincia&Municipio because CE3X municipality names often don't match
     // the exact Catastro registry names, causing "EL MUNICIPIO NO EXISTE" errors.
     // The RC alone is sufficient to identify the property.
     const catastroUrl = `https://ovc.catastro.meh.es/ovcservweb/OVCSWLocalizacionRC/OVCCoordenadas.asmx/Consulta_CPMRC?Provincia=&Municipio=&SRS=EPSG:4258&RC=${encodeURIComponent(rc14)}`;
-    const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(catastroUrl)}`;
-
-    let lat: number | null = null;
-    let lon: number | null = null;
 
     try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error("API call failed");
-        const xmlData = await response.text();
+        const xmlData = await fetchCatastroCoordinatesXml(catastroUrl);
         const detectedProvince = extractProvinceFromCatastroXml(xmlData);
+        const provinceHint = (prov || detectedProvince || "").trim();
+        const coordinates = extractCoordinatesFromCatastroXml(xmlData, provinceHint);
 
-        // 1. Intentar buscar <lat> y <lon> explícitos
-        const latMatch = xmlData.match(/<lat>([\d\.-]+)<\/lat>/);
-        const lonMatch = xmlData.match(/<lon>([\d\.-]+)<\/lon>/);
-
-        if (latMatch && lonMatch) {
-            lat = parseFloat(latMatch[1]);
-            lon = parseFloat(lonMatch[1]);
-        } else {
-            // 2. Intentar buscar <xcen> y <ycen> (muy común en respuestas de Catastro)
-            const xcenMatch = xmlData.match(/<xcen>([\d\.-]+)<\/xcen>/);
-            const ycenMatch = xmlData.match(/<ycen>([\d\.-]+)<\/ycen>/);
-
-            if (xcenMatch && ycenMatch) {
-                const x = parseFloat(xcenMatch[1]);
-                const y = parseFloat(ycenMatch[1]);
-
-                // Si los valores son pequeños (< 180), son geográficas directas (ETRS89 ~ WGS84)
-                if (Math.abs(x) < 180 && Math.abs(y) < 90) {
-                    lon = x;
-                    lat = y;
-                } else {
-                    // Son coordenadas UTM. Por ahora, si no tenemos conversor robusto JS (proj4),
-                    // avisaremos o intentaremos un fallback. 
-                    // En la mayoría de casos urbanos, Catastro devuelve geográficas si se pide EPSG:4258.
-                    console.warn("Detected UTM coordinates but no JS converter is present. Altitude might fail.");
-                }
-            } else {
-                // 3. Fallback <geo>x,y</geo>
-                const geoMatch = xmlData.match(/<geo>([\d\.-]+),([\d\.-]+)<\/geo>/);
-                if (geoMatch) {
-                    lat = parseFloat(geoMatch[1]);
-                    lon = parseFloat(geoMatch[2]);
-                }
-            }
-        }
-
-        if (lat === null || lon === null) {
+        if (!coordinates) {
             console.warn("Could not determine lat/lon from catastro response.");
             return { altitude: null, zone: null, zoneProvince: null, detectedProvince: detectedProvince || null };
         }
+
+        const { lat, lon } = coordinates;
 
         // Call open-meteo (Elevation API)
         const elevUrl = `https://api.open-meteo.com/v1/elevation?latitude=${lat}&longitude=${lon}`;
