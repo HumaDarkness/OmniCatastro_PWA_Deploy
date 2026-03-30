@@ -48,6 +48,7 @@ import {
 } from "./lib/intelliaCertificatePdf";
 import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 import { fetchAltitudeAndProvince } from "./lib/climateZoneVerifier";
+import { consultarCatastro, esParcerlaMultiple, extraerDatosInmuebleUnico } from "./lib/catastroService";
 import {
     CertificadoCapturasPanelControlado,
     createEmptyCapturasState,
@@ -392,6 +393,11 @@ interface BatchProgress {
     detail?: string;
 }
 
+interface CatastroVerificationBanner {
+    tone: "ok" | "warning" | "info";
+    message: string;
+}
+
 interface ImportAuditEntry {
     at: string;
     importedByUserId: string | null;
@@ -507,6 +513,31 @@ function cloneInitialCapas(): CapaMaterial[] {
 
 function normalizeRc(value: string): string {
     return value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+}
+
+function normalizeLocationText(value: string): string {
+    return value
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .replace(/\bC\/?\b/g, "CALLE")
+        .replace(/\bCL\b/g, "CALLE")
+        .replace(/\bAVDA\b/g, "AVENIDA")
+        .replace(/\bAV\b/g, "AVENIDA")
+        .replace(/[^A-Z0-9]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function locationValuesMatch(xmlValue: string, catastroValue: string): boolean {
+    const xml = normalizeLocationText(xmlValue);
+    const catastro = normalizeLocationText(catastroValue);
+
+    if (!xml || !catastro) return false;
+    if (xml === catastro) return true;
+
+    // Some Catastro strings are abbreviated/extended compared to CE3X.
+    return xml.includes(catastro) || catastro.includes(xml);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -741,6 +772,7 @@ export function CalculadoraTermica() {
     const [clienteDni, setClienteDni] = useState("");
     const [clienteDireccionDni, setClienteDireccionDni] = useState("");
     const [xmlImportMsg, setXmlImportMsg] = useState<string | null>(null);
+    const [catastroVerificationBanner, setCatastroVerificationBanner] = useState<CatastroVerificationBanner | null>(null);
     const [xmlFileName, setXmlFileName] = useState("");
     const [direccionInmueble, setDireccionInmueble] = useState("");
     const [municipioInmueble, setMunicipioInmueble] = useState("");
@@ -1180,6 +1212,172 @@ export function CalculadoraTermica() {
         }
     };
 
+    const verificarCatastroDesdeDatos = async ({
+        rc,
+        zonaXml,
+        direccionXml,
+        municipioXml,
+        provinciaXml,
+        cpXml,
+        baseMsg,
+    }: {
+        rc: string;
+        zonaXml?: string;
+        direccionXml?: string;
+        municipioXml?: string;
+        provinciaXml?: string;
+        cpXml?: string;
+        baseMsg: string;
+    }) => {
+        const rcNormalized = normalizeRc(rc);
+        if (!rcNormalized) {
+            setCatastroVerificationBanner({
+                tone: "warning",
+                message: "⚠️ No se pudo verificar Catastro porque falta la referencia catastral.",
+            });
+            setXmlImportMsg(baseMsg);
+            return;
+        }
+
+        setXmlImportMsg(baseMsg + " Verificando Catastro (altura, zona y ubicación)...");
+
+        const [climateCheck, catastroCheck] = await Promise.all([
+            fetchAltitudeAndProvince(rcNormalized, provinciaXml || "", municipioXml || ""),
+            consultarCatastro(rcNormalized),
+        ]);
+
+        let climateMsg = "";
+        const xmlZona = (zonaXml || "").trim();
+        const xmlProvincia = (provinciaXml || "").trim();
+
+        if (climateCheck.detectedProvince && !xmlProvincia) {
+            setProvinciaInmueble(climateCheck.detectedProvince);
+            climateMsg += ` ✅ Provincia detectada en Catastro: ${climateCheck.detectedProvince}.`;
+        }
+
+        if (climateCheck.altitude !== null) {
+            setAlturaMsnm(String(climateCheck.altitude));
+            climateMsg += ` ✅ Altura Catastro: ${climateCheck.altitude}m.`;
+        } else {
+            climateMsg += " ⚠️ No se pudo obtener altura automáticamente.";
+        }
+
+        if (climateCheck.zone !== null) {
+            const zoneKnown = VALORES_G[climateCheck.zone] !== undefined;
+            if (zoneKnown) {
+                setZonaKey(climateCheck.zone);
+            }
+
+            if (xmlZona && climateCheck.zone !== xmlZona && zoneKnown) {
+                climateMsg += ` ⚠️ CE3X indica ${xmlZona}, Catastro calcula ${climateCheck.zone}. Zona actualizada en formulario.`;
+            } else if (xmlZona) {
+                climateMsg += ` ✅ Zona climática coincide (${climateCheck.zone}).`;
+            } else {
+                climateMsg += ` ✅ Zona climática calculada automáticamente: ${climateCheck.zone}${climateCheck.zoneProvince ? ` (${climateCheck.zoneProvince})` : ""}.`;
+            }
+        } else if (climateCheck.altitude !== null) {
+            if (climateCheck.zoneProvince) {
+                climateMsg += ` ℹ️ Altura calculada, pero no se pudo mapear zona para ${climateCheck.zoneProvince}.`;
+            } else {
+                climateMsg += " ℹ️ Altura calculada, pero no se pudo determinar provincia para mapear zona.";
+            }
+        }
+
+        let locationTone: CatastroVerificationBanner["tone"] = "info";
+        let locationMsg = "ℹ️ Verificación de ubicación no disponible.";
+
+        if (catastroCheck.error) {
+            locationTone = "warning";
+            locationMsg = `⚠️ No se pudo validar dirección/municipio/provincia con Catastro: ${catastroCheck.error}`;
+        } else if (catastroCheck.datos) {
+            const { multiple } = esParcerlaMultiple(catastroCheck.datos);
+            if (multiple) {
+                locationTone = "info";
+                locationMsg = "ℹ️ RC con múltiples inmuebles; la verificación de ubicación es parcial.";
+            } else {
+                const catastroInfo = extraerDatosInmuebleUnico(catastroCheck.datos);
+                const catDireccion = (catastroInfo.direccion || "").trim();
+                const catMunicipio = (catastroInfo.municipio || "").trim();
+                const catProvincia = (catastroInfo.provincia || "").trim();
+                const catCp = (catastroInfo.codigoPostal || "").trim();
+
+                const autoFilled: string[] = [];
+                if (!(direccionXml || "").trim() && catDireccion) {
+                    setDireccionInmueble(catDireccion);
+                    autoFilled.push("dirección");
+                }
+                if (!(municipioXml || "").trim() && catMunicipio) {
+                    setMunicipioInmueble(catMunicipio);
+                    autoFilled.push("municipio");
+                }
+                if (!(provinciaXml || "").trim() && catProvincia) {
+                    setProvinciaInmueble(catProvincia);
+                    autoFilled.push("provincia");
+                }
+                if (!(cpXml || "").trim() && catCp) {
+                    setCpInmueble(catCp);
+                    autoFilled.push("CP");
+                }
+
+                const checks = [
+                    { label: "Dirección", xml: (direccionXml || "").trim(), catastro: catDireccion },
+                    { label: "Municipio", xml: (municipioXml || "").trim(), catastro: catMunicipio },
+                    { label: "Provincia", xml: (provinciaXml || "").trim(), catastro: catProvincia },
+                ];
+
+                let matches = 0;
+                const mismatches: string[] = [];
+
+                for (const check of checks) {
+                    if (!check.xml || !check.catastro) continue;
+                    if (locationValuesMatch(check.xml, check.catastro)) {
+                        matches += 1;
+                    } else {
+                        mismatches.push(check.label);
+                    }
+                }
+
+                if (mismatches.length > 0) {
+                    locationTone = "warning";
+                    locationMsg = `⚠️ Ubicación XML vs Catastro: ${matches}/3 campos coinciden. Revisar: ${mismatches.join(", ")}.`;
+                } else if (matches === 3) {
+                    locationTone = "ok";
+                    locationMsg = "✅ Ubicación verificada: dirección, municipio y provincia coinciden con Catastro.";
+                } else {
+                    locationTone = "info";
+                    locationMsg = `ℹ️ Verificación parcial de ubicación (${matches}/3 coincidencias con datos completos).`;
+                }
+
+                if (autoFilled.length > 0) {
+                    locationMsg += ` Autocompletado desde Catastro: ${autoFilled.join(", ")}.`;
+                }
+            }
+        }
+
+        setCatastroVerificationBanner({ tone: locationTone, message: locationMsg });
+        setXmlImportMsg([baseMsg, climateMsg, locationMsg].filter(Boolean).join(" "));
+    };
+
+    const revalidarCatastroActual = async () => {
+        if (!normalizeRc(expedienteRc)) {
+            setCatastroVerificationBanner({
+                tone: "warning",
+                message: "⚠️ Define una referencia catastral para ejecutar la verificación.",
+            });
+            return;
+        }
+
+        await verificarCatastroDesdeDatos({
+            rc: expedienteRc,
+            zonaXml: zonaKey,
+            direccionXml: direccionInmueble,
+            municipioXml: municipioInmueble,
+            provinciaXml: provinciaInmueble,
+            cpXml: cpInmueble,
+            baseMsg: "Verificación Catastro manual ejecutada.",
+        });
+    };
+
     const importarXmlCE3X = async (file?: File) => {
         if (!file) return;
 
@@ -1190,6 +1388,8 @@ export function CalculadoraTermica() {
         setClienteLastName2("");
         setClienteDni("");
         setDniLookupMsg(null);
+        setCatastroVerificationBanner(null);
+        setAlturaMsnm("");
 
         try {
             const text = await file.text();
@@ -1249,50 +1449,21 @@ export function CalculadoraTermica() {
             if (parsed.codigoPostal) setCpInmueble(parsed.codigoPostal);
             if (parsed.provincia) setProvinciaInmueble(parsed.provincia);
 
-            // Integración Catastro automática: la altitud puede resolverse solo con RC.
             if (parsed.rc) {
-                setXmlImportMsg(finalMsg + " Verificando datos climáticos con Catastro...");
-                const { altitude, zone, zoneProvince, detectedProvince } = await fetchAltitudeAndProvince(
-                    parsed.rc,
-                    parsed.provincia || "",
-                    parsed.municipio || "",
-                );
-                let catastroMsg = "";
-
-                if (detectedProvince && !parsed.provincia) {
-                    setProvinciaInmueble(detectedProvince);
-                    catastroMsg += ` ✅ Provincia detectada en Catastro: ${detectedProvince}.`;
-                }
-
-                if (altitude !== null) {
-                    setAlturaMsnm(altitude.toString());
-                    catastroMsg += ` ✅ Altura Catastro: ${altitude}m.`;
-                }
-                if (zone !== null) {
-                    const zoneKnown = VALORES_G[zone] !== undefined;
-                    if (zoneKnown) {
-                        setZonaKey(zone);
-                    }
-
-                    if (newZonaKey && zone !== newZonaKey && zoneKnown) {
-                        catastroMsg += ` ⚠️ ATENCIÓN: CE3X indica zona ${newZonaKey}, pero Catastro calcula ${zone}. Se actualizó la zona en el formulario.`;
-                    } else if (newZonaKey) {
-                        catastroMsg += ` ✅ Zona climática coincide (${zone}).`;
-                    } else {
-                        catastroMsg += ` ✅ Zona climática calculada automáticamente: ${zone}${zoneProvince ? ` (${zoneProvince})` : ""}.`;
-                    }
-                } else if (altitude !== null) {
-                    if (zoneProvince) {
-                        catastroMsg += ` ℹ️ Altura calculada, pero no se pudo mapear la zona para provincia ${zoneProvince}.`;
-                    } else {
-                        catastroMsg += " ℹ️ Altura calculada, pero no se pudo determinar provincia para obtener zona climática.";
-                    }
-                }
-                if (catastroMsg) {
-                    setXmlImportMsg(finalMsg + catastroMsg);
-                } else {
-                    setXmlImportMsg(finalMsg + " ⚠️ No se pudo verificar la altura / zona automáticamente.");
-                }
+                await verificarCatastroDesdeDatos({
+                    rc: parsed.rc,
+                    zonaXml: newZonaKey,
+                    direccionXml: parsed.direccion,
+                    municipioXml: parsed.municipio,
+                    provinciaXml: parsed.provincia,
+                    cpXml: parsed.codigoPostal,
+                    baseMsg: finalMsg,
+                });
+            } else {
+                setCatastroVerificationBanner({
+                    tone: "warning",
+                    message: "⚠️ XML sin referencia catastral: no se pudo verificar Catastro automáticamente.",
+                });
             }
 
         } catch {
@@ -1301,6 +1472,7 @@ export function CalculadoraTermica() {
             setClienteLastName1("");
             setClienteLastName2("");
             setClienteDni("");
+            setCatastroVerificationBanner(null);
             setXmlImportMsg("No se pudo importar el XML CE3X. Revisa el archivo.");
         }
     };
@@ -3591,7 +3763,7 @@ export function CalculadoraTermica() {
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
                         <label className="h-10 inline-flex items-center justify-center gap-2 px-4 rounded-md border border-dashed border-cyan-700/50 text-cyan-300 hover:bg-cyan-900/20 cursor-pointer transition-colors">
                             <UploadCloud className="h-4 w-4" />
                             Importar XML CE3X
@@ -3606,6 +3778,16 @@ export function CalculadoraTermica() {
                         <div className="h-10 flex items-center rounded-md bg-slate-900/50 border border-slate-700 px-3 text-xs text-slate-400">
                             {xmlFileName ? `Archivo: ${xmlFileName}` : "Sin XML cargado"}
                         </div>
+
+                        <button
+                            type="button"
+                            onClick={() => void revalidarCatastroActual()}
+                            disabled={!normalizeRc(expedienteRc)}
+                            className="h-10 inline-flex items-center justify-center gap-2 px-4 rounded-md border border-emerald-700/40 text-emerald-300 hover:bg-emerald-900/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            <Search className="h-4 w-4" />
+                            Revalidar Catastro
+                        </button>
                     </div>
 
                     {xmlImportMsg && (
@@ -3614,6 +3796,17 @@ export function CalculadoraTermica() {
                             : "text-cyan-300 bg-cyan-500/10 border-cyan-500/30"
                             }`}>
                             {xmlImportMsg}
+                        </div>
+                    )}
+
+                    {catastroVerificationBanner && (
+                        <div className={`text-xs px-3 py-2 rounded-md border ${catastroVerificationBanner.tone === "warning"
+                            ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
+                            : catastroVerificationBanner.tone === "ok"
+                                ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"
+                                : "text-sky-300 bg-sky-500/10 border-sky-500/30"
+                            }`}>
+                            {catastroVerificationBanner.message}
                         </div>
                     )}
 
