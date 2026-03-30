@@ -378,6 +378,8 @@ const CERT_DRAFT_FOLDER = "certificados";
 const CERT_INDEX_FILENAME = "_index.json";
 const CERT_ARCHIVE_INDEX_FILENAME = "_archived_index.json";
 const CERT_IMPORT_AUDIT_FILENAME = "_import_audit.json";
+const CERT_ISSUED_INDEX_FILENAME = "_issued_index.json";
+const CERT_ISSUED_FOLDER = "emitidos";
 const BACKUP_ZIP_VERSION = 2;
 const LEGACY_CERT_PREFIX = "cert_";
 
@@ -407,6 +409,27 @@ interface ImportAuditEntry {
     rc: string;
     action: ImportAuditAction;
     detail?: string;
+}
+
+type IssuedCertificateType = "anexo_e1_pdf" | "intellia_pdf";
+
+interface IssuedCertificateRecord {
+    id: string;
+    rc: string;
+    type: IssuedCertificateType;
+    fileName: string;
+    storagePath: string;
+    issuedAt: string;
+    clienteNombre: string;
+    clienteDni: string;
+    zonaKey: string;
+    alturaMsnm: string;
+    ahorroKwh: number;
+}
+
+interface GeneratedCertificatePdf {
+    fileName: string;
+    blob: Blob;
 }
 
 interface BackupEnvelope {
@@ -513,6 +536,13 @@ function cloneInitialCapas(): CapaMaterial[] {
 
 function normalizeRc(value: string): string {
     return value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+}
+
+function sanitizeSegmentForPath(value: string, fallback: string): string {
+    const cleaned = value
+        .replace(/[^a-zA-Z0-9._-]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+    return cleaned || fallback;
 }
 
 function normalizeLocationText(value: string): string {
@@ -670,6 +700,20 @@ function getImportAuditPath(organizationId: string): string {
     return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_IMPORT_AUDIT_FILENAME}`;
 }
 
+function getIssuedIndexPath(organizationId: string): string {
+    return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_ISSUED_INDEX_FILENAME}`;
+}
+
+function getLegacyIssuedIndexPath(organizationId: string): string {
+    return `${CERT_DRAFT_FOLDER}/${organizationId}/${CERT_ISSUED_INDEX_FILENAME}`;
+}
+
+function getIssuedPdfPath(organizationId: string, rc: string, fileName: string): string {
+    const safeRc = sanitizeSegmentForPath(normalizeRc(rc), "SIN_RC");
+    const safeFileName = sanitizeSegmentForPath(fileName, "certificado.pdf");
+    return `${organizationId}/${CERT_DRAFT_FOLDER}/${CERT_ISSUED_FOLDER}/${safeRc}/${safeFileName}`;
+}
+
 function getLegacyDraftPath(organizationId: string, rc: string): string {
     return `${CERT_DRAFT_FOLDER}/${organizationId}/${normalizeRc(rc)}.json`;
 }
@@ -787,6 +831,7 @@ export function CalculadoraTermica() {
     } | null>(null);
     const [draftQueue, setDraftQueue] = useState<CertificateDraftIndexItem[]>([]);
     const [archivedQueue, setArchivedQueue] = useState<CertificateDraftIndexItem[]>([]);
+    const [issuedCertificatesCount, setIssuedCertificatesCount] = useState(0);
     const [showArchivedQueuePanel, setShowArchivedQueuePanel] = useState(false);
     const [queueSearch, setQueueSearch] = useState("");
     const [archivedSearch, setArchivedSearch] = useState("");
@@ -1627,7 +1672,59 @@ export function CalculadoraTermica() {
         }
     };
 
-    const generarCertificadoIntelliaPDF = () => {
+    const registrarCertificadoEmitido = async (
+        type: IssuedCertificateType,
+        generatedPdf: GeneratedCertificatePdf,
+    ): Promise<boolean> => {
+        if (!supabase) return false;
+
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const rcNormalized = normalizeRc(expedienteRc) || "SIN_RC";
+            const safeFileName = sanitizeSegmentForPath(generatedPdf.fileName, `${type}.pdf`);
+            const storagePath = getIssuedPdfPath(organizationId, rcNormalized, safeFileName);
+
+            const { error: uploadError } = await supabase.storage.from("work_photos").upload(storagePath, generatedPdf.blob, {
+                upsert: true,
+                contentType: "application/pdf",
+            });
+
+            if (uploadError) {
+                throw uploadError;
+            }
+
+            const current = await loadIssuedCertificatesIndex(organizationId);
+            const fullClientName = [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2]
+                .filter(Boolean)
+                .join(" ")
+                .trim();
+
+            const nextRecord: IssuedCertificateRecord = {
+                id: `${Date.now()}_${type}_${rcNormalized}`,
+                rc: rcNormalized,
+                type,
+                fileName: safeFileName,
+                storagePath,
+                issuedAt: new Date().toISOString(),
+                clienteNombre: fullClientName,
+                clienteDni: clienteDni.trim(),
+                zonaKey,
+                alturaMsnm: alturaMsnm.trim(),
+                ahorroKwh: Math.round(resultado?.ahorro ?? 0),
+            };
+
+            const merged = [nextRecord, ...current.filter((item) => item.storagePath !== storagePath)].slice(0, 1500);
+            await saveIssuedCertificatesIndex(organizationId, merged);
+            setIssuedCertificatesCount(merged.length);
+            return true;
+        } catch (error: any) {
+            console.error("No se pudo registrar certificado emitido", error);
+            setDraftError(`PDF generado, pero no se pudo guardar en historial cloud: ${error?.message ?? "error desconocido"}`);
+            return false;
+        }
+    };
+
+    const generarCertificadoIntelliaPDF = async () => {
         if (!resultado) {
             setDraftError("Primero calcula el expediente para generar el PDF INTELLIA.");
             return;
@@ -1636,11 +1733,43 @@ export function CalculadoraTermica() {
         try {
             const input = buildIntelliaTemplateInput(resultado);
             const fileName = buildIntelliaCertificateFilename(expedienteRc);
-            generarPDFCertificadoIntellia(input, fileName);
+            const generatedPdf = generarPDFCertificadoIntellia(input, fileName);
             setDraftError(null);
-            setDraftMsg(`PDF INTELLIA generado: ${fileName}`);
+            const registered = await registrarCertificadoEmitido("intellia_pdf", generatedPdf);
+            setDraftMsg(
+                registered
+                    ? `PDF INTELLIA generado y guardado en historial cloud: ${fileName}`
+                    : `PDF INTELLIA generado localmente: ${fileName}`,
+            );
         } catch {
             setDraftError("No se pudo generar el PDF INTELLIA. Revisa la consola del navegador.");
+        }
+    };
+
+    const generarAnexoE1PDF = async () => {
+        if (!resultado) {
+            setDraftError("Primero calcula el expediente para generar el Anexo E.1.");
+            return;
+        }
+
+        try {
+            const rcForName = normalizeRc(expedienteRc) || "SIN_RC";
+            const fileName = `Anexo_E1_${rcForName}.pdf`;
+            const generatedPdf = generarPDFAnexoE1(capas, resultado, fileName);
+            if (!generatedPdf) {
+                setDraftError("No se pudo generar el PDF del Anexo E.1.");
+                return;
+            }
+
+            setDraftError(null);
+            const registered = await registrarCertificadoEmitido("anexo_e1_pdf", generatedPdf);
+            setDraftMsg(
+                registered
+                    ? `Anexo E.1 generado y guardado en historial cloud: ${fileName}`
+                    : `Anexo E.1 generado localmente: ${fileName}`,
+            );
+        } catch {
+            setDraftError("No se pudo generar el PDF del Anexo E.1. Revisa la consola del navegador.");
         }
     };
 
@@ -1740,6 +1869,38 @@ export function CalculadoraTermica() {
             .filter((it) => Boolean(it.rc));
     };
 
+    const normalizeIssuedCertificateRecords = (items: IssuedCertificateRecord[]): IssuedCertificateRecord[] => {
+        return items
+            .filter((it) => typeof it?.rc === "string")
+            .map((it) => {
+                const normalizedRc = normalizeRc(String(it.rc ?? ""));
+                const type: IssuedCertificateType = it.type === "anexo_e1_pdf" ? "anexo_e1_pdf" : "intellia_pdf";
+                const fileName = sanitizeSegmentForPath(String(it.fileName ?? ""), `${type}.pdf`);
+                const storagePath = typeof it.storagePath === "string" && it.storagePath.trim()
+                    ? it.storagePath
+                    : "";
+                return {
+                    id: typeof it.id === "string" && it.id.trim()
+                        ? it.id
+                        : `${Date.now()}_${type}_${normalizedRc || "SIN_RC"}`,
+                    rc: normalizedRc,
+                    type,
+                    fileName,
+                    storagePath,
+                    issuedAt: typeof it.issuedAt === "string" && it.issuedAt.trim()
+                        ? it.issuedAt
+                        : new Date().toISOString(),
+                    clienteNombre: typeof it.clienteNombre === "string" ? it.clienteNombre : "",
+                    clienteDni: typeof it.clienteDni === "string" ? it.clienteDni : "",
+                    zonaKey: typeof it.zonaKey === "string" ? it.zonaKey : "",
+                    alturaMsnm: typeof it.alturaMsnm === "string" ? it.alturaMsnm : "",
+                    ahorroKwh: Number.isFinite(Number(it.ahorroKwh)) ? Number(it.ahorroKwh) : 0,
+                };
+            })
+            .filter((it) => Boolean(it.rc))
+            .sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
+    };
+
     const mergeDraftIndexes = (...groups: CertificateDraftIndexItem[][]): CertificateDraftIndexItem[] => {
         const mergedByRc = new Map<string, CertificateDraftIndexItem>();
 
@@ -1818,6 +1979,47 @@ export function CalculadoraTermica() {
             }
         }
         return null;
+    };
+
+    const loadIssuedCertificatesIndex = async (organizationId: string): Promise<IssuedCertificateRecord[]> => {
+        const resolved = await readStorageTextByCandidates([
+            getIssuedIndexPath(organizationId),
+            getLegacyIssuedIndexPath(organizationId),
+        ]);
+        if (!resolved) return [];
+
+        try {
+            const parsed = JSON.parse(resolved.text) as IssuedCertificateRecord[];
+            if (!Array.isArray(parsed)) return [];
+            return normalizeIssuedCertificateRecords(parsed);
+        } catch {
+            return [];
+        }
+    };
+
+    const saveIssuedCertificatesIndex = async (organizationId: string, items: IssuedCertificateRecord[]) => {
+        const normalizedItems = normalizeIssuedCertificateRecords(items);
+        const blob = new Blob([JSON.stringify(normalizedItems, null, 2)], { type: "application/json" });
+        const { error } = await supabase.storage.from("work_photos").upload(getIssuedIndexPath(organizationId), blob, {
+            upsert: true,
+            contentType: "application/json",
+        });
+        if (error) throw error;
+    };
+
+    const refreshIssuedCertificatesCount = async () => {
+        if (!supabase) {
+            setIssuedCertificatesCount(0);
+            return;
+        }
+
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const issued = await loadIssuedCertificatesIndex(organizationId);
+            setIssuedCertificatesCount(issued.length);
+        } catch {
+            setIssuedCertificatesCount(0);
+        }
     };
 
     const loadDraftIndex = async (organizationId: string): Promise<CertificateDraftIndexItem[]> => {
@@ -2439,6 +2641,67 @@ export function CalculadoraTermica() {
         URL.revokeObjectURL(url);
     };
 
+    const exportarHistorialEmitidosCSV = async () => {
+        if (!supabase) return;
+
+        setDraftLoading(true);
+        setDraftError(null);
+        setDraftMsg(null);
+
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const issued = await loadIssuedCertificatesIndex(organizationId);
+            if (issued.length === 0) {
+                setDraftMsg("No hay certificados emitidos registrados en cloud para exportar.");
+                setIssuedCertificatesCount(0);
+                return;
+            }
+
+            const toCsvCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+            const header = [
+                "RC",
+                "Tipo",
+                "Archivo",
+                "Fecha_emision",
+                "Cliente",
+                "DNI",
+                "Zona",
+                "Altitud_msnm",
+                "Ahorro_kWh",
+                "Ruta_storage",
+            ].join(",");
+
+            const rows = issued.map((item) => [
+                item.rc,
+                item.type,
+                item.fileName,
+                item.issuedAt,
+                item.clienteNombre,
+                item.clienteDni,
+                item.zonaKey,
+                item.alturaMsnm,
+                item.ahorroKwh,
+                item.storagePath,
+            ].map(toCsvCell).join(","));
+
+            const csv = [header, ...rows].join("\n");
+            const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `historial_emitidos_${new Date().toISOString().slice(0, 10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            setIssuedCertificatesCount(issued.length);
+            setDraftMsg(`Historial de emitidos exportado (${issued.length} registro(s)).`);
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudo exportar el historial de emitidos.");
+        } finally {
+            setDraftLoading(false);
+        }
+    };
+
     const exportarBackupJSON = async () => {
         if (draftQueue.length === 0) {
             alert("No hay certificados en la cola para exportar.");
@@ -2887,7 +3150,8 @@ export function CalculadoraTermica() {
     };
 
     useEffect(() => {
-        refreshDraftQueue();
+        void refreshDraftQueue();
+        void refreshIssuedCertificatesCount();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -3458,6 +3722,7 @@ export function CalculadoraTermica() {
                         <span className="px-2 py-1 rounded border border-amber-700/40 text-amber-300 bg-amber-900/20">Pendientes: {queuePending}</span>
                         <span className="px-2 py-1 rounded border border-emerald-700/40 text-emerald-300 bg-emerald-900/20">Completados: {queueCompleted}</span>
                         <span className="px-2 py-1 rounded border border-violet-700/40 text-violet-300 bg-violet-900/20">Archivados: {archivedTotal}</span>
+                        <span className="px-2 py-1 rounded border border-cyan-700/40 text-cyan-300 bg-cyan-900/20">Emitidos cloud: {issuedCertificatesCount}</span>
                         <button
                             onClick={toggleArchivedQueuePanel}
                             className="h-8 px-3 rounded-md bg-violet-900/20 border border-violet-700/40 text-violet-200 hover:bg-violet-800/40 inline-flex items-center gap-1"
@@ -3519,9 +3784,18 @@ export function CalculadoraTermica() {
                             Copiar datos PDF
                         </button>
                         <button
+                            onClick={() => void exportarHistorialEmitidosCSV()}
+                            disabled={draftLoading || issuedCertificatesCount === 0}
+                            className="ml-auto h-8 px-3 rounded-md bg-cyan-900/30 border border-cyan-700/40 text-cyan-300 hover:bg-cyan-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                            title="Exportar historial cloud de certificados emitidos"
+                        >
+                            <FileDown className="h-3.5 w-3.5" />
+                            Historial emitidos CSV
+                        </button>
+                        <button
                             onClick={() => exportarLoteCSV()}
                             disabled={queueTotal === 0}
-                            className="ml-auto h-8 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
+                            className="h-8 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1"
                         >
                             <FileDown className="h-3.5 w-3.5" />
                             Lote CSV
@@ -4663,14 +4937,14 @@ export function CalculadoraTermica() {
                                     {intelliaTemplateCopied ? "Plantilla copiada" : "Plantilla INTELLIA"}
                                 </button>
                                 <button
-                                    onClick={generarCertificadoIntelliaPDF}
+                                    onClick={() => void generarCertificadoIntelliaPDF()}
                                     className="h-11 rounded-md bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 hover:text-emerald-200 transition-all flex items-center justify-center gap-2 ring-1 ring-emerald-500/50"
                                 >
                                     <FileDown className="h-5 w-5" />
                                     Generar PDF INTELLIA
                                 </button>
                                 <button
-                                    onClick={() => generarPDFAnexoE1(capas, resultado)}
+                                    onClick={() => void generarAnexoE1PDF()}
                                     className="h-11 rounded-md bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 hover:text-blue-300 transition-all flex items-center justify-center gap-2 ring-1 ring-blue-500/50"
                                 >
                                     Generar Anexo E.1

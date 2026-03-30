@@ -8,8 +8,17 @@ import autoTable from "jspdf-autotable";
  * térmico y ahorro anual del Certificado de Ahorro Energético (CAE).
  */
 
-export function generarPDFAnexoE1(capas: CapaMaterial[], resultado: ResultadoTermico) {
-    if (!resultado) return;
+export interface GeneratedPdfFile {
+    fileName: string;
+    blob: Blob;
+}
+
+export function generarPDFAnexoE1(
+    capas: CapaMaterial[],
+    resultado: ResultadoTermico,
+    fileName = "Anexo_E1_Transmitancia.pdf",
+): GeneratedPdfFile | null {
+    if (!resultado) return null;
 
     const doc = new jsPDF();
 
@@ -135,6 +144,7 @@ export function generarPDFAnexoE1(capas: CapaMaterial[], resultado: ResultadoTer
     const dateStr = new Date().toLocaleDateString('es-ES');
     doc.text(`Fecha de generación: ${dateStr}`, 14, yPos + 10);
 
-    // Descarga el PDF localmente
-    doc.save("Anexo_E1_Transmitancia.pdf");
+    const blob = doc.output("blob") as Blob;
+    doc.save(fileName);
+    return { fileName, blob };
 }

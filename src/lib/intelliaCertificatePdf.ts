@@ -18,6 +18,11 @@ export interface IntelliaCertificateTemplateInput {
     resultado: ResultadoTermico;
 }
 
+export interface IntelliaGeneratedPdfFile {
+    fileName: string;
+    blob: Blob;
+}
+
 export function buildIntelliaCertificateText(input: IntelliaCertificateTemplateInput): string {
     const {
         fullClientName,
@@ -120,7 +125,7 @@ export function buildIntelliaCertificateFilename(expedienteRc: string): string {
 export function generarPDFCertificadoIntellia(
     input: IntelliaCertificateTemplateInput,
     fileName: string,
-): void {
+): IntelliaGeneratedPdfFile {
     const doc = new jsPDF({
         orientation: "portrait",
         unit: "mm",
@@ -178,5 +183,7 @@ export function generarPDFCertificadoIntellia(
         }
     }
 
+    const blob = doc.output("blob") as Blob;
     doc.save(fileName);
+    return { fileName, blob };
 }
