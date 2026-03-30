@@ -318,29 +318,22 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
 }
 
 function buildXmlImportSummary(parsed: ParsedCE3X): string {
-    const parts = ["XML CE3X importado: superficies y zona actualizadas."];
+    const parts = ["XML CE3X importado."];
 
     if (parsed.clienteNombre) {
-        parts.push(
-            `Cliente detectado: ${parsed.clienteNombre}.`,
-        );
+        parts.push(`Cliente XML: ${parsed.clienteNombre}.`);
     } else {
-        parts.push("Cliente no detectado en XML (completar manual o usar búsqueda por DNI).");
-    }
-
-    parts.push("DNI de cliente: CE3X normalmente no lo trae de forma fiable, úsalo manual o desde BD.");
-
-    if (parsed.tecnicoNombre) {
-        parts.push(`Técnico detectado (referencia): ${parsed.tecnicoNombre}.`);
+        parts.push("Cliente: completar manualmente (el XML no suele traerlo fiable).",);
     }
 
     if (parsed.comunidadAutonoma) {
-        parts.push(`Comunidad Autónoma detectada en XML: ${parsed.comunidadAutonoma}.`);
+        parts.push(`CCAA XML: ${parsed.comunidadAutonoma}.`);
     }
 
     parts.push(
-        `Envolvente aplicada: opacos sin cubierta (${parsed.superficieEnvolvente.toFixed(2)} m²). Huecos detectados aparte: ${parsed.superficieHuecos.toFixed(2)} m².`,
+        `Envolvente útil (opacos sin cubierta): ${parsed.superficieEnvolvente.toFixed(2)} m².`,
     );
+    parts.push(`Huecos (informativo): ${parsed.superficieHuecos.toFixed(2)} m².`);
 
     return parts.join(" ");
 }
@@ -1294,17 +1287,18 @@ export function CalculadoraTermica() {
         let climateMsg = "";
         const xmlZona = (zonaXml || "").trim();
         const xmlProvincia = (provinciaXml || "").trim();
+        const climateParts: string[] = [];
 
         if (climateCheck.detectedProvince && !xmlProvincia) {
             setProvinciaInmueble(climateCheck.detectedProvince);
-            climateMsg += ` ✅ Provincia detectada en Catastro: ${climateCheck.detectedProvince}.`;
+            climateParts.push(`Provincia autocompletada: ${climateCheck.detectedProvince}.`);
         }
 
         if (climateCheck.altitude !== null) {
             setAlturaMsnm(String(climateCheck.altitude));
-            climateMsg += ` ✅ Altura Catastro: ${climateCheck.altitude}m.`;
+            climateParts.push(`Altura Catastro: ${climateCheck.altitude} m.`);
         } else {
-            climateMsg += " ⚠️ No se pudo obtener altura automáticamente.";
+            climateParts.push("⚠️ Altura Catastro: no disponible.");
         }
 
         if (climateCheck.zone !== null) {
@@ -1314,19 +1308,17 @@ export function CalculadoraTermica() {
             }
 
             if (xmlZona && climateCheck.zone !== xmlZona && zoneKnown) {
-                climateMsg += ` ⚠️ CE3X indica ${xmlZona}, Catastro calcula ${climateCheck.zone}. Zona actualizada en formulario.`;
+                climateParts.push(`⚠️ Zona: CE3X ${xmlZona} vs Catastro ${climateCheck.zone} (actualizada).`);
             } else if (xmlZona) {
-                climateMsg += ` ✅ Zona climática coincide (${climateCheck.zone}).`;
+                climateParts.push(`Zona: ${climateCheck.zone} (coincide con CE3X).`);
             } else {
-                climateMsg += ` ✅ Zona climática calculada automáticamente: ${climateCheck.zone}${climateCheck.zoneProvince ? ` (${climateCheck.zoneProvince})` : ""}.`;
+                climateParts.push(`Zona automática: ${climateCheck.zone}${climateCheck.zoneProvince ? ` (${climateCheck.zoneProvince})` : ""}.`);
             }
         } else if (climateCheck.altitude !== null) {
-            if (climateCheck.zoneProvince) {
-                climateMsg += ` ℹ️ Altura calculada, pero no se pudo mapear zona para ${climateCheck.zoneProvince}.`;
-            } else {
-                climateMsg += " ℹ️ Altura calculada, pero no se pudo determinar provincia para mapear zona.";
-            }
+            climateParts.push("⚠️ Zona: no disponible.");
         }
+
+        climateMsg = climateParts.join(" ");
 
         let locationTone: CatastroVerificationBanner["tone"] = "info";
         let locationMsg = "ℹ️ Verificación de ubicación no disponible.";
@@ -1400,7 +1392,7 @@ export function CalculadoraTermica() {
         }
 
         setCatastroVerificationBanner({ tone: locationTone, message: locationMsg });
-        setXmlImportMsg([baseMsg, climateMsg, locationMsg].filter(Boolean).join(" "));
+        setXmlImportMsg([baseMsg, climateMsg].filter(Boolean).join(" "));
     };
 
     const revalidarCatastroActual = async () => {
