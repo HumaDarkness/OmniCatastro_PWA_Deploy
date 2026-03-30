@@ -408,7 +408,7 @@ interface BackupManifest {
     includes: string[];
 }
 
-type QuickLayerPresetId = "hormigon" | "yeso" | "yeso_023" | "madera" | "aislante";
+type QuickLayerPresetId = "hormigon" | "yeso" | "yeso_023" | "yeso_018" | "madera" | "aislante";
 
 type CommonLayerSetId = "yeso" | "hormigon_yeso" | "madera_yeso";
 
@@ -416,11 +416,12 @@ const SUPAFIL_FICHA_PUBLIC_PATH = "/fichas_tecnicas/SUPAFIL_Loft_045.jpg";
 const SUPAFIL_FICHA_FILE_NAME = "SUPAFIL_Loft_045.jpg";
 
 const QUICK_LAYER_PRESETS: Record<QuickLayerPresetId, { nombre: string; r: number; espesor: number; lambda: number }> = {
-    hormigon: { nombre: "Hormigón armado", r: 0.04, espesor: 0.1, lambda: 2.5 },
-    yeso: { nombre: "Yeso", r: 0.036, espesor: 0.01, lambda: 0.43 },
-    yeso_023: { nombre: "Yeso", r: 0.023, espesor: 0.01, lambda: 0.43 },
-    madera: { nombre: "Madera", r: 0.069, espesor: 0.02, lambda: 0.13 },
-    aislante: { nombre: "SUPAFIL LOFT 045", r: 5.111, espesor: 0.23, lambda: 0.045 },
+    hormigon: { nombre: "Hormigón armado d > 2500", r: 0.04, espesor: 0.1, lambda: 2.5 },
+    yeso: { nombre: "Yeso, de alta dureza 1200 < d < 1500", r: 0.036, espesor: 0.02, lambda: 0.56 },
+    yeso_023: { nombre: "Yeso, de alta dureza 900 < d < 1200", r: 0.023, espesor: 0.01, lambda: 0.43 },
+    yeso_018: { nombre: "Yeso, de alta dureza 1200 < d < 1500", r: 0.018, espesor: 0.01, lambda: 0.56 },
+    madera: { nombre: "Frondosa muy pesada [d > 870]", r: 0.069, espesor: 0.02, lambda: 0.29 },
+    aislante: { nombre: "SUPAFIL 23", r: 5.111, espesor: 0.23, lambda: 0.045 },
 };
 
 const COMMON_LAYER_SETS: Record<CommonLayerSetId, Array<{ preset: QuickLayerPresetId; esNueva: boolean }>> = {
@@ -431,7 +432,7 @@ const COMMON_LAYER_SETS: Record<CommonLayerSetId, Array<{ preset: QuickLayerPres
     ],
     madera_yeso: [
         { preset: "madera", esNueva: false },
-        { preset: "yeso", esNueva: false },
+        { preset: "yeso_018", esNueva: false },
     ],
 };
 
