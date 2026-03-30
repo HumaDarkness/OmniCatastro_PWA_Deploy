@@ -3484,6 +3484,62 @@ export function CalculadoraTermica() {
         setDraftMsg(`Expediente ${rcNormalized} completado y archivado. Listo para el siguiente.`);
     };
 
+    const completarYCargarSiguiente = async () => {
+        const rcNormalized = normalizeRc(expedienteRc);
+        if (!rcNormalized) {
+            setDraftError("Debes indicar Referencia Catastral para completar y cargar el siguiente.");
+            return;
+        }
+
+        const saved = await saveCurrentDraft("completado", { suppressSuccessMessage: true });
+        if (!saved) return;
+
+        if (!supabase) {
+            setDraftMsg(`Expediente ${rcNormalized} marcado como completado.`);
+            return;
+        }
+
+        setDraftLoading(true);
+        setDraftError(null);
+        try {
+            const organizationId = await resolveOrganizationOrThrow();
+            const [activeRaw, archivedRaw] = await Promise.all([
+                loadDraftIndex(organizationId),
+                loadArchivedDraftIndex(organizationId),
+            ]);
+
+            const { active, archived } = reconcileQueueIndexes(activeRaw, archivedRaw);
+            const activeSorted = sortDrafts(active);
+            const archivedSorted = sortDrafts(archived);
+
+            setDraftQueue(activeSorted);
+            setArchivedQueue(archivedSorted);
+
+            const next = activeSorted.find((item) => {
+                const itemRc = normalizeRc(item.rc);
+                return item.status !== "completado" && itemRc !== rcNormalized;
+            });
+
+            if (!next) {
+                setDraftMsg(`Expediente ${rcNormalized} completado. No hay pendientes para cargar.`);
+                return;
+            }
+
+            const payload = await loadDraftPayload(organizationId, next.rc);
+            if (!payload) {
+                setDraftMsg(`Expediente ${rcNormalized} completado. El siguiente (${next.rc}) no se pudo cargar automáticamente.`);
+                return;
+            }
+
+            applyDraftPayload(payload);
+            setDraftMsg(`Expediente ${rcNormalized} completado. Cargado siguiente pendiente: ${next.rc}.`);
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudo completar y cargar el siguiente expediente.");
+        } finally {
+            setDraftLoading(false);
+        }
+    };
+
     const copiarDatosClavePDF = async () => {
         const rcNormalized = normalizeRc(expedienteRc);
         if (!rcNormalized) {
@@ -3690,12 +3746,13 @@ export function CalculadoraTermica() {
                                 Guardar
                             </button>
                             <button
-                                onClick={() => saveCurrentDraft("completado")}
-                                disabled={draftSaving}
+                                onClick={() => completarYCargarSiguiente()}
+                                disabled={draftSaving || draftLoading}
                                 className="h-9 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-xs inline-flex items-center justify-center gap-1"
+                                title="Flujo lote: completa el actual y abre automáticamente el siguiente pendiente"
                             >
                                 <CircleCheckBig className="h-3.5 w-3.5" />
-                                Guardar + completar
+                                Completar + siguiente
                             </button>
                             <button
                                 onClick={() => guardarSueltoRapido()}
