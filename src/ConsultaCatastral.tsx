@@ -51,8 +51,8 @@ function normalizarUso(uso: string): string {
 }
 
 function esUsoVivienda(uso: string): boolean {
-    const usoNormalizado = normalizarUso(uso);
-    return usoNormalizado.includes("VIVIENDA") || usoNormalizado.includes("RESIDENCIAL");
+    const usoNormalizado = normalizarUso(uso).replace(/\s+/g, " ").trim();
+    return usoNormalizado === "VIVIENDA";
 }
 
 function parsearSuperficie(valor: string): number | null {
@@ -255,7 +255,7 @@ export function ConsultaCatastral() {
                         <CardHeader className="pb-2">
                             <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
                                 <Home className="h-4 w-4 text-emerald-400" />
-                                CE3X - Suma solo uso VIVIENDA/RESIDENCIAL
+                                CE3X - Suma solo uso VIVIENDA (exacto)
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="pt-0 space-y-2">
@@ -268,7 +268,7 @@ export function ConsultaCatastral() {
                             <p className="text-xs text-slate-400 font-mono break-words">
                                 {construccionesVivienda.length > 0
                                     ? `Suma realizada: ${operacionVivienda} = ${formatearSuperficie(superficieViviendaTotal)} m²`
-                                    : "Suma realizada: 0,00 m² (no hay unidades VIVIENDA/RESIDENCIAL con superficie numérica)."}
+                                    : "Suma realizada: 0,00 m² (no hay unidades con uso exactamente VIVIENDA y superficie numérica)."}
                             </p>
                             {construccionesNoVivienda.length > 0 && (
                                 <p className="text-xs text-amber-400 break-words">
@@ -373,7 +373,7 @@ export function ConsultaCatastral() {
                         <CardHeader className="pb-2">
                             <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
                                 <Home className="h-4 w-4 text-emerald-400" />
-                                CE3X - Suma solo uso VIVIENDA/RESIDENCIAL
+                                CE3X - Suma solo uso VIVIENDA (exacto)
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="pt-0 space-y-2">
@@ -386,7 +386,7 @@ export function ConsultaCatastral() {
                             <p className="text-xs text-slate-400 font-mono break-words">
                                 {inmueblesVivienda.length > 0
                                     ? `Suma realizada: ${operacionViviendaInmuebles} = ${formatearSuperficie(superficieViviendaTotalInmuebles)} m²`
-                                    : "Suma realizada: 0,00 m² (no hay unidades VIVIENDA/RESIDENCIAL con superficie numérica)."}
+                                    : "Suma realizada: 0,00 m² (no hay unidades con uso exactamente VIVIENDA y superficie numérica)."}
                             </p>
                             {inmueblesNoVivienda.length > 0 && (
                                 <p className="text-xs text-amber-400 break-words">
