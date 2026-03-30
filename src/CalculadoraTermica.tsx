@@ -96,6 +96,7 @@ interface ParsedCE3X {
     superficieOpacos: number;
     superficieHuecos: number;
     rc: string;
+    comunidadAutonoma: string;
     provincia: string;
     municipio: string;
     direccion: string;
@@ -232,6 +233,12 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
     const zonaKey = zonaRaw === "α3" ? "alpha3" : zonaRaw;
 
     const rc = queryText(docInmueble, ["ReferenciaCatastral", "RefCatastral"]) || "";
+    const comunidadAutonoma = queryText(docInmueble, [
+        "ComunidadAutonoma",
+        "ComunidadAutonomaDescripcion",
+        "Comunidad",
+        "CCAA",
+    ]) || "";
     const provincia = queryText(docInmueble, ["Provincia"]) || "";
     const municipio = queryText(docInmueble, ["Municipio"]) || "";
     const direccion = queryText(docInmueble, ["Direccion", "Calle", "Domicilio"]) || "";
@@ -299,6 +306,7 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         superficieOpacos: roundTo(superficieOpacos, 2),
         superficieHuecos: roundTo(superficieHuecos, 2),
         rc,
+        comunidadAutonoma,
         provincia,
         municipio,
         direccion,
@@ -323,6 +331,10 @@ function buildXmlImportSummary(parsed: ParsedCE3X): string {
 
     if (parsed.tecnicoNombre) {
         parts.push(`Técnico detectado (referencia): ${parsed.tecnicoNombre}.`);
+    }
+
+    if (parsed.comunidadAutonoma) {
+        parts.push(`Comunidad Autónoma detectada en XML: ${parsed.comunidadAutonoma}.`);
     }
 
     parts.push(
@@ -1193,8 +1205,8 @@ export function CalculadoraTermica() {
             setElementosOpacosList(parsed.elementosOpacosData);
             setElementosHuecosList(parsed.elementosHuecosData);
 
-            let newZonaKey = parsed.zonaKey;
-            let finalMsg = buildXmlImportSummary(parsed);
+            const newZonaKey = parsed.zonaKey;
+            const finalMsg = buildXmlImportSummary(parsed);
 
             if (parsed.zonaKey && VALORES_G[parsed.zonaKey] !== undefined) {
                 setZonaKey(parsed.zonaKey);

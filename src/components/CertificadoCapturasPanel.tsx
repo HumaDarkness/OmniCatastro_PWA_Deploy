@@ -35,6 +35,27 @@ export const SLOT_CONFIG: SlotConfig[] = [
     { key: "dni_cliente", label: "DNI CLIENTE", hint: "Foto del DNI para transcripcion segura" },
 ];
 
+const HIGH_DETAIL_PREVIEW_SLOTS: SlotKey[] = [
+    "materiales_antes",
+    "materiales_despues",
+    "cee_inicial",
+    "ficha_tecnica",
+];
+
+function isHighDetailPreviewSlot(slot: SlotKey): boolean {
+    return HIGH_DETAIL_PREVIEW_SLOTS.includes(slot);
+}
+
+function getSlotLabel(slot: SlotKey): string {
+    return SLOT_CONFIG.find((cfg) => cfg.key === slot)?.label ?? slot;
+}
+
+function confirmReplaceCapture(slot: SlotKey, sourceLabel: "archivo" | "portapapeles"): boolean {
+    return window.confirm(
+        `Ya hay una captura en "${getSlotLabel(slot)}". ¿Quieres reemplazarla con la imagen de ${sourceLabel}?`,
+    );
+}
+
 export function createEmptyCapturasState(): CapturasState {
     return {
         ce3x_antes: null,
@@ -123,6 +144,10 @@ export function CertificadoCapturasPanel() {
 
     const onFileChange = async (slot: SlotKey, file?: File) => {
         if (!file) return;
+        if (capturas[slot] && !confirmReplaceCapture(slot, "archivo")) {
+            setStatus(`Se mantuvo la captura existente en ${getSlotLabel(slot)}.`);
+            return;
+        }
         try {
             await saveImageInSlot(slot, file, file.name);
         } catch {
@@ -172,6 +197,11 @@ export function CertificadoCapturasPanel() {
             return;
         }
 
+        if (capturas[slot] && !confirmReplaceCapture(slot, "portapapeles")) {
+            setStatus(`Se mantuvo la captura existente en ${getSlotLabel(slot)}.`);
+            return;
+        }
+
         try {
             const items = await navigator.clipboard.read();
             for (const item of items) {
@@ -214,6 +244,9 @@ export function CertificadoCapturasPanel() {
                     {SLOT_CONFIG.map((slot) => {
                         const data = capturas[slot.key];
                         const isCopied = copiedSlot === slot.key;
+                        const isHighDetail = isHighDetailPreviewSlot(slot.key);
+                        const previewHeightClass = isHighDetail ? "h-44" : "h-32";
+                        const previewClass = `w-full ${previewHeightClass} ${isHighDetail ? "object-contain bg-slate-950/40" : "object-cover"} rounded-md border border-slate-700`;
 
                         return (
                             <div key={slot.key} className="border border-slate-800 rounded-lg p-3 bg-slate-900/30 space-y-2">
@@ -226,10 +259,10 @@ export function CertificadoCapturasPanel() {
                                     <img
                                         src={data.dataUrl}
                                         alt={slot.label}
-                                        className="w-full h-32 object-cover rounded-md border border-slate-700"
+                                        className={previewClass}
                                     />
                                 ) : (
-                                    <div className="w-full h-32 rounded-md border border-dashed border-slate-700 bg-slate-900/40 flex items-center justify-center text-[11px] text-slate-600">
+                                    <div className={`w-full ${previewHeightClass} rounded-md border border-dashed border-slate-700 bg-slate-900/40 flex items-center justify-center text-[11px] text-slate-600`}>
                                         Sin imagen
                                     </div>
                                 )}
@@ -342,6 +375,10 @@ export function CertificadoCapturasPanelControlado({
 
     const onFileChange = async (slot: SlotKey, file?: File) => {
         if (!file) return;
+        if (capturas[slot] && !confirmReplaceCapture(slot, "archivo")) {
+            setStatus(`Se mantuvo la captura existente en ${getSlotLabel(slot)}.`);
+            return;
+        }
         try {
             await saveImageInSlot(slot, file, file.name);
         } catch {
@@ -391,6 +428,11 @@ export function CertificadoCapturasPanelControlado({
             return;
         }
 
+        if (capturas[slot] && !confirmReplaceCapture(slot, "portapapeles")) {
+            setStatus(`Se mantuvo la captura existente en ${getSlotLabel(slot)}.`);
+            return;
+        }
+
         try {
             const items = await navigator.clipboard.read();
             for (const item of items) {
@@ -431,6 +473,9 @@ export function CertificadoCapturasPanelControlado({
                     {visibleSlots.map((slot) => {
                         const data = capturas[slot.key];
                         const isCopied = copiedSlot === slot.key;
+                        const isHighDetail = isHighDetailPreviewSlot(slot.key);
+                        const previewHeightClass = isHighDetail ? "h-44" : "h-32";
+                        const previewClass = `w-full ${previewHeightClass} ${isHighDetail ? "object-contain bg-slate-950/40" : "object-cover"} rounded-md border border-slate-700`;
 
                         return (
                             <div key={slot.key} className="border border-slate-800 rounded-lg p-3 bg-slate-900/30 space-y-2">
@@ -443,10 +488,10 @@ export function CertificadoCapturasPanelControlado({
                                     <img
                                         src={data.dataUrl}
                                         alt={slot.label}
-                                        className="w-full h-32 object-cover rounded-md border border-slate-700"
+                                        className={previewClass}
                                     />
                                 ) : (
-                                    <div className="w-full h-32 rounded-md border border-dashed border-slate-700 bg-slate-900/40 flex items-center justify-center text-[11px] text-slate-600">
+                                    <div className={`w-full ${previewHeightClass} rounded-md border border-dashed border-slate-700 bg-slate-900/40 flex items-center justify-center text-[11px] text-slate-600`}>
                                         Sin imagen
                                     </div>
                                 )}
