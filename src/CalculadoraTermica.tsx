@@ -697,6 +697,7 @@ export function CalculadoraTermica() {
     const [alturaMsnm, setAlturaMsnm] = useState<string>(""); // Added
     const [resultado, setResultado] = useState<ResultadoTermico | null>(null);
     const [copied, setCopied] = useState(false);
+    const [intelliaTemplateCopied, setIntelliaTemplateCopied] = useState(false);
     const [materialesDB, setMaterialesDB] = useState<MaterialDB[]>([]);
     const [filtroMetodo, setFiltroMetodo] = useState<Record<number, string>>({});
     const [materialSearchByLayer, setMaterialSearchByLayer] = useState<Record<number, string>>({});
@@ -1352,6 +1353,112 @@ export function CalculadoraTermica() {
         navigator.clipboard.writeText(texto);
         setCopied(true);
         setTimeout(() => setCopied(false), 2500);
+    };
+
+    const copiarPlantillaIntellia = async () => {
+        if (!resultado) {
+            setDraftError("Primero calcula el expediente para generar la plantilla INTELLIA.");
+            return;
+        }
+
+        const fullClientName = [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+        const fullAddress = [direccionInmueble, cpInmueble, municipioInmueble, provinciaInmueble]
+            .filter(Boolean)
+            .join(", ");
+
+        const safeEnvolvente = supEnvolvente > 0 ? supEnvolvente : 1;
+        const porcentajeEnvolvente = roundTo((areaHNH / safeEnvolvente) * 100, 2);
+        const gValue = VALORES_G[zonaKey] ?? 61;
+        const fechaEmision = new Date().toLocaleDateString("es-ES", {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+        });
+        const upDecimals = modoCE3X ? 2 : 3;
+
+        const capasNuevas = capas.filter((capa) => capa.es_nueva);
+        const espesorNuevaTotalMm = Math.round(
+            capasNuevas.reduce((acc, capa) => acc + toFiniteNumber(capa.espesor, 0), 0) * 1000,
+        );
+        const nombreAislante = capasNuevas
+            .map((capa) => (capa.nombre || "").trim())
+            .filter(Boolean)
+            .join(" + ") || "aislante";
+
+        const plantilla = [
+            "CERTIFICADO TÉCNICO JUSTIFICANDO LOS VALORES DE LA FÓRMULA",
+            "Datos generales:",
+            "1. Identificación de la actuación:",
+            `a. Nombre: ${fullClientName || "(completar nombre)"}`,
+            `b. Dirección: ${fullAddress || "(completar dirección)"}`,
+            "2. Justificación de la superficie total de la envolvente y del porcentaje afectado.",
+            `A partir del Certificado de Eficiencia Energética (CEE), se obtiene un valor total de superficie de la envolvente del edificio de ${supEnvolvente.toFixed(2)} m².`,
+            "Este valor resulta de la suma de las superficies de todos los conceptos, sin considerar la cubierta, de acuerdo con la ilustración 1.",
+            `La actuación corresponde a la partición superior, con una superficie de ${areaHNH.toFixed(2)} m², de acuerdo con la ilustración 1.`,
+            "En consecuencia, la superficie afectada resulta:",
+            `m² partición superior / superficie de la envolvente del edificio ${areaHNH.toFixed(2)} m² / ${supEnvolvente.toFixed(2)} m² = ${porcentajeEnvolvente.toFixed(2)} %`,
+            "Se trata de una superficie homogénea, sin puentes térmicos ni otros elementos que afecten a los valores de transmitancia térmica.",
+            "Ilustración 1 Capturas de pantalla de todos los cerramientos y huecos de la vivienda en el certificado de eficiencia energética.",
+            "",
+            "Resistencia total (RT) y Transmitancia térmica de la partición (Up):",
+            "En la situación anterior, las capas que componen la partición son las que se ven en la ilustración 2 (líneas abajo), siendo la resistencia total igual a la suma de valores R:",
+            `ΣR materiales = ${resultado.r_mat_inicial.toFixed(3)} m²K/W`,
+            "Ilustración 2 Captura de la librería de cerramientos de CE3X.",
+            "A este valor se debe sumar el correspondiente a las resistencias superficiales interior y exterior, siendo ambas 0.1 (ver ilustración 3), de modo que:",
+            `RT = ${resultado.r_mat_inicial.toFixed(3)} + 0.1 + 0.1 = ${resultado.rt_inicial.toFixed(3)} m²K/W`,
+            "Ilustración 3 Resistencias superficiales interior y exterior.",
+            `Up = 1 / RT = 1 / ${resultado.rt_inicial.toFixed(3)} = ${resultado.up_inicial.toFixed(upDecimals)} W/m²K`,
+            "",
+            "Coeficiente de reducción b y Ui:",
+            "Al valor obtenido, se le aplica el coeficiente b de reducción de temperatura.",
+            `Ah-nh / Anh-e = ${areaHNH.toFixed(2)} / ${areaNHE.toFixed(2)} = ${resultado.ratio.toFixed(2)}`,
+            "Y tratándose de ambos espacios no aislados:",
+            `b = ${resultado.b_inicial.toFixed(2)}`,
+            "Tabla 7 Coeficiente de reducción de temperatura b.",
+            `Ui = Up * b = ${resultado.up_inicial.toFixed(upDecimals)} * ${resultado.b_inicial.toFixed(2)} = ${resultado.ui_final.toFixed(2)} W/m²K`,
+            "",
+            "Cálculos tras medida de eficiencia:",
+            `Se añaden ${espesorNuevaTotalMm > 0 ? espesorNuevaTotalMm : "[ESPESOR_MM]"} mm de ${nombreAislante}, cuyas características se recogen en el Anexo 1: Ficha técnica del material.`,
+            "De modo que se actualiza el valor de la resistencia total (RT), considerando el valor de la ilustración 5, y adicionando las resistencias superficiales interior y exterior, de acuerdo a la ilustración 3.",
+            `RT = ${resultado.r_mat_final.toFixed(3)} + 0.1 + 0.1 = ${resultado.rt_final.toFixed(3)} m²K/W`,
+            "Ilustración 5 Captura de la librería de cerramientos del CE3X.",
+            "Posteriormente, se actualiza el valor de b, de acuerdo a la ilustración 4:",
+            `b = ${resultado.b_final.toFixed(2)}`,
+            `Up = 1 / RT = 1 / ${resultado.rt_final.toFixed(3)} = ${resultado.up_final.toFixed(upDecimals)} W/m²K`,
+            `Uf = Up * b = ${resultado.up_final.toFixed(upDecimals)} * ${resultado.b_final.toFixed(2)} = ${resultado.uf_final.toFixed(2)} W/m²K`,
+            "",
+            "Zona climática y cálculo final:",
+            `La actuación se localiza en ${fullAddress || "(completar dirección)"}, cuya altitud es de ${alturaMsnm || "[ALTITUD]"} msnm, por lo que se trata de una zona climática ${zonaKey || "[ZONA]"}, de acuerdo a la tabla 1.`,
+            `G = ${gValue.toFixed(2)}`,
+            "AE = Fp (Ui-Uf)∙S∙G",
+            `AE = 1 * (${resultado.ui_final.toFixed(2)} - ${resultado.uf_final.toFixed(2)}) * ${supActuacion.toFixed(2)} * ${gValue.toFixed(2)} = ${Math.round(resultado.ahorro)} kWh`,
+            "Tabla 1 Zonas climáticas.",
+            "Y para que así conste y surta los efectos oportunos, se emite el presente certificado.",
+            `En Madrid, el ${fechaEmision}.`,
+            "Responsable de Obra – Instalador Técnico",
+            "Fdo.",
+            "",
+            "Anexo 1: Ficha técnica del material",
+            "Anexo 2:",
+            "Ilustración 6 Datos del CE3X antes de la actuación",
+            "Anexo 3:",
+            "Ilustración 7 Datos del CE3X después de la actuación",
+            "",
+            "intellia Trading SL CIF : B75691964 Adresse : 15, Calle Velázquez, 28001, Madrid, Madrid Téléphone : - Site Web : - Courrier : tradingintellia@gmail.com",
+        ].join("\n");
+
+        try {
+            await navigator.clipboard.writeText(plantilla);
+            setDraftError(null);
+            setIntelliaTemplateCopied(true);
+            setTimeout(() => setIntelliaTemplateCopied(false), 2500);
+            setDraftMsg("Plantilla INTELLIA copiada al portapapeles con fecha de emisión actual.");
+        } catch {
+            setDraftError("No se pudo copiar la plantilla INTELLIA. Revisa permisos del navegador.");
+        }
     };
 
     // Preview del ratio y b en tiempo real
@@ -4311,17 +4418,24 @@ export function CalculadoraTermica() {
                             </Card>
 
                             {/* Botones de acción */}
-                            <div className="flex gap-2">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                                 <button
                                     onClick={copiarInforme}
-                                    className="flex-1 h-11 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all flex items-center justify-center gap-2 ring-1 ring-slate-700"
+                                    className="h-11 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all flex items-center justify-center gap-2 ring-1 ring-slate-700"
                                 >
                                     {copied ? <Check className="h-5 w-5 text-emerald-400" /> : <Copy className="h-5 w-5" />}
-                                    {copied ? "¡Copiado!" : "Copiar"}
+                                    {copied ? "¡Copiado!" : "Copiar informe"}
+                                </button>
+                                <button
+                                    onClick={copiarPlantillaIntellia}
+                                    className="h-11 rounded-md bg-violet-600/20 hover:bg-violet-600/40 text-violet-300 hover:text-violet-200 transition-all flex items-center justify-center gap-2 ring-1 ring-violet-500/50"
+                                >
+                                    {intelliaTemplateCopied ? <Check className="h-5 w-5 text-emerald-400" /> : <FileCode className="h-5 w-5" />}
+                                    {intelliaTemplateCopied ? "Plantilla copiada" : "Plantilla INTELLIA"}
                                 </button>
                                 <button
                                     onClick={() => generarPDFAnexoE1(capas, resultado)}
-                                    className="flex-1 h-11 rounded-md bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 hover:text-blue-300 transition-all flex items-center justify-center gap-2 ring-1 ring-blue-500/50"
+                                    className="h-11 rounded-md bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 hover:text-blue-300 transition-all flex items-center justify-center gap-2 ring-1 ring-blue-500/50"
                                 >
                                     Generar Anexo E.1
                                 </button>
