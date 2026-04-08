@@ -1,227 +1,321 @@
 /**
- * thermalCalculator.ts
- * Port 1:1 de core/thermal_calculator.py
+ * Thermal Calculator — Motor de Cálculos E1-3-5 (CAE)
  *
- * Motor de cálculo térmico CAE (Certificados de Ahorro Energético).
- * TABLA_7 del Reglamento CAE para factor de reducción b.
- * Cadena de redondeo idéntica al Python:
- *   RT  → 3 decimales  (m²K/W)
- *   Up  → 3 decimales  (W/m²K) — con RT ya redondeado
- *   Ui/Uf → 2 decimales        — con Up ya redondeado
- *   Ahorro → entero             — con Ui/Uf ya redondeados
- *   pct → 2 decimales
+ * Réplica EXACTA de la lógica de Python (thermal_e135_calc.py).
+ *
+ * Fórmulas CTE DB-HE:
+ *   Rt = ΣR + Rsi + Rse
+ *   Up = 1 / Rt
+ *   U  = Up × b
+ *   AE = Fp × (Ui − Uf) × s × G
+ *
+ * Donde Fp = 1 (Factor de paso, hardcodeado).
  */
 
-// ─── TABLA_7 del Reglamento CAE ──────────────────────────────────────
-// Columnas: [b_despues_1, b_despues_2, b_antes_normal_1, b_antes_normal_2, b_antes_aislado_1, b_antes_aislado_2]
-const B_DATA: number[][] = [
-    [0.99, 1.0, 0.94, 0.97, 0.91, 0.96],  // ratio < 0.25
-    [0.97, 0.99, 0.85, 0.92, 0.77, 0.90],  // 0.25–0.50
-    [0.96, 0.98, 0.77, 0.87, 0.67, 0.84],  // 0.50–0.75
-    [0.94, 0.97, 0.70, 0.83, 0.59, 0.79],  // 0.75–1.00
-    [0.92, 0.96, 0.65, 0.79, 0.53, 0.74],  // 1.00–1.25
-    [0.89, 0.95, 0.56, 0.73, 0.44, 0.67],  // 1.25–2.00
-    [0.86, 0.93, 0.48, 0.66, 0.36, 0.59],  // 2.00–2.50
-    [0.83, 0.91, 0.43, 0.61, 0.32, 0.54],  // 2.50–3.00
-    [0.81, 0.90, 0.39, 0.57, 0.28, 0.50],  // > 3.00
-];
+// ---------------------------------------------------------------------------
+// Tipos
+// ---------------------------------------------------------------------------
 
-const ESCENARIO_COL: Record<string, number> = {
-    despues: 0,
-    antes_normal: 2,
-    antes_aislado: 4,
-};
-
-// ─── Tipos ───────────────────────────────────────────────────────────
+export type Scenario = 'particion_aislada' | 'nada_aislado' | 'cubierta_aislada';
+export type Caso = 'estanco' | 'ventilado';
 
 export interface CapaMaterial {
-    nombre: string;
-    espesor: number;      // metros
-    lambda_val: number;   // W/mK
-    r_valor: number;      // m²K/W (alternativa directa)
-    es_nueva: boolean;    // false = existente, true = mejora
+  nombre: string;
+  espesor: number | string;       // metros
+  lambda_val: number | string;    // W/(m·K)
+  r_valor: number | string;       // m²K/W (si se proporciona directamente)
+  es_nueva: boolean;
 }
 
 export interface ResultadoTermico {
-    rt_inicial: number;
-    rt_final: number;
-    up_inicial: number;
-    up_final: number;
-    b_inicial: number;
-    b_final: number;
-    ui_final: number;
-    uf_final: number;
-    ratio: number;
-    ahorro: number;       // kWh/año
-    pct_envolvente: number;
+  rt_inicial: number;
+  rt_final: number;
+  up_inicial: number;
+  up_final: number;
+  b_inicial: number;
+  b_final: number;
+  ui_final: number;
+  uf_final: number;
+  ahorro: number;
+  pct_envolvente: number;
+  ratio: number;
+  r_mat_inicial: number;
+  r_mat_final: number;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────
-
-export function redondearValor(val: number, decimales: number): number {
-    const factor = Math.pow(10, decimales);
-    return Math.round((val + Number.EPSILON) * factor) / factor;
+export interface ParamsCAE {
+  capas: CapaMaterial[];
+  area_h_nh: number;           // m² — Superficie partición (lo que se aísla)
+  area_nh_e: number;           // m² — Superficie cubierta (límite para b)
+  superficie_actuacion: number; // m²
+  g: number;                    // Factor G directo de VALORES_G (ej: 61)
+  sup_envolvente_total: number; // m²
+  scenario_i: Scenario;        // Escenario ANTES
+  scenario_f: Scenario;        // Escenario DESPUÉS
+  case_i: Caso;                // Ventilación ANTES
+  case_f: Caso;                // Ventilación DESPUÉS
+  modoCE3X: boolean;           // true = Up a 2 dec, false = Up a 3 dec
 }
 
-function getR(capa: CapaMaterial): number {
-    if (capa.r_valor > 0) return capa.r_valor;
-    return capa.lambda_val > 0 ? capa.espesor / capa.lambda_val : 0;
+interface ParamsInforme {
+  capas: CapaMaterial[];
+  resultado: ResultadoTermico;
+  sup_actuacion: number;
+  sup_envolvente_total: number;
+  g: number;
+  area_h_nh: number;
+  area_nh_e: number;
+  zonaKey: string;
 }
 
-// ─── Factor b (TABLA_7) ──────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Constantes CTE
+// ---------------------------------------------------------------------------
 
-export function calcularB(ratio: number, escenario: string, caso: number): number {
-    let fila: number;
-    if (ratio < 0.25) fila = 0;
-    else if (ratio <= 0.50) fila = 1;
-    else if (ratio <= 0.75) fila = 2;
-    else if (ratio <= 1.00) fila = 3;
-    else if (ratio <= 1.25) fila = 4;
-    else if (ratio <= 2.00) fila = 5;
-    else if (ratio <= 2.50) fila = 6;
-    else if (ratio <= 3.00) fila = 7;
-    else fila = 8;
+/** Resistencias superficiales (m²K/W) — Particiones horizontales, flujo ascendente */
+const Rsi = 0.10;
+const Rse = 0.10;
 
-    const colBase = ESCENARIO_COL[escenario] ?? 2;
-    return B_DATA[fila][colBase + (caso === 2 ? 1 : 0)];
+/** Factor de paso de energía primaria — siempre 1 */
+const FP = 1;
+
+// ---------------------------------------------------------------------------
+// VALORES G — Severidad climática por zona (mirror de Python zona_climatica.py)
+// ---------------------------------------------------------------------------
+
+export const VALORES_G: Record<string, number> = {
+  alpha3: 13, A2: 24, A3: 25, A4: 26,
+  B2: 36, B3: 32, B4: 33,
+  C1: 44, C2: 45, C3: 46, C4: 46,
+  D1: 60, D2: 60, D3: 61,
+  E1: 74, E2: 74, E3: 74,
+};
+
+// ---------------------------------------------------------------------------
+// TABLA 7 CTE DB-HE — Coeficiente b de reducción de temperatura
+// ---------------------------------------------------------------------------
+//
+// Contexto físico:
+//   El calor sube desde el piso, atraviesa la PARTICIÓN (suelo del ático),
+//   se queda en la buhardilla/cámara, y se escapa por la CUBIERTA (tejado).
+//   "b" es un factor de descuento (0 a 1) que reduce la transmitancia
+//   porque la buhardilla frena parte del calor.
+//
+// Clave = Ratio (Superficie Partición / Superficie Cubierta)
+//   Se usa lookup TECHO: menor clave >= ratio real.
+//
+// Columnas por índice (6 por fila):
+//   0: Partición AISLADA + Cubierta SIN → Estanco (DESPUÉS nuestro trabajo)
+//   1: Partición AISLADA + Cubierta SIN → Ventilado
+//   2: NADA aislado → Estanco (ANTES, estado original)
+//   3: NADA aislado → Ventilado
+//   4: Cubierta YA AISLADA + Partición SIN → Estanco (caso especial)
+//   5: Cubierta YA AISLADA + Partición SIN → Ventilado
+
+const B_TABLE: number[][] = [
+  // Ratio  Part.Aisl.Est  Part.Aisl.Vent  NadaEst  NadaVent  Cub.Aisl.Est  Cub.Aisl.Vent
+  /* 0.25 */[0.99, 1.00, 0.94, 0.97, 0.91, 0.96],
+  /* 0.50 */[0.97, 0.99, 0.85, 0.92, 0.77, 0.90],
+  /* 0.75 */[0.96, 0.98, 0.77, 0.87, 0.67, 0.84],
+  /* 1.00 */[0.94, 0.97, 0.70, 0.83, 0.59, 0.79],
+  /* 1.25 */[0.92, 0.96, 0.65, 0.79, 0.53, 0.74],
+  /* 2.00 */[0.89, 0.95, 0.56, 0.73, 0.44, 0.67],
+  /* 2.50 */[0.86, 0.93, 0.48, 0.66, 0.36, 0.59],
+  /* 3.00 */[0.83, 0.91, 0.43, 0.61, 0.32, 0.54],
+  /* 5.00 */[0.81, 0.90, 0.39, 0.57, 0.28, 0.50],
+];
+
+/** Claves ordenadas para lookup TECHO: menor clave >= ratio real */
+const B_KEYS = [0.25, 0.50, 0.75, 1.00, 1.25, 2.00, 2.50, 3.00, 5.00];
+
+// ---------------------------------------------------------------------------
+// Funciones puras de cálculo
+// ---------------------------------------------------------------------------
+
+/** Redondeo bancario estándar */
+function round(v: number, d: number): number {
+  const f = Math.pow(10, d);
+  return Math.floor(v * f + 0.5) / f;
 }
 
-// ─── Motor principal de cálculo ──────────────────────────────────────
+/**
+ * Obtiene el coeficiente b de la Tabla 7 CTE DB-HE.
+ *
+ * ¿Qué es b? → Un "descuento" en la pérdida de calor porque entre
+ * el piso y el cielo hay una buhardilla/cámara que frena el calor.
+ * Cuanto más cerca de 1.0, más calor se escapa (peor).
+ *
+ * Lookup TECHO: busca la menor clave >= ratio real.
+ * Ejemplo: ratio 0.82 → cae en (0.75, 1.00] → usa fila 1.00
+ *
+ * @param ratio   - m² Partición / m² Cubierta
+ * @param scenario - particion_aislada | nada_aislado | cubierta_aislada
+ * @param caso    - estanco | ventilado
+ */
+export function getB(ratio: number, scenario: Scenario, caso: Caso): number {
+  // Lookup TECHO: menor clave >= ratio
+  let fila = B_KEYS.length - 1; // Fallback a la última fila
+  for (let i = 0; i < B_KEYS.length; i++) {
+    if (B_KEYS[i] >= ratio) {
+      fila = i;
+      break;
+    }
+  }
 
-export function calcularAhorroCAE({
-    capas,
-    area_h_nh,
-    area_nh_e,
-    superficie_actuacion,
-    zona_climatica,
-    sup_envolvente_total = 0,
-    escenario_i = "antes_normal",
-    caso_i = 1,
-    escenario_f = "despues",
-    caso_f = 1,
-    ui_override,
-    uf_override,
-}: {
-    capas: CapaMaterial[];
-    area_h_nh: number;
-    area_nh_e: number;
-    superficie_actuacion: number;
-    zona_climatica: number;
-    sup_envolvente_total?: number;
-    escenario_i?: string;
-    caso_i?: number;
-    escenario_f?: string;
-    caso_f?: number;
-    ui_override?: number;
-    uf_override?: number;
-}): ResultadoTermico {
-    const r_mat_i = capas.filter((c) => !c.es_nueva).reduce((sum, c) => sum + getR(c), 0);
-    const r_mat_f = capas.reduce((sum, c) => sum + getR(c), 0);
+  // Seleccionar par de columnas según escenario
+  const colOffset: Record<Scenario, number> = {
+    particion_aislada: 0,  // Cols 0,1 — DESPUÉS (nuestro trabajo)
+    nada_aislado: 2,       // Cols 2,3 — ANTES (estado original)
+    cubierta_aislada: 4,   // Cols 4,5 — Cubierta ya tenía aislante
+  };
 
-    // RT con Rsi + Rse = 0.10 + 0.10
-    const rt_i = redondearValor(r_mat_i + 0.20, 3);
-    const rt_f = redondearValor(r_mat_f + 0.20, 3);
-
-    // Up con RT ya redondeado
-    const up_i = rt_i > 0 ? redondearValor(1 / rt_i, 3) : 0;
-    const up_f = rt_f > 0 ? redondearValor(1 / rt_f, 3) : 0;
-
-    const ratio = area_nh_e > 0 ? area_h_nh / area_nh_e : 0;
-    const bi = calcularB(ratio, escenario_i, caso_i);
-    const bf = calcularB(ratio, escenario_f, caso_f);
-
-    // Ui/Uf con Up ya redondeado
-    const ui = ui_override ?? redondearValor(up_i * bi, 2);
-    const uf = uf_override ?? redondearValor(up_f * bf, 2);
-
-    // Ahorro kWh/año
-    const val_bruto = (ui - uf) * superficie_actuacion * zona_climatica;
-    const ahorro = Math.max(0, Math.round(val_bruto));
-
-    const pct = sup_envolvente_total > 0 ? redondearValor((superficie_actuacion / sup_envolvente_total) * 100, 2) : 0;
-
-    return {
-        rt_inicial: rt_i,
-        rt_final: rt_f,
-        up_inicial: up_i,
-        up_final: up_f,
-        b_inicial: bi,
-        b_final: bf,
-        ui_final: ui,
-        uf_final: uf,
-        ratio,
-        ahorro,
-        pct_envolvente: pct,
-    };
+  const col = colOffset[scenario] + (caso === 'ventilado' ? 1 : 0);
+  return B_TABLE[fila][col];
 }
 
-// ─── Generador de informe de texto ───────────────────────────────────
+/** Calcula R de una capa (por R directo o por e/λ) */
+function calcularR(capa: CapaMaterial): number {
+  const rVal = Number(capa.r_valor);
+  const esp = Number(capa.espesor);
+  const lam = Number(capa.lambda_val);
 
-export function generarInformeTexto({
-    capas,
-    resultado,
-    sup_actuacion,
-    sup_envolvente_total,
-    zona_climatica,
-    area_h_nh,
-    area_nh_e,
-}: {
-    capas: CapaMaterial[];
-    resultado: ResultadoTermico;
-    sup_actuacion: number;
-    sup_envolvente_total: number;
-    zona_climatica: number;
-    area_h_nh: number;
-    area_nh_e: number;
-}): string {
-    const capas_i = capas.filter((c) => !c.es_nueva);
-    const capas_m = capas.filter((c) => c.es_nueva);
+  if (rVal > 0) return rVal;
+  if (esp > 0 && lam > 0) return esp / lam;
+  return 0;
+}
 
-    const fmtCapa = (c: CapaMaterial, tag: string) => {
-        const r = getR(c);
-        if (c.r_valor > 0) return `  - ${c.nombre} [${tag}]: ${r.toFixed(3)} m²K/W`;
-        return `  - ${c.nombre} [${tag}]: e=${c.espesor} m / λ=${c.lambda_val} W/mK = ${r.toFixed(3)} m²K/W`;
-    };
+// ---------------------------------------------------------------------------
+// Cálculo principal
+// ---------------------------------------------------------------------------
 
-    const r_mat_i = capas_i.reduce((s, c) => s + getR(c), 0);
-    const r_mat_f = capas.reduce((s, c) => s + getR(c), 0);
-    const delta_u = resultado.ui_final - resultado.uf_final;
+export function calcularAhorroCAE(params: ParamsCAE): ResultadoTermico {
+  const {
+    capas, area_h_nh, area_nh_e, superficie_actuacion,
+    g, sup_envolvente_total,
+    scenario_i, scenario_f, case_i, case_f, modoCE3X,
+  } = params;
 
-    return [
-        "📊 INFORME DE JUSTIFICACIÓN TÉRMICA (CAE)",
-        "=".repeat(50),
-        "",
-        "1. CAPAS DE MATERIAL",
-        "Existentes:",
-        ...capas_i.map((c) => fmtCapa(c, "EXISTENTE")),
-        "Mejora:",
-        ...capas_m.map((c) => fmtCapa(c, "NUEVA")),
-        "",
-        "2. RESISTENCIAS TÉRMICAS",
-        `ΣR materiales (i) = ${r_mat_i.toFixed(3)} m²K/W`,
-        `RTi = ${r_mat_i.toFixed(3)} + 0.10 + 0.10 = ${resultado.rt_inicial.toFixed(3)} m²K/W`,
-        `ΣR materiales (f) = ${r_mat_f.toFixed(3)} m²K/W`,
-        `RTf = ${r_mat_f.toFixed(3)} + 0.10 + 0.10 = ${resultado.rt_final.toFixed(3)} m²K/W`,
-        "",
-        "3. TRANSMITANCIAS PROPIAS",
-        `Upi = 1 / ${resultado.rt_inicial.toFixed(3)} = ${resultado.up_inicial.toFixed(3)} W/m²K`,
-        `Upf = 1 / ${resultado.rt_final.toFixed(3)} = ${resultado.up_final.toFixed(3)} W/m²K`,
-        "",
-        "4. FACTOR b (TABLA 7 CAE)",
-        `Ratio = Ah-nh / Anh-e = ${area_h_nh.toFixed(2)} / ${area_nh_e.toFixed(2)} = ${resultado.ratio.toFixed(2)}`,
-        `bi = ${resultado.b_inicial.toFixed(2)}   bf = ${resultado.b_final.toFixed(2)}`,
-        "",
-        "5. TRANSMITANCIAS FINALES",
-        `Ui = Upi × bi = ${resultado.up_inicial.toFixed(3)} × ${resultado.b_inicial.toFixed(2)} = ${resultado.ui_final.toFixed(2)} W/m²K`,
-        `Uf = Upf × bf = ${resultado.up_final.toFixed(3)} × ${resultado.b_final.toFixed(2)} = ${resultado.uf_final.toFixed(2)} W/m²K`,
-        "",
-        "6. AHORRO ENERGÉTICO",
-        `ΔU = ${resultado.ui_final.toFixed(2)} − ${resultado.uf_final.toFixed(2)} = ${delta_u.toFixed(2)} W/m²K`,
-        `s = ${sup_actuacion.toFixed(2)} m²   S = ${sup_envolvente_total.toFixed(2)} m²   G = ${Math.round(zona_climatica)} h·K`,
-        `Afectado = ${sup_actuacion.toFixed(2)} / ${sup_envolvente_total.toFixed(2)} = ${resultado.pct_envolvente.toFixed(2)}%`,
-        `AE = ${delta_u.toFixed(2)} × ${sup_actuacion.toFixed(2)} × ${Math.round(zona_climatica)}`,
-        `   = ${resultado.ahorro} kWh/año`,
-        "",
-        `RESULTADO FINAL: ${resultado.ahorro} kWh/año`,
-    ].join("\n");
+  const UP_DEC = modoCE3X ? 2 : 3;
+
+  // Separar capas existentes y todas (con mejora)
+  const existentes = capas.filter((c) => !c.es_nueva);
+
+  // Resistencia de materiales
+  const r_mat_inicial = existentes.reduce((sum, c) => sum + calcularR(c), 0);
+  const r_mat_final = capas.reduce((sum, c) => sum + calcularR(c), 0);
+
+  // Resistencia total: Rt = Rsi + ΣR + Rse
+  const rt_inicial = Rsi + r_mat_inicial + Rse;
+  const rt_final = Rsi + r_mat_final + Rse;
+
+  // Transmitancia: Up = 1 / Rt (redondeado según modo)
+  const up_inicial = rt_inicial > 0 ? round(1 / rt_inicial, UP_DEC) : 0;
+  const up_final = rt_final > 0 ? round(1 / rt_final, UP_DEC) : 0;
+
+  // Ratio de superficies (para lookup en Tabla B)
+  const ratio = area_nh_e > 0 ? area_h_nh / area_nh_e : 1;
+
+  // Factor b (Tabla 7 CTE)
+  const b_inicial = getB(ratio, scenario_i, case_i);
+  const b_final = getB(ratio, scenario_f, case_f);
+
+  // Transmitancia corregida: U = Up × b (siempre 2 decimales)
+  const ui_final = round(up_inicial * b_inicial, 2);
+  const uf_final = round(up_final * b_final, 2);
+
+  // % de envolvente afectada
+  const pct_envolvente = sup_envolvente_total > 0
+    ? (superficie_actuacion / sup_envolvente_total) * 100
+    : 0;
+
+  // Ahorro energético: AE = Fp × (Ui - Uf) × s × G
+  const delta_u = ui_final - uf_final;
+  const ahorro = delta_u > 0 ? Math.round(FP * delta_u * superficie_actuacion * g) : 0;
+
+  return {
+    rt_inicial,
+    rt_final,
+    up_inicial,
+    up_final,
+    b_inicial,
+    b_final,
+    ui_final,
+    uf_final,
+    ahorro,
+    pct_envolvente,
+    ratio,
+    r_mat_inicial,
+    r_mat_final,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Generación de informe textual
+// ---------------------------------------------------------------------------
+
+export function generarInformeTexto(params: ParamsInforme): string {
+  const { capas, resultado, sup_actuacion, sup_envolvente_total, g, area_h_nh, area_nh_e, zonaKey } = params;
+
+  const fmt = (v: number, d = 3) => Number(v).toFixed(d);
+  const fmt2 = (v: number) => Number(v).toFixed(2);
+
+  const capasExistentes = capas.filter(c => !c.es_nueva);
+  const todasCapas = capas;
+  const pct_afectado = sup_envolvente_total > 0 ? (sup_actuacion / sup_envolvente_total) * 100 : 0;
+
+  const lineas: string[] = [];
+
+  lineas.push('1. SUPERFICIE Y PORCENTAJE AFECTADO');
+  lineas.push('────────────────────────────────────');
+  lineas.push(`Superficie envolvente total (S): ${fmt2(sup_envolvente_total)} m²`);
+  lineas.push(`Superficie actuación (s = Ah-nh): ${fmt2(sup_actuacion)} m²`);
+  lineas.push(`Porcentaje afectado: ${fmt2(sup_actuacion)} / ${fmt2(sup_envolvente_total)} = ${fmt2(pct_afectado)} %`);
+  lineas.push('');
+  lineas.push(`Ah-nh / Anh-e = ${fmt2(area_h_nh)} / ${fmt2(area_nh_e)} = ${fmt2(resultado.ratio)}`);
+  lineas.push('');
+
+  const rIndividualesI = capasExistentes.map(c => calcularR(c));
+  const sumaRTextoI = rIndividualesI.map(v => fmt(v)).join(' + ');
+
+  lineas.push('2. RESISTENCIA TOTAL Y TRANSMITANCIA INICIAL (ANTES)');
+  lineas.push('──────────────────────────────────────────────────────');
+  lineas.push('Capas existentes:');
+  capasExistentes.forEach(c => {
+    lineas.push(`  - ${c.nombre || 'Sin nombre'}: ${fmt(calcularR(c))} m²K/W`);
+  });
+  lineas.push(`ΣR materiales (i) = ${sumaRTextoI} = ${fmt(resultado.r_mat_inicial)} m²K/W`);
+  lineas.push(`RTi = ${fmt(resultado.r_mat_inicial)} + ${Rse} + ${Rsi} = ${fmt(resultado.rt_inicial)} m²K/W`);
+  lineas.push(`Upi = 1 / ${fmt(resultado.rt_inicial)} = ${fmt(resultado.up_inicial)} W/m²K`);
+  lineas.push(`bi = ${resultado.b_inicial} → Ui = ${fmt(resultado.up_inicial)} * ${resultado.b_inicial} = ${fmt2(resultado.ui_final)} W/m²K`);
+  lineas.push('');
+  lineas.push('');
+
+  const rIndividualesF = todasCapas.map(c => calcularR(c));
+  const sumaRTextoF = rIndividualesF.map(v => fmt(v)).join(' + ');
+
+  lineas.push('3. RESISTENCIA TOTAL Y TRANSMITANCIA FINAL (DESPUÉS)');
+  lineas.push('──────────────────────────────────────────────────────');
+  lineas.push('Capas con mejora:');
+  todasCapas.forEach(c => {
+    const estado = c.es_nueva ? '[NUEVA]' : '[EXISTENTE]';
+    lineas.push(`  - ${c.nombre || 'Sin nombre'} ${estado}: ${fmt(calcularR(c))} m²K/W`);
+  });
+  lineas.push(`ΣR materiales (f) = ${sumaRTextoF} = ${fmt(resultado.r_mat_final)} m²K/W`);
+  lineas.push(`RTf = ${fmt(resultado.r_mat_final)} + ${Rse} + ${Rsi} = ${fmt(resultado.rt_final)} m²K/W`);
+  lineas.push(`Upf = 1 / ${fmt(resultado.rt_final)} = ${fmt(resultado.up_final)} W/m²K`);
+  lineas.push(`bf = ${resultado.b_final} → Uf = ${fmt(resultado.up_final)} * ${resultado.b_final} = ${fmt2(resultado.uf_final)} W/m²K`);
+  lineas.push('');
+  lineas.push('');
+
+  lineas.push('4. CÁLCULO AHORRO ENERGÉTICO');
+  lineas.push('─────────────────────────────');
+  lineas.push(`Zona Climática: ${zonaKey}   G = ${fmt2(g)} h·K`);
+  lineas.push(`AE = Fp * (Ui − Uf) * s * G`);
+  lineas.push(`AE = ${FP} * (${fmt2(resultado.ui_final)} − ${fmt2(resultado.uf_final)}) * ${fmt2(sup_actuacion)} * ${fmt2(g)} = ${Math.round(resultado.ahorro)} kWh`);
+  lineas.push('');
+  lineas.push('────────────────────────────────────');
+  lineas.push(`RESULTADO FINAL: ${Math.round(resultado.ahorro)} kWh`);
+  lineas.push('────────────────────────────────────');
+
+  return lineas.join('\n');
 }
