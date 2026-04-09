@@ -33,6 +33,53 @@ import { Input } from "./components/ui/input";
 import { Badge } from "./components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 
+type ConstruccionAnalizada = ConstruccionData & {
+    computaCe3x: boolean;
+    superficieNumero: number | null;
+};
+
+type InmuebleAnalizado = InmuebleData & {
+    computaCe3x: boolean;
+    superficieNumero: number | null;
+};
+
+function normalizarUso(uso: string): string {
+    return uso
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase();
+}
+
+function esUsoVivienda(uso: string): boolean {
+    const usoNormalizado = normalizarUso(uso).replace(/\s+/g, " ").trim();
+    return usoNormalizado === "VIVIENDA";
+}
+
+function parsearSuperficie(valor: string): number | null {
+    const raw = String(valor ?? "").trim();
+    if (!raw || raw === "N/D") return null;
+
+    let normalizado = raw.replace(/\s/g, "");
+    if (normalizado.includes(",") && normalizado.includes(".")) {
+        normalizado = normalizado.replace(/\./g, "").replace(",", ".");
+    } else {
+        normalizado = normalizado.replace(",", ".");
+    }
+
+    normalizado = normalizado.replace(/[^0-9.-]/g, "");
+    if (!normalizado || normalizado === "." || normalizado === "-") return null;
+
+    const numero = Number.parseFloat(normalizado);
+    return Number.isFinite(numero) ? numero : null;
+}
+
+function formatearSuperficie(valor: number): string {
+    return valor.toLocaleString("es-ES", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+}
+
 export function ConsultaCatastral() {
     const [rc, setRc] = useState("");
     const [loading, setLoading] = useState(false);
@@ -47,6 +94,32 @@ export function ConsultaCatastral() {
     // Validación en tiempo real
     const { valido: rcValido } = rc.trim() ? validarRC(rc) : { valido: false };
     const rcLength = rc.trim().replace(/[\s-]/g, "").length;
+    const construccionesAnalizadas: ConstruccionAnalizada[] = inmuebleUnico
+        ? inmuebleUnico.construcciones.map((c) => {
+            const superficieNumero = parsearSuperficie(c.superficie);
+            return {
+                ...c,
+                computaCe3x: esUsoVivienda(c.uso),
+                superficieNumero,
+            };
+        })
+        : [];
+    const construccionesVivienda = construccionesAnalizadas.filter((c) => c.computaCe3x && c.superficieNumero !== null);
+    const superficieViviendaTotal = construccionesVivienda.reduce((acc, c) => acc + (c.superficieNumero ?? 0), 0);
+    const operacionVivienda = construccionesVivienda.map((c) => formatearSuperficie(c.superficieNumero as number)).join(" + ");
+    const construccionesNoVivienda = construccionesAnalizadas.filter((c) => !c.computaCe3x);
+    const inmueblesAnalizados: InmuebleAnalizado[] = inmuebles.map((inm) => {
+        const superficieNumero = parsearSuperficie(inm.superficie);
+        return {
+            ...inm,
+            computaCe3x: esUsoVivienda(inm.uso),
+            superficieNumero,
+        };
+    });
+    const inmueblesVivienda = inmueblesAnalizados.filter((inm) => inm.computaCe3x && inm.superficieNumero !== null);
+    const superficieViviendaTotalInmuebles = inmueblesVivienda.reduce((acc, inm) => acc + (inm.superficieNumero ?? 0), 0);
+    const operacionViviendaInmuebles = inmueblesVivienda.map((inm) => formatearSuperficie(inm.superficieNumero as number)).join(" + ");
+    const inmueblesNoVivienda = inmueblesAnalizados.filter((inm) => !inm.computaCe3x);
 
     const handleConsultar = async () => {
         if (!rc.trim()) return;
@@ -178,6 +251,33 @@ export function ConsultaCatastral() {
                         <InfoCard icon={<Layers />} label="Sup. Suelo Parcela" value={inmuebleUnico.superficieSuelo ? `${inmuebleUnico.superficieSuelo} m²` : "N/D"} color="teal" />
                     </div>
 
+                    <Card className="bg-slate-900/40 border-slate-800">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
+                                <Home className="h-4 w-4 text-emerald-400" />
+                                CE3X - Suma solo uso VIVIENDA (exacto)
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="pt-0 space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                                <span className="text-slate-400">Total computable CE3X</span>
+                                <span className="text-emerald-400 font-mono font-semibold">
+                                    {formatearSuperficie(superficieViviendaTotal)} m²
+                                </span>
+                            </div>
+                            <p className="text-xs text-slate-400 font-mono break-words">
+                                {construccionesVivienda.length > 0
+                                    ? `Suma realizada: ${operacionVivienda} = ${formatearSuperficie(superficieViviendaTotal)} m²`
+                                    : "Suma realizada: 0,00 m² (no hay unidades con uso exactamente VIVIENDA y superficie numérica)."}
+                            </p>
+                            {construccionesNoVivienda.length > 0 && (
+                                <p className="text-xs text-amber-400 break-words">
+                                    No se suman (informativo): {construccionesNoVivienda.map((c) => `${c.uso} (${c.superficie} m²)`).join(" · ")}
+                                </p>
+                            )}
+                        </CardContent>
+                    </Card>
+
                     {/* Tabla de Construcciones */}
                     {inmuebleUnico.construcciones.length > 0 && (
                         <Card className="bg-slate-900/40 border-slate-800">
@@ -192,6 +292,7 @@ export function ConsultaCatastral() {
                                     <TableHeader>
                                         <TableRow className="border-slate-800 hover:bg-transparent">
                                             <TableHead className="text-slate-500 text-xs">Uso</TableHead>
+                                            <TableHead className="text-slate-500 text-xs">Computa CE3X</TableHead>
                                             <TableHead className="text-slate-500 text-xs">Tipo</TableHead>
                                             <TableHead className="text-slate-500 text-xs">Planta</TableHead>
                                             <TableHead className="text-slate-500 text-xs">Puerta</TableHead>
@@ -199,9 +300,14 @@ export function ConsultaCatastral() {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {inmuebleUnico.construcciones.map((c: ConstruccionData, i: number) => (
+                                        {construccionesAnalizadas.map((c, i: number) => (
                                             <TableRow key={i} className="border-slate-800/50">
                                                 <TableCell className="text-sm text-slate-200 font-medium">{c.uso}</TableCell>
+                                                <TableCell>
+                                                    <Badge className={c.computaCe3x ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30" : "bg-slate-700/50 text-slate-400 ring-1 ring-slate-600/50"}>
+                                                        {c.computaCe3x ? "SI" : "NO"}
+                                                    </Badge>
+                                                </TableCell>
                                                 <TableCell className="text-xs text-slate-400">{c.tipo}</TableCell>
                                                 <TableCell className="text-sm text-slate-300 font-mono">{c.planta}</TableCell>
                                                 <TableCell className="text-sm text-slate-300 font-mono">{c.puerta}</TableCell>
@@ -263,14 +369,41 @@ export function ConsultaCatastral() {
                         </Badge>
                     </div>
 
+                    <Card className="bg-slate-900/40 border-slate-800">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
+                                <Home className="h-4 w-4 text-emerald-400" />
+                                CE3X - Suma solo uso VIVIENDA (exacto)
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="pt-0 space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                                <span className="text-slate-400">Total computable CE3X</span>
+                                <span className="text-emerald-400 font-mono font-semibold">
+                                    {formatearSuperficie(superficieViviendaTotalInmuebles)} m²
+                                </span>
+                            </div>
+                            <p className="text-xs text-slate-400 font-mono break-words">
+                                {inmueblesVivienda.length > 0
+                                    ? `Suma realizada: ${operacionViviendaInmuebles} = ${formatearSuperficie(superficieViviendaTotalInmuebles)} m²`
+                                    : "Suma realizada: 0,00 m² (no hay unidades con uso exactamente VIVIENDA y superficie numérica)."}
+                            </p>
+                            {inmueblesNoVivienda.length > 0 && (
+                                <p className="text-xs text-amber-400 break-words">
+                                    No se suman (informativo): {inmueblesNoVivienda.map((inm) => `${inm.uso} (${inm.superficie} m²)`).join(" · ")}
+                                </p>
+                            )}
+                        </CardContent>
+                    </Card>
+
                     <div className="grid gap-3">
-                        {inmuebles.map((inm, i) => (
+                        {inmueblesAnalizados.map((inm, i) => (
                             <Card key={i} className="bg-slate-900/40 border-slate-800 hover:bg-slate-800/30 transition-colors cursor-pointer group">
                                 <CardContent className="p-4 flex items-center gap-4">
                                     <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-cyan-500/10 text-cyan-400 font-mono text-sm font-bold shrink-0">
                                         {i + 1}
                                     </div>
-                                    <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1">
+                                    <div className="flex-1 grid grid-cols-2 md:grid-cols-5 gap-x-6 gap-y-1">
                                         <div>
                                             <span className="text-[10px] uppercase tracking-wider text-slate-500">RC</span>
                                             <p className="text-xs font-mono text-slate-300">{inm.rc}</p>
@@ -286,6 +419,12 @@ export function ConsultaCatastral() {
                                         <div>
                                             <span className="text-[10px] uppercase tracking-wider text-slate-500">Uso / Año</span>
                                             <p className="text-sm text-slate-300">{inm.uso} · {inm.ano}</p>
+                                        </div>
+                                        <div>
+                                            <span className="text-[10px] uppercase tracking-wider text-slate-500">Computa CE3X</span>
+                                            <Badge className={inm.computaCe3x ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30" : "bg-slate-700/50 text-slate-400 ring-1 ring-slate-600/50"}>
+                                                {inm.computaCe3x ? "SI" : "NO"}
+                                            </Badge>
                                         </div>
                                     </div>
                                     <button

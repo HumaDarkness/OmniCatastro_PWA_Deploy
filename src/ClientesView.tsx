@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
-import { Users, Plus, UploadCloud, Save, ChevronLeft, Image as ImageIcon, Loader2 } from "lucide-react";
-import { supabase } from "./lib/supabase";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { Users, Plus, UploadCloud, Save, ChevronLeft, Image as ImageIcon, Loader2, CircleAlert, CircleCheck, Search, X } from "lucide-react";
+import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 
 export interface Client {
     id: string;
@@ -20,7 +20,17 @@ export interface Client {
     back_url?: string;
 }
 
+function normalizeClientSearch(value: string): string {
+    return value
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]/g, "");
+}
+
 export function ClientesView() {
+    const ORG_REQUIRED_MSG = "No se pudo resolver tu empresa activa. Inicia sesion real (no modo demo) y verifica que tu licencia este activa y vinculada a una organizacion.";
+
     const [clients, setClients] = useState<Client[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -31,13 +41,33 @@ export function ClientesView() {
     // Upload state
     const [uploadingFront, setUploadingFront] = useState(false);
     const [uploadingBack, setUploadingBack] = useState(false);
+    const [clientSearch, setClientSearch] = useState("");
 
     // Preview URLs for new uploads
     const [localFrontPreview, setLocalFrontPreview] = useState<string | null>(null);
     const [localBackPreview, setLocalBackPreview] = useState<string | null>(null);
+    const [uxError, setUxError] = useState<string | null>(null);
+    const [uxInfo, setUxInfo] = useState<string | null>(null);
 
     const frontInputRef = useRef<HTMLInputElement>(null);
     const backInputRef = useRef<HTMLInputElement>(null);
+
+    const filteredClients = useMemo(() => {
+        const query = normalizeClientSearch(clientSearch.trim());
+        if (!query) return clients;
+
+        return clients.filter((client) => {
+            const searchable = normalizeClientSearch([
+                client.first_name,
+                client.middle_name ?? "",
+                client.last_name_1,
+                client.last_name_2 ?? "",
+                client.dni,
+                client.dni_address ?? "",
+            ].join(" "));
+            return searchable.includes(query);
+        });
+    }, [clients, clientSearch]);
 
     useEffect(() => {
         if (!editingClient) {
@@ -54,6 +84,9 @@ export function ClientesView() {
 
         if (!error && data) {
             setClients(data as Client[]);
+            setUxError(null);
+        } else if (error) {
+            setUxError("No se pudo cargar el listado de clientes. Revalida sesion y vuelve a intentar.");
         }
         setLoading(false);
     }
@@ -76,6 +109,8 @@ export function ClientesView() {
 
     async function handleEditClient(client: Client) {
         setLoading(true);
+        setUxError(null);
+        setUxInfo(null);
         const enriched = await loadClientUrls(client);
         setEditingClient(enriched);
         setLocalFrontPreview(null);
@@ -84,6 +119,8 @@ export function ClientesView() {
     }
 
     function handleNewClient() {
+        setUxError(null);
+        setUxInfo(null);
         setEditingClient({
             first_name: "",
             middle_name: "",
@@ -98,13 +135,14 @@ export function ClientesView() {
 
     async function uploadDniImage(file: File, side: 'front' | 'back') {
         try {
-            const { data: license } = await supabase.from('licenses').select('organization_id').eq('status', 'active').maybeSingle();
-            if (!license?.organization_id) throw new Error("No organization found");
+            setUxError(null);
+            const organizationId = await getCurrentOrganizationId();
+            if (!organizationId) throw new Error(ORG_REQUIRED_MSG);
 
             const clientId = editingClient?.id || 'temp_' + Date.now();
             const fileExt = file.name.split('.').pop();
             const fileName = `dni_${side}_${Date.now()}.${fileExt}`;
-            const filePath = `${license.organization_id}/clients/${clientId}/${fileName}`;
+            const filePath = `${organizationId}/clients/${clientId}/${fileName}`;
 
             const setter = side === 'front' ? setUploadingFront : setUploadingBack;
             setter(true);
@@ -125,26 +163,47 @@ export function ClientesView() {
                 setLocalBackPreview(urlData?.signedUrl || URL.createObjectURL(file));
             }
         } catch (error: any) {
-            alert("Error subiendo imagen: " + error.message);
+            setUxError("Error subiendo imagen: " + error.message);
         } finally {
             const setter = side === 'front' ? setUploadingFront : setUploadingBack;
             setter(false);
         }
     }
 
+    async function copyDiagnostic() {
+        try {
+            const { data: userData } = await supabase.auth.getUser();
+            const organizationId = await getCurrentOrganizationId();
+            const diagnostic = [
+                "[UX-DIAGNOSTICO CLIENTES]",
+                `user_email=${userData.user?.email ?? "sin_sesion"}`,
+                `organization_id=${organizationId ?? "null"}`,
+                `editing_client_id=${editingClient?.id ?? "nuevo"}`,
+                `has_front=${editingClient?.dni_front_path ? "1" : "0"}`,
+                `has_back=${editingClient?.dni_back_path ? "1" : "0"}`,
+                `timestamp=${new Date().toISOString()}`,
+            ].join("\n");
+            await navigator.clipboard.writeText(diagnostic);
+            setUxInfo("Diagnostico copiado al portapapeles.");
+        } catch {
+            setUxInfo("No se pudo copiar el diagnostico en este navegador.");
+        }
+    }
+
     async function saveClient() {
         if (!editingClient?.first_name || !editingClient?.last_name_1 || !editingClient?.dni) {
-            alert("El primer nombre, primer apellido y DNI son obligatorios.");
+            setUxError("El primer nombre, primer apellido y DNI son obligatorios.");
             return;
         }
 
         setSaving(true);
         try {
-            const { data: license } = await supabase.from('licenses').select('organization_id').eq('status', 'active').maybeSingle();
-            if (!license?.organization_id) throw new Error("No org");
+            setUxError(null);
+            const organizationId = await getCurrentOrganizationId();
+            if (!organizationId) throw new Error(ORG_REQUIRED_MSG);
 
             const payload = {
-                organization_id: license.organization_id,
+                organization_id: organizationId,
                 first_name: editingClient.first_name,
                 middle_name: editingClient.middle_name || null,
                 last_name_1: editingClient.last_name_1,
@@ -167,7 +226,7 @@ export function ClientesView() {
 
             setEditingClient(null);
         } catch (error: any) {
-            alert("Error guardando cliente: " + error.message);
+            setUxError("Error guardando cliente: " + error.message);
         } finally {
             setSaving(false);
         }
@@ -190,6 +249,31 @@ export function ClientesView() {
                         Guardar Cliente
                     </button>
                 </div>
+
+                {(uxError || uxInfo) && (
+                    <div className="px-4 md:px-6 pt-4">
+                        {uxError && (
+                            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 flex items-start justify-between gap-3">
+                                <div className="inline-flex items-start gap-2">
+                                    <CircleAlert className="w-4 h-4 mt-0.5 shrink-0" />
+                                    <span>{uxError}</span>
+                                </div>
+                                <button
+                                    onClick={copyDiagnostic}
+                                    className="px-2 py-1 rounded border border-amber-500/30 text-[11px] text-amber-200 hover:bg-amber-500/10"
+                                >
+                                    Copiar diagnostico
+                                </button>
+                            </div>
+                        )}
+                        {uxInfo && (
+                            <div className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200 inline-flex items-center gap-2">
+                                <CircleCheck className="w-4 h-4" />
+                                <span>{uxInfo}</span>
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Split Screen Layout */}
                 <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
@@ -358,10 +442,41 @@ export function ClientesView() {
                 </button>
             </div>
 
+            <div className="px-6 md:px-8 py-3 border-b border-indigo-500/10 bg-[#0a0a1a]">
+                <div className="relative max-w-xl">
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                        type="text"
+                        value={clientSearch}
+                        onChange={(e) => setClientSearch(e.target.value)}
+                        placeholder="Buscar por DNI, nombre o apellidos..."
+                        className="w-full pl-9 pr-10 py-2 rounded-lg border border-slate-800 bg-black/20 text-slate-200 text-sm focus:border-indigo-500 focus:bg-indigo-950/20 outline-none transition-all"
+                    />
+                    {clientSearch && (
+                        <button
+                            onClick={() => setClientSearch("")}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                            title="Limpiar búsqueda"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                    )}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-2">
+                    Mostrando {filteredClients.length} de {clients.length} cliente(s).
+                </p>
+            </div>
+
             <div className="flex-1 overflow-y-auto p-6 md:p-8">
+                {uxError && (
+                    <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 inline-flex items-center gap-2">
+                        <CircleAlert className="w-4 h-4" />
+                        <span>{uxError}</span>
+                    </div>
+                )}
                 {loading ? (
                     <div className="flex justify-center p-12">
-                        <div className="w-8 h-8 text-indigo-500 animate-spin" />
+                        <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
                     </div>
                 ) : clients.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-slate-800 rounded-xl bg-[#0a0a1a]">
@@ -370,9 +485,16 @@ export function ClientesView() {
                         <p className="text-slate-500 mt-1 mb-4">Crea un cliente para transcribir su DNI y asociar expedientes.</p>
                         <button onClick={handleNewClient} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg">Añadir Cliente</button>
                     </div>
+                ) : filteredClients.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-64 border border-slate-800 rounded-xl bg-[#0a0a1a]">
+                        <Search className="w-10 h-10 text-slate-600 mb-3" />
+                        <h3 className="text-lg font-medium text-slate-300">Sin resultados</h3>
+                        <p className="text-slate-500 mt-1 mb-4 text-sm">No hay coincidencias para la búsqueda actual.</p>
+                        <button onClick={() => setClientSearch("")} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg">Limpiar búsqueda</button>
+                    </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {clients.map(client => (
+                        {filteredClients.map(client => (
                             <div
                                 key={client.id}
                                 onClick={() => handleEditClient(client)}

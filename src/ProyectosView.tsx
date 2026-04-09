@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { FolderOpen, Plus, Search, MapPin, Calendar, Clock, CheckCircle } from "lucide-react";
-import { supabase } from "./lib/supabase";
+import { FolderOpen, Plus, MapPin, Calendar, CircleAlert, CircleCheck } from "lucide-react";
+import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 import { ProyectoDetalle } from "./ProyectoDetalle";
 import type { Client } from "./ClientesView";
 
@@ -29,6 +29,8 @@ export function ProyectosView() {
     const [formClientId, setFormClientId] = useState("");
     const [formNexoRef, setFormNexoRef] = useState("");
     const [formSaving, setFormSaving] = useState(false);
+    const [uxError, setUxError] = useState<string | null>(null);
+    const [uxInfo, setUxInfo] = useState<string | null>(null);
 
     // Data list
     const [clientsList, setClientsList] = useState<Pick<Client, 'id' | 'first_name' | 'last_name_1' | 'dni'>[]>([]);
@@ -41,8 +43,12 @@ export function ProyectosView() {
     }, [selectedProject]);
 
     async function loadClientsList() {
-        const { data } = await supabase.from('clients').select('id, first_name, last_name_1, dni').order('created_at', { ascending: false });
-        if (data) setClientsList(data);
+        const { data, error } = await supabase.from('clients').select('id, first_name, last_name_1, dni').order('created_at', { ascending: false });
+        if (data) {
+            setClientsList(data);
+        } else if (error) {
+            setUxError("No se pudo cargar el listado de clientes para asignar al proyecto.");
+        }
     }
 
     async function loadProjects() {
@@ -54,6 +60,9 @@ export function ProyectosView() {
 
         if (!error && data) {
             setProjects(data as Project[]);
+            setUxError(null);
+        } else if (error) {
+            setUxError("No se pudo cargar proyectos. Revalida sesion y vuelve a intentar.");
         }
         setLoading(false);
     }
@@ -61,21 +70,19 @@ export function ProyectosView() {
     async function handleCreateProject(e: React.FormEvent) {
         e.preventDefault();
         setFormSaving(true);
+        setUxError(null);
+        setUxInfo(null);
 
         try {
-            // Get org_id from the user's active license
-            const { data: license } = await supabase
-                .from('licenses')
-                .select('organization_id')
-                .eq('status', 'active')
-                .maybeSingle();
-
-            if (!license?.organization_id) throw new Error("No organization found for this user.");
+            const organizationId = await getCurrentOrganizationId();
+            if (!organizationId) {
+                throw new Error("No se pudo resolver tu empresa activa. Inicia sesion real (no modo demo) y verifica que tu licencia este activa y vinculada a una organizacion para crear proyectos.");
+            }
 
             const { data: userAuth } = await supabase.auth.getUser();
 
             const { data: newProject, error } = await supabase.from('projects').insert([{
-                organization_id: license.organization_id,
+                organization_id: organizationId,
                 rc: formRc,
                 address: formAddress,
                 visit_date: formDate,
@@ -94,12 +101,13 @@ export function ProyectosView() {
             setFormNexoRef("");
             setFormDate(new Date().toISOString().split('T')[0]);
             await loadProjects();
+            setUxInfo("Proyecto creado correctamente.");
 
             if (newProject) {
                 setSelectedProject(newProject as Project);
             }
         } catch (error: any) {
-            alert("Error al crear proyecto: " + error.message);
+            setUxError("Error al crear proyecto: " + error.message);
         } finally {
             setFormSaving(false);
         }
@@ -133,6 +141,18 @@ export function ProyectosView() {
 
             {/* Content Area */}
             <div className="flex-1 overflow-y-auto p-6 md:p-8">
+                {uxError && (
+                    <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 inline-flex items-center gap-2">
+                        <CircleAlert className="w-4 h-4" />
+                        <span>{uxError}</span>
+                    </div>
+                )}
+                {uxInfo && (
+                    <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200 inline-flex items-center gap-2">
+                        <CircleCheck className="w-4 h-4" />
+                        <span>{uxInfo}</span>
+                    </div>
+                )}
                 {loading ? (
                     <div className="flex items-center justify-center h-64">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
@@ -199,6 +219,12 @@ export function ProyectosView() {
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
                     <div className="bg-[#0f0f23] border border-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl">
                         <h2 className="text-xl font-bold text-white mb-4">Nuevo Proyecto</h2>
+                        {uxError && (
+                            <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 inline-flex items-center gap-2">
+                                <CircleAlert className="w-4 h-4" />
+                                <span>{uxError}</span>
+                            </div>
+                        )}
                         <form onSubmit={handleCreateProject} className="space-y-4">
                             <div>
                                 <label className="block text-sm font-medium text-slate-400 mb-1">Referencia Catastral</label>

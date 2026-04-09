@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, Camera, Image as ImageIcon, Trash2, Loader2, Maximize2, Download } from "lucide-react";
+import { ArrowLeft, Camera, Image as ImageIcon, Trash2, Loader2, Download } from "lucide-react";
 import { supabase } from "./lib/supabase";
 import { ExportadorModal } from "./components/ExportadorModal";
 import type { Project } from "./ProyectosView";
@@ -10,6 +10,7 @@ export interface Photo {
     category: 'antes' | 'despues';
     storage_path: string;
     url?: string; // Signed URL retrieved at runtime
+    created_at: string;
 }
 
 interface ProyectoDetalleProps {
@@ -23,7 +24,6 @@ export function ProyectoDetalle({ project, onBack }: ProyectoDetalleProps) {
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const [showExportModal, setShowExportModal] = useState(false);
-    const [previewPhoto, setPreviewPhoto] = useState<string | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
