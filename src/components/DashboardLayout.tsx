@@ -25,6 +25,20 @@ import { getUxRecoverySnapshot, type LicenseTier, type UxRecoverySnapshot } from
 
 type DashboardView = "resumen" | "central-documental" | "calculadora" | "consulta-catastral" | "clientes" | "mis-proyectos" | "ajustes";
 
+const HASH_VIEWS: DashboardView[] = [
+    "central-documental",
+    "consulta-catastral",
+    "calculadora",
+    "clientes",
+    "mis-proyectos",
+];
+
+function parseDashboardViewFromHash(): DashboardView {
+    if (typeof window === "undefined") return "central-documental";
+    const hashValue = window.location.hash.replace(/^#/, "") as DashboardView;
+    return HASH_VIEWS.includes(hashValue) ? hashValue : "central-documental";
+}
+
 interface DashboardLayoutProps {
     licenseKey: string;
     tier: LicenseTier;
@@ -40,7 +54,7 @@ interface NavItem {
 }
 
 export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
-    const [activeView, setActiveView] = useState<DashboardView>("central-documental");
+    const [activeView, setActiveView] = useState<DashboardView>(() => parseDashboardViewFromHash());
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [uxSnapshot, setUxSnapshot] = useState<UxRecoverySnapshot | null>(null);
     const [uxLoading, setUxLoading] = useState(true);
@@ -85,6 +99,26 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
             isMounted = false;
             window.clearInterval(timer);
         };
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const nextHash = `#${activeView}`;
+        if (window.location.hash !== nextHash) {
+            window.history.replaceState(null, "", nextHash);
+        }
+    }, [activeView]);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+
+        const onHashChange = () => {
+            const nextView = parseDashboardViewFromHash();
+            setActiveView((current) => (current === nextView ? current : nextView));
+        };
+
+        window.addEventListener("hashchange", onHashChange);
+        return () => window.removeEventListener("hashchange", onHashChange);
     }, []);
 
     const suggestedAction = (() => {

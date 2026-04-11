@@ -7,14 +7,20 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "vitest run src/lib/__tests__/resolveConflict.unit.test.ts",
+    "test:integration": "vitest run src/lib/__tests__/syncService.integration.test.ts",
+    "test:e2e": "playwright test e2e/conflictReliability.e2e.ts",
+    "test:e2e:headed": "playwright test e2e/conflictReliability.e2e.ts --headed",
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1000.0",
     "@react-oauth/google": "^0.13.4",
-    "@supabase/supabase-js": "^2.98.0",
+    "@supabase/supabase-js": "^2.103.0",
     "dotenv": "^17.3.1",
     "file-saver": "^2.0.5",
+    "idb": "^8.0.3",
     "jspdf": "^4.2.0",
     "jspdf-autotable": "^5.0.7",
     "jszip": "^3.10.1",
@@ -25,6 +31,7 @@
     "react-router-dom": "^7.13.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.55.1",
     "@eslint/js": "^9.39.1",
     "@tailwindcss/postcss": "^4.2.1",
     "@types/file-saver": "^2.0.7",
@@ -41,6 +48,7 @@
     "tailwindcss": "^4.2.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.48.0",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vitest": "^3.2.4"
   }
 }

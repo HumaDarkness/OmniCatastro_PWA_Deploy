@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Shield, Sparkles, Database, Layers, ArrowLeft, Loader2 } from 'lucide-react';
-import { loginWithEmail, logoutUser, validateUserLicense } from './lib/supabase';
+import { loginWithEmail, logoutUser, restoreSessionFromAuth, validateUserLicense } from './lib/supabase';
 import type { LicenseTier } from './lib/supabase';
 import { LandingPage } from './LandingPage';
 import { DashboardLayout } from './components/DashboardLayout';
@@ -14,9 +14,35 @@ function App() {
   const [password, setPassword] = useState('');
   const [view, setView] = useState<AppView>('landing');
   const [isValidating, setIsValidating] = useState(false);
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [sessionTier, setSessionTier] = useState<LicenseTier>('pwa_only');
   const [sessionKey, setSessionKey] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function bootstrapSession() {
+      try {
+        const result = await restoreSessionFromAuth();
+        if (cancelled) return;
+
+        if (result.valid) {
+          setSessionTier(result.tier || 'pwa_only');
+          setSessionKey(result.licenseKey || '');
+          setView('dashboard');
+        }
+      } finally {
+        if (!cancelled) setIsBootstrapping(false);
+      }
+    }
+
+    void bootstrapSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,6 +94,17 @@ function App() {
     setSessionKey('');
     setErrorMsg(null);
   };
+
+  if (isBootstrapping) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0A0A0A] text-slate-300">
+        <div className="flex items-center gap-3 text-sm">
+          <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+          Restaurando sesion...
+        </div>
+      </div>
+    );
+  }
 
   // --- LANDING PAGE ---
   if (view === 'landing') {

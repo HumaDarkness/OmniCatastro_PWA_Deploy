@@ -47,7 +47,29 @@ import {
     generarPDFCertificadoIntellia,
     type IntelliaCertificateTemplateInput,
 } from "./lib/intelliaCertificatePdf";
-import { getCurrentOrganizationId, supabase } from "./lib/supabase";
+import {
+    getCurrentOrganizationId,
+    getExpedienteMvpByRc,
+    supabase,
+    upsertExpedienteMvp,
+    type ExpedienteStatus,
+} from "./lib/supabase";
+import {
+    countOfflineExpedienteWrites,
+    upsertOfflineExpedienteWrite,
+} from "./lib/offlineQueue";
+import {
+    announceExpedienteTabWrite,
+    EXPEDIENTE_NEEDS_RESOLUTION_EVENT,
+    flushOfflineExpedienteQueueNow,
+    isExpedienteMvpSyncEnabled,
+    resolveQueuedConflictWithLocalWins,
+    resolveQueuedConflictWithRemoteWins,
+    startExpedienteMvpSyncLoop,
+    type ExpedienteNeedsResolutionDetail,
+    type ExpedienteSyncReport,
+    type SyncReason,
+} from "./lib/syncService";
 import { fetchAltitudeAndProvince } from "./lib/climateZoneVerifier";
 import { consultarCatastro, esParcerlaMultiple, extraerDatosInmuebleUnico } from "./lib/catastroService";
 import {
@@ -376,8 +398,10 @@ const CERT_ISSUED_INDEX_FILENAME = "_issued_index.json";
 const CERT_ISSUED_FOLDER = "emitidos";
 const BACKUP_ZIP_VERSION = 2;
 const LEGACY_CERT_PREFIX = "cert_";
+const ENABLE_EXPEDIENTE_MVP_RPC = String(import.meta.env.VITE_EXPEDIENTES_RPC_ENABLED ?? "false").toLowerCase() === "true";
 
 type CertDraftStatus = "pendiente" | "en_progreso" | "completado";
+type MvpSyncUiStatus = "idle" | "queued" | "synced" | "conflict" | "error";
 type ImportMergeStrategy = "overwrite" | "skip" | "merge";
 type ImportAuditAction = "created" | "overwritten" | "merged" | "skipped" | "invalid" | "failed";
 
@@ -767,6 +791,11 @@ interface CalcStateSnapshot {
     resultado: ResultadoTermico | null;
 }
 
+interface ExpedienteMvpSyncMeta {
+    expedienteId: string;
+    versionToken: string;
+}
+
 export function CalculadoraTermica() {
     const [expedienteRc, setExpedienteRc] = useState("");
     const [certStatus, setCertStatus] = useState<CertDraftStatus>("en_progreso");
@@ -835,14 +864,119 @@ export function CalculadoraTermica() {
     const [draftSaving, setDraftSaving] = useState(false);
     const [draftMsg, setDraftMsg] = useState<string | null>(null);
     const [draftError, setDraftError] = useState<string | null>(null);
+    const [mvpSyncStatus, setMvpSyncStatus] = useState<MvpSyncUiStatus>("idle");
+    const [mvpSyncPendingCount, setMvpSyncPendingCount] = useState(0);
+    const [pendingConflictResolution, setPendingConflictResolution] = useState<ExpedienteNeedsResolutionDetail | null>(null);
+    const [conflictDecisionBusy, setConflictDecisionBusy] = useState(false);
     const [backupImportStrategy, setBackupImportStrategy] = useState<ImportMergeStrategy>("merge");
     const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
     const latestResultadoRef = useRef<ResultadoTermico | null>(null);
     const cancelBatchRef = useRef(false);
+    const expedienteMvpMetaRef = useRef<Record<string, ExpedienteMvpSyncMeta>>({});
 
     useEffect(() => {
         latestResultadoRef.current = resultado;
     }, [resultado]);
+
+    const applySyncReportToUi = (report: ExpedienteSyncReport) => {
+        setMvpSyncPendingCount(report.pending);
+
+        if (report.conflicts > 0) {
+            setMvpSyncStatus("conflict");
+        } else if (report.errors > 0) {
+            setMvpSyncStatus("error");
+        } else if (report.pending > 0) {
+            setMvpSyncStatus("queued");
+        } else if (report.synced > 0) {
+            setMvpSyncStatus("synced");
+        } else {
+            setMvpSyncStatus("idle");
+        }
+    };
+
+    const resolvePendingConflict = async (decision: "local_wins" | "remote_wins") => {
+        if (!pendingConflictResolution) return;
+
+        setConflictDecisionBusy(true);
+        setDraftError(null);
+
+        try {
+            const report = decision === "local_wins"
+                ? await resolveQueuedConflictWithLocalWins(pendingConflictResolution)
+                : await resolveQueuedConflictWithRemoteWins(pendingConflictResolution);
+
+            setPendingConflictResolution(null);
+            applySyncReportToUi(report);
+
+            if (decision === "local_wins") {
+                setDraftMsg(
+                    `Se priorizó tu versión local para ${pendingConflictResolution.rc}. Reintentando sincronización SQL MVP.`,
+                );
+            } else {
+                setDraftMsg(
+                    `Se aceptó la versión remota para ${pendingConflictResolution.rc}. El cambio local se descartó de la cola SQL.`,
+                );
+            }
+        } catch (error: any) {
+            setDraftError(error?.message ?? "No se pudo resolver el conflicto seleccionado.");
+        } finally {
+            setConflictDecisionBusy(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!isExpedienteMvpSyncEnabled() || typeof window === "undefined") return;
+
+        const handleNeedsResolution = (event: Event) => {
+            const detail = (event as CustomEvent<ExpedienteNeedsResolutionDetail>).detail;
+            if (!detail) return;
+
+            setPendingConflictResolution(detail);
+            setMvpSyncStatus("conflict");
+            setDraftError(`Conflicto de versión detectado en ${detail.rc}. Elige qué versión conservar.`);
+        };
+
+        window.addEventListener(EXPEDIENTE_NEEDS_RESOLUTION_EVENT, handleNeedsResolution as EventListener);
+        return () => {
+            window.removeEventListener(EXPEDIENTE_NEEDS_RESOLUTION_EVENT, handleNeedsResolution as EventListener);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!isExpedienteMvpSyncEnabled()) return;
+
+        let cancelled = false;
+
+        const refreshPending = async () => {
+            const pending = await countOfflineExpedienteWrites();
+            if (cancelled) return;
+            setMvpSyncPendingCount(pending);
+            setMvpSyncStatus(pending > 0 ? "queued" : "idle");
+        };
+
+        void refreshPending();
+
+        const stop = startExpedienteMvpSyncLoop((report, reason: SyncReason) => {
+            if (cancelled) return;
+
+            applySyncReportToUi(report);
+
+            if (reason === "interval") return;
+
+            if (report.synced > 0) {
+                setDraftMsg(`Sincronización SQL MVP: ${report.synced} pendiente(s) enviados. Pendientes: ${report.pending}.`);
+            }
+
+            if (report.conflicts > 0) {
+                setDraftError(`Hay ${report.conflicts} conflicto(s) de versión en la cola SQL MVP.`);
+            }
+        });
+
+        return () => {
+            cancelled = true;
+            stop();
+        };
+    }, []);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -850,54 +984,12 @@ export function CalculadoraTermica() {
             const raw = window.localStorage.getItem(CALC_STATE_STORAGE_KEY);
             if (!raw) return;
 
-            const saved = JSON.parse(raw) as Partial<CalcStateSnapshot>;
-
-            if (typeof saved.expedienteRc === "string") setExpedienteRc(saved.expedienteRc);
-            if (saved.certStatus === "pendiente" || saved.certStatus === "en_progreso" || saved.certStatus === "completado") {
-                setCertStatus(saved.certStatus);
-            }
-            if (Array.isArray(saved.capas) && typeof saved.expedienteRc === "string" && saved.expedienteRc.trim()) {
-                setCapas(saved.capas);
-            }
-            if (typeof saved.areaHNH === "number") setAreaHNH(saved.areaHNH);
-            if (typeof saved.areaNHE === "number") setAreaNHE(saved.areaNHE);
-            if (typeof saved.supActuacion === "number") setSupActuacion(saved.supActuacion);
-            if (typeof saved.supEnvolvente === "number") setSupEnvolvente(saved.supEnvolvente);
-            if (typeof saved.zonaKey === "string" && saved.zonaKey) setZonaKey(saved.zonaKey);
-            if (saved.scenarioI) setScenarioI(saved.scenarioI);
-            if (saved.scenarioF) setScenarioF(saved.scenarioF);
-            if (saved.caseI) setCaseI(saved.caseI);
-            if (saved.caseF) setCaseF(saved.caseF);
-            if (typeof saved.ventilationLocked === "boolean") setVentilationLocked(saved.ventilationLocked);
-            if (typeof saved.modoCE3X === "boolean") setModoCE3X(saved.modoCE3X);
-            if (typeof saved.overrideUi === "string") setOverrideUi(saved.overrideUi);
-            if (typeof saved.overrideUf === "string") setOverrideUf(saved.overrideUf);
-            if (typeof saved.clienteFirstName === "string") setClienteFirstName(saved.clienteFirstName);
-            if (typeof saved.clienteMiddleName === "string") setClienteMiddleName(saved.clienteMiddleName);
-            if (typeof saved.clienteLastName1 === "string") setClienteLastName1(saved.clienteLastName1);
-            if (typeof saved.clienteLastName2 === "string") setClienteLastName2(saved.clienteLastName2);
-            if (typeof saved.clienteDni === "string") setClienteDni(saved.clienteDni);
-            if (typeof saved.clienteDireccionDni === "string") setClienteDireccionDni(saved.clienteDireccionDni);
-            if (typeof saved.xmlFileName === "string") setXmlFileName(saved.xmlFileName);
-            if (typeof saved.direccionInmueble === "string") setDireccionInmueble(saved.direccionInmueble);
-            if (typeof saved.municipioInmueble === "string") setMunicipioInmueble(saved.municipioInmueble);
-            if (typeof saved.cpInmueble === "string") setCpInmueble(saved.cpInmueble);
-            if (typeof saved.provinciaInmueble === "string") setProvinciaInmueble(saved.provinciaInmueble);
-            if (typeof saved.supOpacos === "number") setSupOpacos(saved.supOpacos);
-            if (typeof saved.supHuecos === "number") setSupHuecos(saved.supHuecos);
-            if (Array.isArray(saved.elementosOpacosList)) setElementosOpacosList(saved.elementosOpacosList);
-            if (Array.isArray(saved.elementosHuecosList)) setElementosHuecosList(saved.elementosHuecosList);
-            if (saved.alturaMsnm !== undefined) setAlturaMsnm(String(saved.alturaMsnm));
-            if (saved.filtroMetodo && typeof saved.filtroMetodo === "object") setFiltroMetodo(saved.filtroMetodo);
-            if (saved.materialSearchByLayer && typeof saved.materialSearchByLayer === "object") {
-                setMaterialSearchByLayer(saved.materialSearchByLayer);
-            }
-            if (saved.soloFavoritosPorCapa && typeof saved.soloFavoritosPorCapa === "object") {
-                setSoloFavoritosPorCapa(saved.soloFavoritosPorCapa);
-            }
-            if (saved.resultado && typeof saved.resultado === "object") setResultado(saved.resultado as ResultadoTermico);
+            // Inicia siempre con formulario limpio para evitar arrastre de estado parcial.
+            // La cola (activo/archivado) sigue cargando desde nube y los borradores se
+            // abren solo por acción explícita del usuario.
+            window.localStorage.removeItem(CALC_STATE_STORAGE_KEY);
         } catch {
-            // Si hay datos corruptos en localStorage, no bloquear la UI.
+            // Si localStorage falla, no bloquear la UI.
         }
     }, []);
 
@@ -1987,6 +2079,87 @@ export function CalculadoraTermica() {
             throw new Error("No se pudo resolver la empresa activa para guardar/cargar certificados.");
         }
         return organizationId;
+    };
+
+    const mapDraftStatusToExpedienteStatus = (status: CertDraftStatus): ExpedienteStatus => {
+        return status === "completado" ? "completado" : "en_progreso";
+    };
+
+    const syncDraftToMvpExpediente = async (
+        rcNormalized: string,
+        finalStatus: CertDraftStatus,
+        payload: CertificateDraftPayload,
+    ): Promise<{ ok: boolean; warning?: string }> => {
+        if (!ENABLE_EXPEDIENTE_MVP_RPC) {
+            return { ok: true };
+        }
+
+        try {
+            let meta = expedienteMvpMetaRef.current[rcNormalized];
+
+            if (!meta) {
+                const existing = await getExpedienteMvpByRc(rcNormalized);
+                if (existing?.id && existing.versionToken) {
+                    meta = { expedienteId: existing.id, versionToken: existing.versionToken };
+                    expedienteMvpMetaRef.current[rcNormalized] = meta;
+                }
+            }
+
+            const attempt = await upsertExpedienteMvp({
+                expedienteId: meta?.expedienteId ?? null,
+                rc: rcNormalized,
+                datos: payload as unknown as Record<string, unknown>,
+                versionActual: meta?.versionToken ?? null,
+                status: mapDraftStatusToExpedienteStatus(finalStatus),
+                projectId: null,
+            });
+
+            if (attempt.ok) {
+                expedienteMvpMetaRef.current[rcNormalized] = {
+                    expedienteId: attempt.id,
+                    versionToken: attempt.versionToken,
+                };
+                return { ok: true };
+            }
+
+            // Si hay duplicado y no había metadata local, reintentar en modo update.
+            if (!meta && attempt.error === "DUPLICATE_RC") {
+                const existing = await getExpedienteMvpByRc(rcNormalized);
+                if (existing?.id && existing.versionToken) {
+                    const retry = await upsertExpedienteMvp({
+                        expedienteId: existing.id,
+                        rc: rcNormalized,
+                        datos: payload as unknown as Record<string, unknown>,
+                        versionActual: existing.versionToken,
+                        status: mapDraftStatusToExpedienteStatus(finalStatus),
+                        projectId: null,
+                    });
+
+                    if (retry.ok) {
+                        expedienteMvpMetaRef.current[rcNormalized] = {
+                            expedienteId: retry.id,
+                            versionToken: retry.versionToken,
+                        };
+                        return { ok: true };
+                    }
+
+                    return {
+                        ok: false,
+                        warning: `MVP SQL no sincronizado (${retry.error}).`,
+                    };
+                }
+            }
+
+            return {
+                ok: false,
+                warning: `MVP SQL no sincronizado (${attempt.error}).`,
+            };
+        } catch {
+            return {
+                ok: false,
+                warning: "MVP SQL no sincronizado (error de red o despliegue pendiente).",
+            };
+        }
     };
 
     const readStorageTextByCandidates = async (candidates: string[]): Promise<{ text: string; path: string } | null> => {
@@ -3273,6 +3446,7 @@ export function CalculadoraTermica() {
             const organizationId = await resolveOrganizationOrThrow();
             const finalStatus = statusOverride ?? certStatus;
             const nowIso = new Date().toISOString();
+            const localUpdatedAt = Date.now();
 
             const payload: CertificateDraftPayload = {
                 version: CERT_DRAFT_VERSION,
@@ -3317,6 +3491,51 @@ export function CalculadoraTermica() {
                 resultado,
             };
 
+            let mvpSyncWarning: string | null = null;
+            let mvpSyncNote: string | null = null;
+
+            if (isExpedienteMvpSyncEnabled()) {
+                announceExpedienteTabWrite(rcNormalized);
+            }
+
+            const mvpSyncResult = await syncDraftToMvpExpediente(rcNormalized, finalStatus, payload);
+            if (!mvpSyncResult.ok && mvpSyncResult.warning) {
+                mvpSyncWarning = mvpSyncResult.warning;
+                console.warn(`[MVP anti-loss] ${mvpSyncWarning}`);
+                setMvpSyncStatus("error");
+            }
+
+            if (mvpSyncResult.ok && isExpedienteMvpSyncEnabled()) {
+                setMvpSyncStatus("synced");
+            }
+
+            if (isExpedienteMvpSyncEnabled()) {
+                if (!mvpSyncResult.ok) {
+                    const currentMeta = expedienteMvpMetaRef.current[rcNormalized];
+                    await upsertOfflineExpedienteWrite({
+                        rc: rcNormalized,
+                        datos: payload as unknown as Record<string, unknown>,
+                        status: mapDraftStatusToExpedienteStatus(finalStatus),
+                        expedienteId: currentMeta?.expedienteId ?? null,
+                        versionToken: currentMeta?.versionToken ?? null,
+                        localUpdatedAt,
+                        lastError: mvpSyncWarning,
+                    });
+
+                    const pendingWrites = await countOfflineExpedienteWrites();
+                    setMvpSyncPendingCount(pendingWrites);
+                    setMvpSyncStatus("queued");
+                    mvpSyncNote = `Guardado en cola SQL offline (${pendingWrites} pendiente(s)).`;
+                } else {
+                    const report = await flushOfflineExpedienteQueueNow("manual");
+                    applySyncReportToUi(report);
+
+                    if (report.synced > 0) {
+                        mvpSyncNote = `Sincronización SQL MVP: ${report.synced} pendiente(s) enviados.`;
+                    }
+                }
+            }
+
             const draftPath = getDraftPath(organizationId, rcNormalized);
             const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
             const { error } = await supabase.storage.from("work_photos").upload(draftPath, blob, {
@@ -3353,9 +3572,16 @@ export function CalculadoraTermica() {
             setDraftQueue(sortDrafts(merged));
             setArchivedQueue(sortDrafts(archivedFiltered));
             if (!options?.suppressSuccessMessage) {
-                setDraftMsg(finalStatus === "completado"
+                const successMsg = finalStatus === "completado"
                     ? `Certificado ${rcNormalized} marcado como completado y guardado.`
-                    : `Borrador ${rcNormalized} guardado correctamente.`);
+                    : `Borrador ${rcNormalized} guardado correctamente.`;
+
+                const extraMsg = [
+                    mvpSyncNote,
+                    mvpSyncWarning ? `Aviso: ${mvpSyncWarning}` : null,
+                ].filter(Boolean).join(" ");
+
+                setDraftMsg(extraMsg ? `${successMsg} ${extraMsg}` : successMsg);
             }
             return true;
         } catch (error: any) {
@@ -3699,6 +3925,29 @@ export function CalculadoraTermica() {
             ? "Importación"
             : "Reparación";
 
+    const mvpSyncBadge = {
+        idle: {
+            label: "SQL MVP inactivo",
+            className: "border-slate-700/40 text-slate-300 bg-slate-900/20",
+        },
+        queued: {
+            label: `SQL MVP en cola (${mvpSyncPendingCount})`,
+            className: "border-amber-700/40 text-amber-300 bg-amber-900/20",
+        },
+        synced: {
+            label: "SQL MVP sincronizado",
+            className: "border-emerald-700/40 text-emerald-300 bg-emerald-900/20",
+        },
+        conflict: {
+            label: "SQL MVP conflicto",
+            className: "border-rose-700/40 text-rose-300 bg-rose-900/20",
+        },
+        error: {
+            label: "SQL MVP error",
+            className: "border-orange-700/40 text-orange-300 bg-orange-900/20",
+        },
+    }[mvpSyncStatus];
+
     const materialFlags = {
         hormigon: capas.some((c) => c.nombre.toLowerCase().includes("hormig")),
         yeso: capas.some((c) => c.nombre.toLowerCase().includes("yeso")),
@@ -3811,6 +4060,11 @@ export function CalculadoraTermica() {
                         <span className="px-2 py-1 rounded border border-emerald-700/40 text-emerald-300 bg-emerald-900/20">Completados: {queueCompleted}</span>
                         <span className="px-2 py-1 rounded border border-violet-700/40 text-violet-300 bg-violet-900/20">Archivados: {archivedTotal}</span>
                         <span className="px-2 py-1 rounded border border-cyan-700/40 text-cyan-300 bg-cyan-900/20">Emitidos cloud: {issuedCertificatesCount}</span>
+                        {isExpedienteMvpSyncEnabled() && (
+                            <span className={`px-2 py-1 rounded border ${mvpSyncBadge.className}`}>
+                                {mvpSyncBadge.label}
+                            </span>
+                        )}
                         <button
                             onClick={toggleArchivedQueuePanel}
                             className="h-8 px-3 rounded-md bg-violet-900/20 border border-violet-700/40 text-violet-200 hover:bg-violet-800/40 inline-flex items-center gap-1"
@@ -3997,6 +4251,45 @@ export function CalculadoraTermica() {
                     {draftError && (
                         <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 px-3 py-2 rounded-md">
                             {draftError}
+                        </div>
+                    )}
+
+                    {pendingConflictResolution && (
+                        <div className="text-xs text-rose-200 bg-rose-950/30 border border-rose-700/40 px-3 py-3 rounded-md space-y-2">
+                            <p className="font-semibold">
+                                Conflicto SQL MVP en {pendingConflictResolution.rc}
+                            </p>
+                            <p className="text-rose-100/90">
+                                {pendingConflictResolution.context.sameUser
+                                    ? "Se detectó un cambio reciente de tu misma sesión (posible multi-pestaña)."
+                                    : "Se detectó un cambio remoto de otra sesión o usuario."}
+                            </p>
+                            <p className="text-rose-100/80">
+                                Campos distintos: {pendingConflictResolution.context.diffKeys.length > 0
+                                    ? pendingConflictResolution.context.diffKeys.slice(0, 8).join(", ")
+                                    : "sin detalle disponible"}.
+                            </p>
+                            <p className="text-rose-100/70">
+                                Última actualización remota: {pendingConflictResolution.context.remoteUpdatedAt
+                                    ? new Date(pendingConflictResolution.context.remoteUpdatedAt).toLocaleString()
+                                    : "sin fecha remota"}.
+                            </p>
+                            <div className="flex flex-wrap gap-2 pt-1">
+                                <button
+                                    onClick={() => void resolvePendingConflict("local_wins")}
+                                    disabled={conflictDecisionBusy}
+                                    className="h-8 px-3 rounded-md bg-amber-900/40 border border-amber-700/40 text-amber-200 hover:bg-amber-800/50 disabled:opacity-40"
+                                >
+                                    Conservar mi versión
+                                </button>
+                                <button
+                                    onClick={() => void resolvePendingConflict("remote_wins")}
+                                    disabled={conflictDecisionBusy}
+                                    className="h-8 px-3 rounded-md bg-slate-800 border border-slate-600 text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                                >
+                                    Aceptar versión remota
+                                </button>
+                            </div>
                         </div>
                     )}
 
