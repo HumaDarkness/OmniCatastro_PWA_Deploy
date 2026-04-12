@@ -40,6 +40,7 @@ import {
     type Scenario,
     type Caso,
 } from "./lib/thermalCalculator";
+import { calcularDbHeRemoto } from "./lib/apiClient";
 import { generarPDFAnexoE1 } from "./lib/anexoE1Generator";
 import {
     buildIntelliaCertificateFilename,
@@ -831,6 +832,10 @@ export function CalculadoraTermica() {
     const [overrideUi, setOverrideUi] = useState("");
     const [overrideUf, setOverrideUf] = useState("");
     const [capturas, setCapturas] = useState<CapturasState>(createEmptyCapturasState());
+    
+    // Remote Calculation Toggle
+    const [isCloudCalculation, setIsCloudCalculation] = useState(true);
+    const [isCalculating, setIsCalculating] = useState(false);
 
     const [clienteFirstName, setClienteFirstName] = useState("");
     const [clienteMiddleName, setClienteMiddleName] = useState("");
@@ -1614,37 +1619,83 @@ export function CalculadoraTermica() {
         }
     };
 
-    const calcular = () => {
-        const gValue = VALORES_G[zonaKey] ?? 61;
-        const res = calcularAhorroCAE({
-            capas,
-            area_h_nh: areaHNH,
-            area_nh_e: areaNHE,
-            superficie_actuacion: supActuacion,
-            g: gValue,
-            sup_envolvente_total: supEnvolvente,
-            scenario_i: scenarioI,
-            scenario_f: scenarioF,
-            case_i: caseI,
-            case_f: caseF,
-            modoCE3X,
-        });
+    const calcular = async () => {
+        setIsCalculating(true);
+        try {
+            const gValue = VALORES_G[zonaKey] ?? 61;
+            
+            if (isCloudCalculation) {
+                // Calculation using Remote API
+                const res = await calcularDbHeRemoto({
+                    capas,
+                    area_h_nh: areaHNH,
+                    area_nh_e: areaNHE,
+                    superficie_actuacion: supActuacion,
+                    g: gValue,
+                    sup_envolvente_total: supEnvolvente,
+                    scenario_i: scenarioI,
+                    scenario_f: scenarioF,
+                    case_i: caseI,
+                    case_f: caseF,
+                    modoCE3X,
+                });
+                
+                const { resultado: resTermico, informe } = res;
+                setXmlImportMsg(`✅ Cálculo Cloud Completado. Informe: ${informe ? "Adjunto" : "Vacio"}`);
 
-        const parsedUi = Number.parseFloat(overrideUi);
-        const parsedUf = Number.parseFloat(overrideUf);
-        const uiFinal = Number.isFinite(parsedUi) ? parsedUi : res.ui_final;
-        const ufFinal = Number.isFinite(parsedUf) ? parsedUf : res.uf_final;
-        const ahorroFinal = uiFinal > ufFinal ? Math.round((uiFinal - ufFinal) * supActuacion * gValue) : 0;
+                const parsedUi = Number.parseFloat(overrideUi);
+                const parsedUf = Number.parseFloat(overrideUf);
+                const uiFinal = Number.isFinite(parsedUi) ? parsedUi : resTermico.ui_final;
+                const ufFinal = Number.isFinite(parsedUf) ? parsedUf : resTermico.uf_final;
+                const ahorroFinal = uiFinal > ufFinal ? Math.round((uiFinal - ufFinal) * supActuacion * gValue) : 0;
+                
+                const nextResultado: ResultadoTermico = {
+                    ...resTermico,
+                    ui_final: uiFinal,
+                    uf_final: ufFinal,
+                    ahorro: ahorroFinal,
+                };
+                
+                latestResultadoRef.current = nextResultado;
+                setResultado(nextResultado);
+            } else {
+                // Fallback to local calculation
+                const res = calcularAhorroCAE({
+                    capas,
+                    area_h_nh: areaHNH,
+                    area_nh_e: areaNHE,
+                    superficie_actuacion: supActuacion,
+                    g: gValue,
+                    sup_envolvente_total: supEnvolvente,
+                    scenario_i: scenarioI,
+                    scenario_f: scenarioF,
+                    case_i: caseI,
+                    case_f: caseF,
+                    modoCE3X,
+                });
 
-        const nextResultado: ResultadoTermico = {
-            ...res,
-            ui_final: uiFinal,
-            uf_final: ufFinal,
-            ahorro: ahorroFinal,
-        };
+                const parsedUi = Number.parseFloat(overrideUi);
+                const parsedUf = Number.parseFloat(overrideUf);
+                const uiFinal = Number.isFinite(parsedUi) ? parsedUi : res.ui_final;
+                const ufFinal = Number.isFinite(parsedUf) ? parsedUf : res.uf_final;
+                const ahorroFinal = uiFinal > ufFinal ? Math.round((uiFinal - ufFinal) * supActuacion * gValue) : 0;
 
-        latestResultadoRef.current = nextResultado;
-        setResultado(nextResultado);
+                const nextResultado: ResultadoTermico = {
+                    ...res,
+                    ui_final: uiFinal,
+                    uf_final: ufFinal,
+                    ahorro: ahorroFinal,
+                };
+
+                latestResultadoRef.current = nextResultado;
+                setResultado(nextResultado);
+            }
+        } catch (error: any) {
+            setXmlImportMsg(null);
+            alert(`Error en el cálculo: ${error.message}`);
+        } finally {
+            setIsCalculating(false);
+        }
     };
 
     const getResultadoActual = () => latestResultadoRef.current ?? resultado;
@@ -5144,12 +5195,32 @@ export function CalculadoraTermica() {
                                 </div>
                             </div>
 
+                            <div className="flex items-center justify-between gap-4 mb-4">
+                                <div className="text-sm font-medium text-slate-300">Modo de Cálculo</div>
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-xs transition-colors ${!isCloudCalculation ? "text-slate-200 font-bold" : "text-slate-500"}`}>Local</span>
+                                    <button 
+                                        type="button"
+                                        onClick={() => setIsCloudCalculation(!isCloudCalculation)}
+                                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${isCloudCalculation ? "bg-amber-500" : "bg-slate-600"}`}
+                                    >
+                                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isCloudCalculation ? "translate-x-6" : "translate-x-1"}`} />
+                                    </button>
+                                    <span className={`text-xs transition-colors ${isCloudCalculation ? "text-amber-500 font-bold" : "text-slate-500"}`}>On-Cloud</span>
+                                </div>
+                            </div>
+
                             <button
                                 onClick={calcular}
-                                className="w-full h-11 rounded-md bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-semibold transition-all flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20"
+                                disabled={isCalculating}
+                                className={`w-full h-11 rounded-md bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-semibold transition-all flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 ${isCalculating ? "opacity-70 cursor-not-allowed" : ""}`}
                             >
-                                <Zap className="h-5 w-5" />
-                                Calcular Ahorro Energético
+                                {isCalculating ? (
+                                    <div className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full" />
+                                ) : (
+                                    <Zap className="h-5 w-5" />
+                                )}
+                                {isCalculating ? "Calculando Remotamente..." : "Calcular Ahorro Energético"}
                             </button>
                         </CardContent>
                     </Card>

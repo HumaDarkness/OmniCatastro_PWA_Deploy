@@ -110,8 +110,17 @@ async function convertToPngBlob(blob: Blob): Promise<Blob> {
     });
 }
 
-export function CertificadoCapturasPanel() {
-    const [capturas, setCapturas] = useState<CapturasState>(createEmptyCapturasState());
+interface Props {
+    capturas?: CapturasState;
+    setCapturas?: Dispatch<SetStateAction<CapturasState>>;
+}
+
+export function CertificadoCapturasPanel({ capturas: externalCapturas, setCapturas: externalSetCapturas }: Props = {}) {
+    const [internalCapturas, setInternalCapturas] = useState<CapturasState>(createEmptyCapturasState());
+    
+    const capturas = externalCapturas ?? internalCapturas;
+    const setCapturas = externalSetCapturas ?? setInternalCapturas;
+
     const [copiedSlot, setCopiedSlot] = useState<SlotKey | null>(null);
     const [statusMsg, setStatusMsg] = useState<string | null>(null);
 

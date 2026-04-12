@@ -12,7 +12,7 @@
     "test:integration": "vitest run src/lib/__tests__/syncService.integration.test.ts",
     "test:e2e": "playwright test e2e/conflictReliability.e2e.ts",
     "test:e2e:headed": "playwright test e2e/conflictReliability.e2e.ts --headed",
-    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e"
+    "test:all": "pnpm run test:unit && pnpm run test:integration && pnpm run test:e2e"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1000.0",

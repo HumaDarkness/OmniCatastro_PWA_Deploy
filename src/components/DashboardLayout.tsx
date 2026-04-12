@@ -21,11 +21,13 @@ import { ConsultaCatastral } from "../ConsultaCatastral";
 import { CalculadoraTermica } from "../CalculadoraTermica";
 import { ProyectosView } from "../ProyectosView";
 import { ClientesView } from "../ClientesView";
+import { ResumenGeneral } from "./ResumenGeneral";
 import { getUxRecoverySnapshot, type LicenseTier, type UxRecoverySnapshot } from "../lib/supabase";
 
 type DashboardView = "resumen" | "central-documental" | "calculadora" | "consulta-catastral" | "clientes" | "mis-proyectos" | "ajustes";
 
 const HASH_VIEWS: DashboardView[] = [
+    "resumen",
     "central-documental",
     "consulta-catastral",
     "calculadora",
@@ -34,9 +36,9 @@ const HASH_VIEWS: DashboardView[] = [
 ];
 
 function parseDashboardViewFromHash(): DashboardView {
-    if (typeof window === "undefined") return "central-documental";
+    if (typeof window === "undefined") return "resumen";
     const hashValue = window.location.hash.replace(/^#/, "") as DashboardView;
-    return HASH_VIEWS.includes(hashValue) ? hashValue : "central-documental";
+    return HASH_VIEWS.includes(hashValue) ? hashValue : "resumen";
 }
 
 interface DashboardLayoutProps {
@@ -60,7 +62,7 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
     const [uxLoading, setUxLoading] = useState(true);
 
     const navItems: NavItem[] = [
-        { id: "resumen", label: "Resumen General", icon: <LayoutDashboard className="w-5 h-5" />, badge: "Pronto", disabled: true },
+        { id: "resumen", label: "Resumen General", icon: <LayoutDashboard className="w-5 h-5" /> },
         { id: "central-documental", label: "Central Documental", icon: <FileText className="w-5 h-5" /> },
         { id: "consulta-catastral", label: "Consulta Catastral", icon: <Building2 className="w-5 h-5" /> },
         { id: "calculadora", label: "Calculadora Térmica", icon: <Calculator className="w-5 h-5" /> },
@@ -143,6 +145,8 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
 
     const renderNonCalculatorView = () => {
         switch (activeView) {
+            case "resumen":
+                return <ResumenGeneral />;
             case "central-documental":
                 return <CentralDocumental />;
             case "consulta-catastral":
