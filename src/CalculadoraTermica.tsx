@@ -2003,6 +2003,13 @@ export function CalculadoraTermica() {
         return Number.isFinite(parsed) ? parsed : fallback;
     };
 
+    const parseNumericInput = (value: string, fallback = 0): number => {
+        const normalized = value.replace(",", ".").trim();
+        if (!normalized) return fallback;
+        const parsed = Number(normalized);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    };
+
     const sortDrafts = (items: CertificateDraftIndexItem[]): CertificateDraftIndexItem[] => {
         const statusOrder: Record<CertDraftStatus, number> = {
             pendiente: 0,
@@ -4994,17 +5001,39 @@ export function CalculadoraTermica() {
                                 <div>
                                     <label className="text-[10px] text-blue-400 uppercase font-bold">Superficie Partición (m²)</label>
                                     <p className="text-[9px] text-slate-600 mb-1">Lo que se aísla</p>
-                                    <Input type="number" step="0.01" value={areaHNH} onChange={(e) => { setAreaHNH(e.target.value as any); setSupActuacion(e.target.value as any); }} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
+                                    <Input
+                                        type="number"
+                                        step="0.01"
+                                        value={areaHNH}
+                                        onChange={(e) => {
+                                            const next = parseNumericInput(e.target.value, 0);
+                                            setAreaHNH(next);
+                                            setSupActuacion(next);
+                                        }}
+                                        className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                    />
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-amber-400 uppercase font-bold">Superficie Cubierta (m²)</label>
                                     <p className="text-[9px] text-slate-600 mb-1">Límite para coef. b</p>
-                                    <Input type="number" step="0.01" value={areaNHE} onChange={(e) => setAreaNHE(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
+                                    <Input
+                                        type="number"
+                                        step="0.01"
+                                        value={areaNHE}
+                                        onChange={(e) => setAreaNHE(parseNumericInput(e.target.value, 0))}
+                                        className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                    />
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-slate-500 uppercase font-bold">Envolvente Total (m²)</label>
                                     <p className="text-[9px] text-slate-600 mb-1">Sin cubiertas ni huecos (anti doble conteo CE3X)</p>
-                                    <Input type="number" step="0.01" value={supEnvolvente} onChange={(e) => setSupEnvolvente(e.target.value as any)} className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono" />
+                                    <Input
+                                        type="number"
+                                        step="0.01"
+                                        value={supEnvolvente}
+                                        onChange={(e) => setSupEnvolvente(parseNumericInput(e.target.value, 0))}
+                                        className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
+                                    />
                                 </div>
                                 <div className="col-span-1 md:col-span-1">
                                     <label className="text-[10px] text-slate-500 uppercase font-bold">Zona Climática</label>

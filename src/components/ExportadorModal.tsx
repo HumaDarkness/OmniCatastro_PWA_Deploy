@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Download, FileArchive, FileText, ImageIcon, Settings2, Loader2, CloudIcon } from "lucide-react";
+import { X, Download, FileArchive, FileText, ImageIcon, Settings2, Loader2, CloudIcon, Copy } from "lucide-react";
 import { useGoogleLogin } from '@react-oauth/google';
 import { getOrCreateFolder, uploadFileToDrive } from "../lib/googleDriveService";
 import { supabase } from "../lib/supabase";
@@ -9,6 +9,68 @@ import { saveAs } from "file-saver";
 import type { Project } from "../ProyectosView";
 import type { Client } from "../ClientesView";
 import type { Photo } from "../ProyectoDetalle";
+
+type NamingTokens = {
+    PREFIX: string;
+    DOC: string;
+    CLIENT: string;
+    HOME: string;
+    RC: string;
+    IDX: string;
+};
+
+type AdditionalDocument = {
+    code: string;
+    title: string;
+    ext: string;
+};
+
+type ClassificationSuggestion = {
+    sourceName: string;
+    suggestedLine: string;
+    confidence: number;
+};
+
+type DocRule = {
+    code: string;
+    title: string;
+    ext: string;
+    keywords: string[];
+};
+
+const E1_DOC_RULES: DocRule[] = [
+    { code: "E1-3-1", title: "Ficha RES020", ext: "pdf", keywords: ["FICHA", "RES020"] },
+    { code: "E1-3-2", title: "DECLARACION RESPONSABLE ANEXO 1", ext: "pdf", keywords: ["DECLARACION", "RESPONSABLE", "ANEXO"] },
+    { code: "E1-3-3", title: "FACTURA DE LAS OBRAS", ext: "pdf", keywords: ["FACTURA", "OBRAS"] },
+    { code: "E1-3-4", title: "INFORME FOTOGRAFICO ANTES Y DESPUES", ext: "pdf", keywords: ["INFORME", "FOTOGRAFICO", "ANTES", "DESPUES"] },
+    { code: "E1-3-5", title: "CERTIFICADO TECNICO", ext: "pdf", keywords: ["CERTIFICADO", "TECNICO"] },
+    { code: "E1-3-6", title: "CEE posterior", ext: "pdf", keywords: ["CEE", "POSTERIOR"] },
+    { code: "E1-3-7", title: "justificante de registro del CEE", ext: "pdf", keywords: ["JUSTIFICANTE", "REGISTRO", "CEE"] },
+    { code: "E1-4-1", title: "CONTRATO CESION DE AHORRO", ext: "pdf", keywords: ["CONTRATO", "CESION", "AHORRO"] },
+    { code: "E1-4-2", title: "DNI propietario inicial", ext: "pdf", keywords: ["DNI", "PROPIETARIO"] },
+    { code: "E1-4-3", title: "Archivo CE3X", ext: "cex", keywords: ["CE3X", "ARCHIVO"] },
+    { code: "E1-4-4", title: "CEE INICIAL", ext: "pdf", keywords: ["CEE", "INICIAL"] },
+    { code: "E1-4-5", title: "Hoja de encargo", ext: "pdf", keywords: ["HOJA", "ENCARGO"] },
+    { code: "E1-4-6", title: "Justificante de pago del CEE", ext: "pdf", keywords: ["JUSTIFICANTE", "PAGO", "CEE"] },
+    { code: "E1-4-7", title: "Pasaporte del representante legal", ext: "pdf", keywords: ["PASAPORTE", "REPRESENTANTE", "LEGAL"] },
+    { code: "E1-4-8", title: "NIE del representante legal", ext: "pdf", keywords: ["NIE", "REPRESENTANTE", "LEGAL"] },
+    { code: "E1-4-9", title: "Poderes de la empresa", ext: "pdf", keywords: ["PODERES", "EMPRESA"] },
+    { code: "E1-4-10-OTROS", title: "DOCUMENTOS JUSTIFICATIVOS FICHA TECNICA LANA INSUFLADA", ext: "pdf", keywords: ["OTROS", "FICHA", "TECNICA", "LANA", "INSUFLADA"] },
+    { code: "E1-4-11", title: "ACERMI del producto SUPAFIL", ext: "pdf", keywords: ["ACERMI", "SUPAFIL"] },
+];
+
+const DEFAULT_ADDITIONAL_DOCS_RAW = E1_DOC_RULES
+    .map((item) => `${item.code}|${item.title}|${item.ext}`)
+    .join("\n");
+
+function normalizeClassificationText(value: string): string {
+    return value
+        .toUpperCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^A-Z0-9]+/g, " ")
+        .trim();
+}
 
 interface ExportadorModalProps {
     project: Project;
@@ -26,6 +88,14 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
     // Nomenclature configs
     const defaultPrefix = project.nexo_reference || project.rc.slice(0, 6);
     const [prefix, setPrefix] = useState(defaultPrefix);
+    const [homeAlias, setHomeAlias] = useState(project.address || "");
+    const [fileTemplate, setFileTemplate] = useState("{DOC}");
+    const [zipTemplate, setZipTemplate] = useState("EXP_{PREFIX}_{CLIENT}_{HOME}_{RC}");
+    const [additionalDocsRaw, setAdditionalDocsRaw] = useState(DEFAULT_ADDITIONAL_DOCS_RAW);
+    const [copiedNaming, setCopiedNaming] = useState(false);
+    const [rawUploadedNames, setRawUploadedNames] = useState("");
+    const [suggestedDocs, setSuggestedDocs] = useState<ClassificationSuggestion[]>([]);
+    const [classificationStatus, setClassificationStatus] = useState("");
     const [includePdfDni, setIncludePdfDni] = useState(true);
     const [includeInformePdf, setIncludeInformePdf] = useState(true);
     const [includePhotos, setIncludePhotos] = useState(false); // Por defecto falso para priorizar el informe
@@ -48,18 +118,209 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
         scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive',
     });
 
+    async function loadClient() {
+        const { data } = await supabase.from('clients').select('*').eq('id', project.client_id).single();
+        if (data) setClient(data as Client);
+        setLoading(false);
+    }
+
     useState(() => {
         if (project.client_id) {
-            loadClient();
+            void loadClient();
         } else {
             setLoading(false);
         }
     });
 
-    async function loadClient() {
-        const { data } = await supabase.from('clients').select('*').eq('id', project.client_id).single();
-        if (data) setClient(data as Client);
-        setLoading(false);
+    function sanitizeFileName(value: string): string {
+        const safe = value
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/[<>:"/\\|?*]+/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .replace(/[. ]+$/g, "");
+
+        return safe || "SIN_NOMBRE";
+    }
+
+    function renderTemplate(template: string, tokens: NamingTokens): string {
+        const rendered = template.replace(/\{([A-Z_]+)\}/g, (_, rawKey: string) => {
+            const key = rawKey as keyof NamingTokens;
+            return tokens[key] ?? "";
+        });
+
+        return sanitizeFileName(rendered);
+    }
+
+    function getNamingTokens(docLabel: string, idx?: number): NamingTokens {
+        const clientName = client
+            ? `${client.last_name_1} ${client.first_name}`.trim().toUpperCase()
+            : "SIN_CLIENTE";
+        const homeName = homeAlias.trim() || project.address?.trim() || "SIN_VIVIENDA";
+        const rcValue = project.rc?.trim().toUpperCase() || "SIN_RC";
+
+        return {
+            PREFIX: prefix.trim() || "SIN_PREFIJO",
+            DOC: docLabel.trim() || "DOCUMENTO",
+            CLIENT: clientName,
+            HOME: homeName,
+            RC: rcValue,
+            IDX: idx ? String(idx) : "",
+        };
+    }
+
+    function buildBaseFileName(docLabel: string, idx?: number): string {
+        return renderTemplate(fileTemplate, getNamingTokens(docLabel, idx));
+    }
+
+    function buildZipBaseName(): string {
+        return renderTemplate(zipTemplate, getNamingTokens("EXPEDIENTE"));
+    }
+
+    function resolveInlineTokens(value: string): string {
+        return renderTemplate(value, getNamingTokens("DOCUMENTO"));
+    }
+
+    function parseAdditionalDocs(raw: string): AdditionalDocument[] {
+        return raw
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => {
+                const [code = "", title = "", ext = "pdf"] = line.split("|").map((part) => part.trim());
+                return {
+                    code,
+                    title: title || "Documento",
+                    ext: (ext || "pdf").replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "pdf",
+                };
+            });
+    }
+
+    function buildAdditionalDocFileName(item: AdditionalDocument): string {
+        const resolvedTitle = resolveInlineTokens(item.title);
+        const docLabel = item.code ? `${item.code} ${resolvedTitle}` : resolvedTitle;
+        return `${buildBaseFileName(docLabel)}.${item.ext}`;
+    }
+
+    function getAdditionalDocFileNames(): string[] {
+        return parseAdditionalDocs(additionalDocsRaw).map(buildAdditionalDocFileName);
+    }
+
+    async function handleCopyAdditionalNames() {
+        try {
+            const list = getAdditionalDocFileNames();
+            await navigator.clipboard.writeText(list.join("\n"));
+            setCopiedNaming(true);
+            setTimeout(() => setCopiedNaming(false), 2000);
+        } catch {
+            setCopiedNaming(false);
+        }
+    }
+
+    function parseFileNameFromInput(line: string): { displayName: string; baseName: string; ext: string } {
+        const trimmed = line.trim().replace(/^[-*]\s+/, "");
+        const fromPath = trimmed.split(/[\\/]/).pop() || trimmed;
+        const unquoted = fromPath.replace(/^['"]+|['"]+$/g, "");
+        const dotIndex = unquoted.lastIndexOf(".");
+
+        if (dotIndex > 0) {
+            return {
+                displayName: unquoted,
+                baseName: unquoted.slice(0, dotIndex),
+                ext: unquoted.slice(dotIndex + 1).toLowerCase() || "pdf",
+            };
+        }
+
+        return {
+            displayName: unquoted,
+            baseName: unquoted,
+            ext: "pdf",
+        };
+    }
+
+    function classifyRandomFileName(line: string): ClassificationSuggestion {
+        const { displayName, baseName, ext } = parseFileNameFromInput(line);
+        const normalizedName = normalizeClassificationText(baseName);
+
+        let bestRule: DocRule | null = null;
+        let bestScore = -1;
+
+        for (const rule of E1_DOC_RULES) {
+            let score = 0;
+            const normalizedCode = normalizeClassificationText(rule.code);
+            if (normalizedName.includes(normalizedCode)) {
+                score += 6;
+            }
+
+            const hitCount = rule.keywords.filter((keyword) =>
+                normalizedName.includes(normalizeClassificationText(keyword)),
+            ).length;
+            score += hitCount * 2;
+
+            if (ext === rule.ext.toLowerCase()) {
+                score += 1;
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestRule = rule;
+            }
+        }
+
+        if (!bestRule || bestScore <= 2) {
+            if (ext === "cex") {
+                const ce3xRule = E1_DOC_RULES.find((rule) => rule.code === "E1-4-3");
+                if (ce3xRule) {
+                    return {
+                        sourceName: displayName,
+                        suggestedLine: `${ce3xRule.code}|${ce3xRule.title}|${ce3xRule.ext}`,
+                        confidence: 85,
+                    };
+                }
+            }
+
+            const fallbackTitle = sanitizeFileName(baseName);
+            return {
+                sourceName: displayName,
+                suggestedLine: `SIN-CODIGO|${fallbackTitle}|${ext}`,
+                confidence: 0,
+            };
+        }
+
+        const maxScore = bestRule.keywords.length * 2 + 7;
+        const confidence = Math.max(55, Math.min(100, Math.round((bestScore / maxScore) * 100)));
+
+        return {
+            sourceName: displayName,
+            suggestedLine: `${bestRule.code}|${bestRule.title}|${bestRule.ext}`,
+            confidence,
+        };
+    }
+
+    function handleSuggestDocsFromRandomNames() {
+        const lines = rawUploadedNames
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+
+        if (!lines.length) {
+            setClassificationStatus("Pega al menos un nombre de archivo para analizar.");
+            setSuggestedDocs([]);
+            return;
+        }
+
+        const suggestions = lines.map(classifyRandomFileName);
+        const recognizedCount = suggestions.filter((item) => !item.suggestedLine.startsWith("SIN-CODIGO|")).length;
+
+        setSuggestedDocs(suggestions);
+        setClassificationStatus(`Sugerencias listas: ${recognizedCount}/${suggestions.length} con código reconocido.`);
+    }
+
+    function handleApplySuggestionsToAdditionalDocs() {
+        if (!suggestedDocs.length) return;
+        setAdditionalDocsRaw(suggestedDocs.map((item) => item.suggestedLine).join("\n"));
+        setClassificationStatus("Sugerencias aplicadas en Documentos adicionales sugeridos.");
     }
 
     // Helper to get image as base64 or blob
@@ -88,8 +349,10 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
         setStatusText("Iniciando exportación...");
         setProgress(10);
         const zip = new JSZip();
-        const clientName = client ? `${client.last_name_1} ${client.first_name}`.trim().toUpperCase() : '';
-        const baseFolder = zip.folder(`Expediente_${prefix}_${clientName}`.trim());
+        const clientName = client ? `${client.last_name_1} ${client.first_name}`.trim().toUpperCase() : "SIN_CLIENTE";
+        const includesIdxToken = fileTemplate.includes("{IDX}");
+        const baseFolderName = buildZipBaseName();
+        const baseFolder = zip.folder(baseFolderName);
 
         try {
             // 1. Generate DNI PDF
@@ -126,7 +389,7 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
                 }
 
                 const pdfBlob = doc.output('blob');
-                const pdfName = `${prefix} ${nameDniPdf} ${clientName}`.trim() + '.pdf';
+                const pdfName = `${buildBaseFileName(nameDniPdf)}.pdf`;
                 baseFolder?.file(pdfName, pdfBlob);
             }
 
@@ -144,11 +407,20 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
                     if (pBlob) {
                         const ext = photo.storage_path.split('.').pop() || 'jpg';
                         let fName = "";
+                        const imageIndex = photo.category === 'antes' ? idxAntes : idxDespues;
                         if (photo.category === 'antes') {
-                            fName = `${prefix} ${nameAntes} ${clientName} ${idxAntes}.${ext}`.trim();
+                            let beforeBaseName = buildBaseFileName(nameAntes, imageIndex);
+                            if (!includesIdxToken) {
+                                beforeBaseName = `${beforeBaseName} ${imageIndex}`;
+                            }
+                            fName = `${sanitizeFileName(beforeBaseName)}.${ext}`;
                             idxAntes++;
                         } else {
-                            fName = `${prefix} ${nameDespues} ${clientName} ${idxDespues}.${ext}`.trim();
+                            let afterBaseName = buildBaseFileName(nameDespues, imageIndex);
+                            if (!includesIdxToken) {
+                                afterBaseName = `${afterBaseName} ${imageIndex}`;
+                            }
+                            fName = `${sanitizeFileName(afterBaseName)}.${ext}`;
                             idxDespues++;
                         }
                         baseFolder?.file(fName, pBlob);
@@ -217,7 +489,7 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
                 }
 
                 const informeBlob = docInst.output('blob');
-                const informeName = `${prefix} ${nameInformePdf} ${clientName}.pdf`.trim();
+                const informeName = `${buildBaseFileName(nameInformePdf)}.pdf`;
                 baseFolder?.file(informeName, informeBlob);
             }
 
@@ -225,7 +497,7 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
             setStatusText("Empaquetando archivo ZIP...");
             setProgress(90);
             const zipContent = await zip.generateAsync({ type: "blob" });
-            const zipFileName = `EXP_${prefix}_${clientName || project.rc}.zip`.trim();
+            const zipFileName = `${baseFolderName}.zip`;
             saveAs(zipContent, zipFileName);
 
             // 4. Upload to Google Drive (Optional)
@@ -249,8 +521,9 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
             setStatusText("¡Exportación completada!");
             setTimeout(() => onClose(), 2000);
 
-        } catch (error: any) {
-            alert("Error en la exportación: " + error.message);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Error desconocido";
+            alert("Error en la exportación: " + message);
             setExporting(false);
             setProgress(0);
         }
@@ -299,6 +572,130 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
                                         placeholder="E1-3-4"
                                     />
                                     <p className="text-[10px] text-slate-500 mt-1">Todos los archivos iniciarán con este código.</p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">Alias de Vivienda (Cliente con 2+ viviendas)</label>
+                                    <input
+                                        type="text"
+                                        value={homeAlias}
+                                        onChange={e => setHomeAlias(e.target.value)}
+                                        className="w-full bg-black/20 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500 font-mono text-sm"
+                                        placeholder="Ej: Piso A / Chalet Sierra / Calle Mayor 24"
+                                    />
+                                    <p className="text-[10px] text-slate-500 mt-1">Sirve para diferenciar viviendas del mismo cliente.</p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">Plantilla de Archivo</label>
+                                    <input
+                                        type="text"
+                                        value={fileTemplate}
+                                        onChange={e => setFileTemplate(e.target.value)}
+                                        className="w-full bg-black/20 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500 font-mono text-sm"
+                                        placeholder="{PREFIX} {DOC} {CLIENT} {HOME} {RC}"
+                                    />
+                                    <p className="text-[10px] text-slate-500 mt-1">Tokens: {'{PREFIX}'} {'{DOC}'} {'{CLIENT}'} {'{HOME}'} {'{RC}'} {'{IDX}'}</p>
+                                    <div className="mt-2 flex gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setFileTemplate("{DOC}")}
+                                            className="text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-300 hover:border-indigo-500"
+                                        >
+                                            Preset corto (solo documento)
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setFileTemplate("{PREFIX} {DOC} {CLIENT} {HOME} {RC}")}
+                                            className="text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-300 hover:border-indigo-500"
+                                        >
+                                            Preset trazable completo
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">Plantilla de ZIP</label>
+                                    <input
+                                        type="text"
+                                        value={zipTemplate}
+                                        onChange={e => setZipTemplate(e.target.value)}
+                                        className="w-full bg-black/20 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500 font-mono text-sm"
+                                        placeholder="EXP_{PREFIX}_{CLIENT}_{HOME}_{RC}"
+                                    />
+                                </div>
+
+                                <div className="bg-black/20 p-3 rounded-lg border border-slate-800">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <label className="block text-xs text-slate-300">Documentos adicionales sugeridos</label>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setAdditionalDocsRaw(DEFAULT_ADDITIONAL_DOCS_RAW)}
+                                                className="text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-300 hover:border-indigo-500"
+                                            >
+                                                Cargar nomenclatura completa E1
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleCopyAdditionalNames}
+                                                className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-300 hover:border-indigo-500"
+                                            >
+                                                <Copy className="w-3 h-3" /> Copiar lista
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 mt-1">Formato por línea: CODIGO|NOMBRE|EXT. Puedes usar {'{CLIENT}'} en nombre para XML.</p>
+                                    <textarea
+                                        value={additionalDocsRaw}
+                                        onChange={(e) => setAdditionalDocsRaw(e.target.value)}
+                                        rows={8}
+                                        className="mt-2 w-full bg-black/20 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500 font-mono text-xs"
+                                    />
+                                    {copiedNaming && (
+                                        <p className="text-[10px] text-emerald-300 mt-1">Lista copiada al portapapeles.</p>
+                                    )}
+                                </div>
+
+                                <div className="bg-black/20 p-3 rounded-lg border border-slate-800">
+                                    <label className="block text-xs text-slate-300">Asistente de clasificación automática (beta)</label>
+                                    <p className="text-[10px] text-slate-500 mt-1">Pega nombres random (uno por línea), por ejemplo copiados desde Google Drive. Se sugerirá el código E1 más probable.</p>
+                                    <textarea
+                                        value={rawUploadedNames}
+                                        onChange={(e) => setRawUploadedNames(e.target.value)}
+                                        rows={5}
+                                        className="mt-2 w-full bg-black/20 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500 font-mono text-xs"
+                                        placeholder="Ej: certificado_final_juan.pdf"
+                                    />
+                                    <div className="mt-2 flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleSuggestDocsFromRandomNames}
+                                            className="text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-300 hover:border-indigo-500"
+                                        >
+                                            Sugerir códigos automáticamente
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleApplySuggestionsToAdditionalDocs}
+                                            disabled={!suggestedDocs.length}
+                                            className="text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-300 hover:border-indigo-500 disabled:opacity-50"
+                                        >
+                                            Usar sugerencias en lista
+                                        </button>
+                                    </div>
+                                    {classificationStatus && (
+                                        <p className="text-[10px] text-indigo-300 mt-2">{classificationStatus}</p>
+                                    )}
+                                    {suggestedDocs.length > 0 && (
+                                        <div className="mt-2 max-h-28 overflow-auto rounded border border-slate-800 p-2 space-y-1">
+                                            {suggestedDocs.slice(0, 8).map((item) => (
+                                                <p key={`${item.sourceName}-${item.suggestedLine}`} className="text-[10px] text-slate-300">
+                                                    {item.sourceName}{" -> "}{item.suggestedLine} ({item.confidence}%)
+                                                </p>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="grid grid-cols-1 gap-3">
@@ -396,8 +793,12 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
                             {/* Preview */}
                             <div className="bg-slate-900/50 p-3 rounded-lg font-mono text-xs text-slate-400 border border-slate-800">
                                 <p className="text-slate-500 mb-1">Ejemplos de salida:</p>
-                                <p>📄 {prefix} {nameDniPdf} {client?.last_name_1} {client?.first_name}.pdf</p>
-                                <p>🖼️ {prefix} {nameAntes} {client?.last_name_1} {client?.first_name} 1.jpg</p>
+                                <p>📦 {buildZipBaseName()}.zip</p>
+                                <p>📄 {buildBaseFileName(nameDniPdf)}.pdf</p>
+                                <p>🖼️ {buildBaseFileName(nameAntes, 1)}.jpg</p>
+                                {getAdditionalDocFileNames().slice(0, 3).map((name) => (
+                                    <p key={name}>📚 {name}</p>
+                                ))}
                             </div>
                         </>
                     )}
@@ -421,7 +822,7 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
                                 Cancelar
                             </button>
                             <button
-                                onClick={handleExport} disabled={loading || (!includePdfDni && !includePhotos)}
+                                onClick={handleExport} disabled={loading || (!includePdfDni && !includePhotos && !includeInformePdf)}
                                 className="flex-2 flex items-center justify-center gap-2 py-2.5 px-6 bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-600 hover:to-blue-700 text-white font-medium rounded-lg shadow-lg shadow-indigo-500/20 disabled:opacity-50 transition-all"
                             >
                                 <Download className="w-5 h-5" />

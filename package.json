@@ -6,14 +6,14 @@
   "scripts": {
     "dev": "vite",
     "generate-api": "orval --config orval.config.ts",
-    "build": "pnpm run generate-api && tsc -b && vite build",
+    "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "test:unit": "vitest run src/lib/__tests__/resolveConflict.unit.test.ts",
     "test:integration": "vitest run src/lib/__tests__/syncService.integration.test.ts",
     "test:e2e": "playwright test e2e/conflictReliability.e2e.ts",
     "test:e2e:headed": "playwright test e2e/conflictReliability.e2e.ts --headed",
-    "test:all": "pnpm run test:unit && pnpm run test:integration && pnpm run test:e2e"
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1000.0",
