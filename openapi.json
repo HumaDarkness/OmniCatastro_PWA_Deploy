@@ -1,0 +1,684 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OmniCatastro API",
+    "description": "Backend protegido para cálculos CTE DB-HE y generación de informes CAE.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/parse-cex": {
+      "post": {
+        "tags": [
+          "Parsing"
+        ],
+        "summary": "Parse Cex",
+        "description": "Parsea contenido XML de un archivo .cex (CE3X) y extrae:\n- Identificación del edificio (RC, dirección, zona climática)\n- Superficies de la envolvente térmica\n- Calificación energética\n\nEl XML se procesa vía tempfile con limpieza garantizada (try/finally).",
+        "operationId": "parse_cex_api_v1_parse_cex_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParseCexRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParseCexResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/zona-climatica": {
+      "post": {
+        "tags": [
+          "Parsing"
+        ],
+        "summary": "Zona Climatica",
+        "description": "Determina la zona climática CTE DB-HE según provincia y altitud.",
+        "operationId": "zona_climatica_api_v1_zona_climatica_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZonaClimaticaRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZonaClimaticaResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calcular-db-he": {
+      "post": {
+        "tags": [
+          "Cálculos"
+        ],
+        "summary": "Calcular Db He",
+        "description": "Ejecuta el motor de cálculos CTE DB-HE (Tabla 7).\n\nRecibe las capas de materiales, superficies y parámetros.\nDevuelve transmitancias, factor b, ahorro kWh y el informe textual\nlisto para el portapapeles o PDF.\n\nEl código del motor (fórmulas, tablas, redondeos) nunca sale del servidor.",
+        "operationId": "calcular_db_he_api_v1_calcular_db_he_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalcularDbHeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalcularDbHeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "Root",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CalcularDbHeRequest": {
+        "properties": {
+          "capas": {
+            "items": {
+              "$ref": "#/components/schemas/CapaMaterialIn"
+            },
+            "type": "array",
+            "title": "Capas"
+          },
+          "area_h_nh": {
+            "type": "number",
+            "title": "Area H Nh",
+            "description": "Superficie partición (m²)"
+          },
+          "area_nh_e": {
+            "type": "number",
+            "title": "Area Nh E",
+            "description": "Superficie cubierta (m²)"
+          },
+          "superficie_actuacion": {
+            "type": "number",
+            "title": "Superficie Actuacion",
+            "description": "Superficie de actuación (m²)"
+          },
+          "zona_climatica_g": {
+            "type": "number",
+            "title": "Zona Climatica G",
+            "description": "Valor G de la zona climática (h·K)"
+          },
+          "sup_envolvente_total": {
+            "type": "number",
+            "title": "Sup Envolvente Total",
+            "description": "Superficie total envolvente (m²)",
+            "default": 0.0
+          },
+          "escenario_i": {
+            "type": "string",
+            "title": "Escenario I",
+            "description": "despues|antes_normal|antes_aislado",
+            "default": "antes_normal"
+          },
+          "caso_i": {
+            "type": "integer",
+            "title": "Caso I",
+            "description": "1=Lig. ventilado, 2=Muy ventilado",
+            "default": 1
+          },
+          "escenario_f": {
+            "type": "string",
+            "title": "Escenario F",
+            "default": "despues"
+          },
+          "caso_f": {
+            "type": "integer",
+            "title": "Caso F",
+            "default": 1
+          },
+          "ui_override": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui Override"
+          },
+          "uf_override": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uf Override"
+          }
+        },
+        "type": "object",
+        "required": [
+          "capas",
+          "area_h_nh",
+          "area_nh_e",
+          "superficie_actuacion",
+          "zona_climatica_g"
+        ],
+        "title": "CalcularDbHeRequest"
+      },
+      "CalcularDbHeResponse": {
+        "properties": {
+          "rt_inicial": {
+            "type": "number",
+            "title": "Rt Inicial"
+          },
+          "rt_final": {
+            "type": "number",
+            "title": "Rt Final"
+          },
+          "up_inicial": {
+            "type": "number",
+            "title": "Up Inicial"
+          },
+          "up_final": {
+            "type": "number",
+            "title": "Up Final"
+          },
+          "b_inicial": {
+            "type": "number",
+            "title": "B Inicial"
+          },
+          "b_final": {
+            "type": "number",
+            "title": "B Final"
+          },
+          "ui_final": {
+            "type": "number",
+            "title": "Ui Final"
+          },
+          "uf_final": {
+            "type": "number",
+            "title": "Uf Final"
+          },
+          "ratio": {
+            "type": "number",
+            "title": "Ratio"
+          },
+          "ahorro_kwh": {
+            "type": "integer",
+            "title": "Ahorro Kwh"
+          },
+          "pct_envolvente": {
+            "type": "number",
+            "title": "Pct Envolvente"
+          },
+          "informe_texto": {
+            "type": "string",
+            "title": "Informe Texto",
+            "description": "Texto de justificación para copiar",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "rt_inicial",
+          "rt_final",
+          "up_inicial",
+          "up_final",
+          "b_inicial",
+          "b_final",
+          "ui_final",
+          "uf_final",
+          "ratio",
+          "ahorro_kwh",
+          "pct_envolvente"
+        ],
+        "title": "CalcularDbHeResponse"
+      },
+      "CapaMaterialIn": {
+        "properties": {
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "espesor": {
+            "type": "number",
+            "title": "Espesor",
+            "description": "Metros",
+            "default": 0.0
+          },
+          "lambda_val": {
+            "type": "number",
+            "title": "Lambda Val",
+            "description": "W/mK",
+            "default": 0.0
+          },
+          "r_valor": {
+            "type": "number",
+            "title": "R Valor",
+            "description": "m²K/W — alternativa directa",
+            "default": 0.0
+          },
+          "es_nueva": {
+            "type": "boolean",
+            "title": "Es Nueva",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "nombre"
+        ],
+        "title": "CapaMaterialIn"
+      },
+      "ElementoEnvolvente": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "transmitancia": {
+            "type": "number",
+            "title": "Transmitancia"
+          },
+          "superficie": {
+            "type": "number",
+            "title": "Superficie"
+          },
+          "orientacion": {
+            "type": "string",
+            "title": "Orientacion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "nombre",
+          "transmitancia",
+          "superficie",
+          "orientacion"
+        ],
+        "title": "ElementoEnvolvente"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ParseCexRequest": {
+        "properties": {
+          "xml_content": {
+            "type": "string",
+            "title": "Xml Content",
+            "description": "Contenido XML del archivo CE3X"
+          }
+        },
+        "type": "object",
+        "required": [
+          "xml_content"
+        ],
+        "title": "ParseCexRequest",
+        "description": "El frontend sube el contenido XML del archivo .cex como string."
+      },
+      "ParseCexResponse": {
+        "properties": {
+          "referencia_catastral": {
+            "type": "string",
+            "title": "Referencia Catastral"
+          },
+          "direccion": {
+            "type": "string",
+            "title": "Direccion"
+          },
+          "municipio": {
+            "type": "string",
+            "title": "Municipio"
+          },
+          "provincia": {
+            "type": "string",
+            "title": "Provincia"
+          },
+          "zona_climatica": {
+            "type": "string",
+            "title": "Zona Climatica"
+          },
+          "zona_climatica_g": {
+            "type": "integer",
+            "title": "Zona Climatica G"
+          },
+          "superficie_habitable": {
+            "type": "number",
+            "title": "Superficie Habitable"
+          },
+          "altitud_m": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Altitud M"
+          },
+          "anno_construccion": {
+            "type": "string",
+            "title": "Anno Construccion"
+          },
+          "sup_particion": {
+            "type": "number",
+            "title": "Sup Particion"
+          },
+          "sup_cerramiento": {
+            "type": "number",
+            "title": "Sup Cerramiento"
+          },
+          "sup_fachadas": {
+            "type": "number",
+            "title": "Sup Fachadas"
+          },
+          "sup_huecos": {
+            "type": "number",
+            "title": "Sup Huecos"
+          },
+          "sup_suelo": {
+            "type": "number",
+            "title": "Sup Suelo"
+          },
+          "sup_envolvente_total": {
+            "type": "number",
+            "title": "Sup Envolvente Total"
+          },
+          "ui_ce3x": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui Ce3X"
+          },
+          "demanda_calefaccion": {
+            "type": "number",
+            "title": "Demanda Calefaccion"
+          },
+          "demanda_refrigeracion": {
+            "type": "number",
+            "title": "Demanda Refrigeracion"
+          },
+          "calificacion_global": {
+            "type": "string",
+            "title": "Calificacion Global"
+          },
+          "elementos": {
+            "items": {
+              "$ref": "#/components/schemas/ElementoEnvolvente"
+            },
+            "type": "array",
+            "title": "Elementos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "referencia_catastral",
+          "direccion",
+          "municipio",
+          "provincia",
+          "zona_climatica",
+          "zona_climatica_g",
+          "superficie_habitable",
+          "anno_construccion",
+          "sup_particion",
+          "sup_cerramiento",
+          "sup_fachadas",
+          "sup_huecos",
+          "sup_suelo",
+          "sup_envolvente_total",
+          "demanda_calefaccion",
+          "demanda_refrigeracion",
+          "calificacion_global",
+          "elementos"
+        ],
+        "title": "ParseCexResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "ZonaClimaticaRequest": {
+        "properties": {
+          "provincia": {
+            "type": "string",
+            "title": "Provincia"
+          },
+          "altitud_m": {
+            "type": "integer",
+            "title": "Altitud M"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provincia",
+          "altitud_m"
+        ],
+        "title": "ZonaClimaticaRequest"
+      },
+      "ZonaClimaticaResponse": {
+        "properties": {
+          "zona": {
+            "type": "string",
+            "title": "Zona"
+          },
+          "valor_g": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valor G"
+          },
+          "icono": {
+            "type": "string",
+            "title": "Icono",
+            "default": ""
+          },
+          "invierno": {
+            "type": "string",
+            "title": "Invierno",
+            "default": ""
+          },
+          "verano": {
+            "type": "string",
+            "title": "Verano",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "zona"
+        ],
+        "title": "ZonaClimaticaResponse"
+      }
+    }
+  }
+}
