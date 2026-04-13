@@ -5665,6 +5665,8 @@ interface HoverZoomImageProps {
     panelTitle?: string;
 }
 
+type ZoomPanelPlacement = "right" | "left" | "inside";
+
 function HoverZoomImage({
     src,
     alt,
@@ -5678,6 +5680,10 @@ function HoverZoomImage({
     const [supportsHover, setSupportsHover] = useState(false);
     const [isHovering, setIsHovering] = useState(false);
     const [focusPoint, setFocusPoint] = useState({ x: 50, y: 50 });
+    const [panelPlacement, setPanelPlacement] = useState<ZoomPanelPlacement>("right");
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const imageRef = useRef<HTMLImageElement | null>(null);
+    const zoomPanelRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -5695,12 +5701,65 @@ function HoverZoomImage({
         return () => media.removeListener(update);
     }, []);
 
+    const recalculatePanelPlacement = () => {
+        if (!supportsHover || !containerRef.current) return;
+
+        const frameRect = containerRef.current.getBoundingClientRect();
+        const panelWidth = zoomPanelRef.current?.offsetWidth ?? 420;
+        const gap = 12;
+        const viewportPadding = 8;
+
+        const fitsRight = frameRect.right + gap + panelWidth <= window.innerWidth - viewportPadding;
+        const fitsLeft = frameRect.left - gap - panelWidth >= viewportPadding;
+
+        if (fitsRight) {
+            setPanelPlacement("right");
+            return;
+        }
+
+        if (fitsLeft) {
+            setPanelPlacement("left");
+            return;
+        }
+
+        setPanelPlacement("inside");
+    };
+
+    useEffect(() => {
+        if (!supportsHover || !isHovering) return;
+
+        recalculatePanelPlacement();
+        const handleResize = () => recalculatePanelPlacement();
+        window.addEventListener("resize", handleResize);
+        return () => window.removeEventListener("resize", handleResize);
+    }, [supportsHover, isHovering]);
+
     const handleMove = (event: ReactMouseEvent<HTMLDivElement>) => {
         const rect = event.currentTarget.getBoundingClientRect();
         if (rect.width <= 0 || rect.height <= 0) return;
 
-        const x = ((event.clientX - rect.left) / rect.width) * 100;
-        const y = ((event.clientY - rect.top) / rect.height) * 100;
+        let x = ((event.clientX - rect.left) / rect.width) * 100;
+        let y = ((event.clientY - rect.top) / rect.height) * 100;
+
+        const imageEl = imageRef.current;
+        if (imageEl && imageEl.naturalWidth > 0 && imageEl.naturalHeight > 0) {
+            const scale = Math.min(rect.width / imageEl.naturalWidth, rect.height / imageEl.naturalHeight);
+            const renderedWidth = imageEl.naturalWidth * scale;
+            const renderedHeight = imageEl.naturalHeight * scale;
+
+            if (renderedWidth > 0 && renderedHeight > 0) {
+                const offsetX = (rect.width - renderedWidth) / 2;
+                const offsetY = (rect.height - renderedHeight) / 2;
+
+                const localX = event.clientX - rect.left - offsetX;
+                const localY = event.clientY - rect.top - offsetY;
+                const clampedX = Math.max(0, Math.min(renderedWidth, localX));
+                const clampedY = Math.max(0, Math.min(renderedHeight, localY));
+
+                x = (clampedX / renderedWidth) * 100;
+                y = (clampedY / renderedHeight) * 100;
+            }
+        }
 
         setFocusPoint({
             x: Math.max(0, Math.min(100, x)),
@@ -5708,22 +5767,36 @@ function HoverZoomImage({
         });
     };
 
-    const zoomStyle = {
-        backgroundImage: `url(${src})`,
-        backgroundPosition: `${focusPoint.x}% ${focusPoint.y}%`,
-        backgroundSize: `${zoom * 100}%`,
-        backgroundRepeat: "no-repeat",
+    const zoomImageStyle = {
+        transformOrigin: `${focusPoint.x}% ${focusPoint.y}%`,
+        transform: `scale(${zoom})`,
     };
+
+    const panelPositionClass = panelPlacement === "right"
+        ? "left-[calc(100%+12px)] top-0"
+        : panelPlacement === "left"
+            ? "right-[calc(100%+12px)] top-0"
+            : "right-2 top-2";
+
+    const panelInlineStyle = panelPlacement === "inside"
+        ? { maxWidth: "calc(100vw - 16px)" }
+        : undefined;
 
     return (
         <div
+            ref={containerRef}
             className="relative"
-            onMouseEnter={() => supportsHover && setIsHovering(true)}
+            onMouseEnter={() => {
+                if (!supportsHover) return;
+                recalculatePanelPlacement();
+                setIsHovering(true);
+            }}
             onMouseLeave={() => setIsHovering(false)}
             onMouseMove={handleMove}
         >
             <div className={`relative ${frameClassName}`}>
                 <img
+                    ref={imageRef}
                     src={src}
                     alt={alt}
                     onClick={onClick}
@@ -5739,11 +5812,22 @@ function HoverZoomImage({
             </div>
 
             {supportsHover && isHovering && (
-                <div className={`pointer-events-none hidden xl:flex absolute left-[calc(100%+12px)] top-0 z-30 rounded-lg border border-cyan-700/50 bg-slate-950 shadow-2xl ${zoomPanelClassName} flex-col overflow-hidden`}>
+                <div
+                    ref={zoomPanelRef}
+                    className={`pointer-events-none hidden xl:flex absolute ${panelPositionClass} z-30 rounded-lg border border-cyan-700/50 bg-slate-950 shadow-2xl ${zoomPanelClassName} flex-col overflow-hidden`}
+                    style={panelInlineStyle}
+                >
                     <div className="px-2 py-1 text-[10px] uppercase tracking-wide font-bold text-cyan-300 border-b border-slate-800">
                         {panelTitle}
                     </div>
-                    <div className="flex-1" style={zoomStyle} />
+                    <div className="flex-1 bg-black overflow-hidden">
+                        <img
+                            src={src}
+                            alt={alt}
+                            className="w-full h-full object-contain select-none"
+                            style={zoomImageStyle}
+                        />
+                    </div>
                 </div>
             )}
         </div>

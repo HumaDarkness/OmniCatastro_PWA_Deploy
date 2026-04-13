@@ -18,10 +18,13 @@ const CLOUD_WARMUP_TIMEOUT_MS = 45000;
 const CLOUD_RECOVERY_WARMUP_TIMEOUT_MS = 6000;
 const CLOUD_STATUS_TIMEOUT_MS = 7000;
 const CLOUD_HIGH_LATENCY_MS = 2500;
+const CLOUD_STARTING_RETRY_LIMIT = 3;
+const CLOUD_STARTING_GRACE_MS = 2 * 60 * 1000;
 const NETWORK_ERROR_PATTERN = /(network error|failed to fetch|load failed|timed out|timeout)/i;
 
 let lastCloudWarmupAt = 0;
 let warmupInFlight: Promise<boolean> | null = null;
+let cloudTransientFailureCount = 0;
 
 // ─── Mapeos PWA → Backend ────────────────────────────────────────────
 
@@ -134,6 +137,7 @@ export async function getCloudAvailabilitySnapshot(options?: {
         const finishedAt = nowMs();
         const latencyMs = Math.max(finishedAt - startedAt, 0);
         lastCloudWarmupAt = finishedAt;
+        cloudTransientFailureCount = 0;
 
         return {
             state: "active",
@@ -149,6 +153,16 @@ export async function getCloudAvailabilitySnapshot(options?: {
         const normalized = rawMessage.toLowerCase();
 
         if (NETWORK_ERROR_PATTERN.test(rawMessage) || normalized.includes("503") || normalized.includes("504")) {
+            cloudTransientFailureCount += 1;
+            const elapsedSinceLastSuccess = nowMs() - lastCloudWarmupAt;
+            const shouldMarkOffline =
+                cloudTransientFailureCount >= CLOUD_STARTING_RETRY_LIMIT
+                && elapsedSinceLastSuccess > CLOUD_STARTING_GRACE_MS;
+
+            if (shouldMarkOffline) {
+                return buildOfflineSnapshot("Cloud no disponible temporalmente (reintentos agotados)");
+            }
+
             return {
                 state: "starting",
                 checkedAt: nowMs(),
@@ -188,8 +202,10 @@ export async function warmUpCloudApi(options?: { force?: boolean; timeoutMs?: nu
                 })
                 .json<Record<string, any>>();
             lastCloudWarmupAt = Date.now();
+            cloudTransientFailureCount = 0;
             return true;
         } catch {
+            cloudTransientFailureCount += 1;
             return false;
         } finally {
             warmupInFlight = null;
