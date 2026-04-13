@@ -343,6 +343,9 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
 
 function buildXmlImportSummary(parsed: ParsedCE3X): string {
     const parts = ["XML CE3X importado."];
+    const sTotal = roundTo(parsed.superficieEnvolvente, 2);
+    const huecos = roundTo(parsed.superficieHuecos, 2);
+    const opacosNetosEstimados = roundTo(Math.max(sTotal - huecos, 0), 2);
 
     if (parsed.clienteNombre) {
         parts.push(`Cliente XML: ${parsed.clienteNombre}.`);
@@ -358,6 +361,11 @@ function buildXmlImportSummary(parsed: ParsedCE3X): string {
         `Envolvente útil (opacos sin cubierta): ${parsed.superficieEnvolvente.toFixed(2)} m².`,
     );
     parts.push(`Huecos (informativo): ${parsed.superficieHuecos.toFixed(2)} m².`);
+    if (huecos > 0 && sTotal >= huecos) {
+        parts.push(
+            `Desglose equivalente CEE: ${opacosNetosEstimados.toFixed(2)} + ${huecos.toFixed(2)} = ${sTotal.toFixed(2)} m² (opacos netos + huecos).`,
+        );
+    }
 
     return parts.join(" ");
 }
@@ -1715,6 +1723,7 @@ export function CalculadoraTermica() {
             resultado: resultadoActual,
             sup_actuacion: supActuacion,
             sup_envolvente_total: supEnvolvente,
+            sup_huecos: supHuecos,
             g: gValue,
             area_h_nh: areaHNH,
             area_nh_e: areaNHE,
@@ -1941,6 +1950,10 @@ export function CalculadoraTermica() {
     const ratio = areaNHE > 0 ? areaHNH / areaNHE : 0;
     const previewBi = ratio > 0 ? getB(ratio, scenarioI, caseI) : null;
     const previewBf = ratio > 0 ? getB(ratio, scenarioF, caseF) : null;
+    const supEnvolventeRounded = roundTo(supEnvolvente, 2);
+    const supHuecosRounded = roundTo(supHuecos, 2);
+    const supOpacosNetosEstimados = roundTo(Math.max(supEnvolventeRounded - supHuecosRounded, 0), 2);
+    const hasHuecosBreakdown = supHuecosRounded > 0 && supEnvolventeRounded >= supHuecosRounded;
     const materialSupportSlots: Array<{ key: keyof CapturasState; label: string }> = [
         { key: "materiales_antes", label: "Materiales antes" },
         { key: "materiales_despues", label: "Materiales despues" },
@@ -3875,10 +3888,16 @@ export function CalculadoraTermica() {
             ? roundTo((supActuacion / supEnvolvente) * 100, 2)
             : 0;
         const ahorro = Math.round(toFiniteNumber(resultado?.ahorro, 0));
+        const supEnvolventeFmt = roundTo(supEnvolvente, 2);
+        const supHuecosFmt = roundTo(supHuecos, 2);
+        const supOpacosNetosFmt = roundTo(Math.max(supEnvolventeFmt - supHuecosFmt, 0), 2);
 
         const resumen = [
             `RC: ${rcNormalized}`,
-            `S envolvente (m2): ${roundTo(supEnvolvente, 2).toFixed(2)}`,
+            `S envolvente (m2): ${supEnvolventeFmt.toFixed(2)}`,
+            ...(supHuecosFmt > 0 && supEnvolventeFmt >= supHuecosFmt
+                ? [`Desglose S (opacos netos + huecos): ${supOpacosNetosFmt.toFixed(2)} + ${supHuecosFmt.toFixed(2)} = ${supEnvolventeFmt.toFixed(2)}`]
+                : []),
             `% envolvente: ${porcentajeEnvolvente.toFixed(2)}`,
             `Particion HNH (m2): ${roundTo(areaHNH, 2).toFixed(2)}`,
             `Superficie actuacion (m2): ${roundTo(supActuacion, 2).toFixed(2)}`,
@@ -5026,7 +5045,7 @@ export function CalculadoraTermica() {
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-slate-500 uppercase font-bold">Envolvente Total (m²)</label>
-                                    <p className="text-[9px] text-slate-600 mb-1">Sin cubiertas ni huecos (anti doble conteo CE3X)</p>
+                                    <p className="text-[9px] text-slate-600 mb-1">Sin cubierta; si CE3X trae huecos embebidos en S, revisa el desglose.</p>
                                     <Input
                                         type="number"
                                         step="0.01"
@@ -5297,7 +5316,7 @@ export function CalculadoraTermica() {
                                                     {elementosOpacosList.length > 0 && (
                                                         <div className="space-y-1">
                                                             <div className="flex justify-between items-center bg-slate-800/80 p-1 rounded">
-                                                                <span className="text-[11px] text-slate-300 font-semibold px-1">Cerramientos Opacos</span>
+                                                                <span className="text-[11px] text-slate-300 font-semibold px-1">Cerramientos Opacos (CE3X)</span>
                                                                 <span className="font-mono text-[11px] font-bold text-slate-300 mr-1">{Number(supOpacos).toFixed(2)} m²</span>
                                                             </div>
                                                             <div className="overflow-x-auto rounded border border-slate-800">
@@ -5364,8 +5383,16 @@ export function CalculadoraTermica() {
                                                         <span className="text-amber-500 font-bold text-[11px] uppercase">Envolvente Total:</span>
                                                         <span className="font-mono font-bold text-amber-400 text-xs">{Number(supEnvolvente).toFixed(2)} m²</span>
                                                     </div>
+                                                    {hasHuecosBreakdown && (
+                                                        <div className="flex justify-between items-center bg-slate-900/60 border border-slate-700 rounded py-1.5 px-2">
+                                                            <span className="text-slate-400 font-semibold text-[11px]">Desglose equivalente CEE:</span>
+                                                            <span className="font-mono font-bold text-slate-200 text-[11px]">
+                                                                {supOpacosNetosEstimados.toFixed(2)} + {supHuecosRounded.toFixed(2)} = {supEnvolventeRounded.toFixed(2)} m²
+                                                            </span>
+                                                        </div>
+                                                    )}
                                                     <p className="text-[9px] text-slate-500 text-right -mt-1">
-                                                        S = opacos sin cubierta; huecos solo informativos.
+                                                        S proviene del CE3X en opacos sin cubierta; para lectura CEE, opacos netos ≈ S - huecos.
                                                     </p>
                                                 </>
                                             ) : (

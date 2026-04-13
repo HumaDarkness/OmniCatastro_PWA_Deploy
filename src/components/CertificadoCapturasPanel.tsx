@@ -78,8 +78,28 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-    const response = await fetch(dataUrl);
-    return response.blob();
+    const match = dataUrl.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?(;base64)?,(.*)$/i);
+    if (!match) {
+        throw new Error("Formato de data URL invalido");
+    }
+
+    const mimeType = match[1] || "application/octet-stream";
+    const isBase64 = Boolean(match[2]);
+    const payload = match[3] || "";
+
+    let binary: string;
+    if (isBase64) {
+        binary = atob(payload);
+    } else {
+        binary = decodeURIComponent(payload);
+    }
+
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+
+    return new Blob([bytes], { type: mimeType });
 }
 
 /**
@@ -293,6 +313,7 @@ export function CertificadoCapturasPanel({ capturas: externalCapturas, setCaptur
                                     </label>
 
                                     <button
+                                        type="button"
                                         onClick={() => pasteFromClipboard(slot.key)}
                                         className="inline-flex items-center gap-1 h-8 px-3 rounded-md bg-indigo-900/30 border border-indigo-700/50 hover:bg-indigo-800/40 text-xs text-indigo-300"
                                     >
@@ -301,6 +322,7 @@ export function CertificadoCapturasPanel({ capturas: externalCapturas, setCaptur
                                     </button>
 
                                     <button
+                                        type="button"
                                         onClick={() => copyImage(slot.key)}
                                         className="inline-flex items-center gap-1 h-8 px-3 rounded-md bg-emerald-900/25 border border-emerald-700/40 hover:bg-emerald-800/35 text-xs text-emerald-300 disabled:opacity-40"
                                         disabled={!data}
@@ -310,6 +332,7 @@ export function CertificadoCapturasPanel({ capturas: externalCapturas, setCaptur
                                     </button>
 
                                     <button
+                                        type="button"
                                         onClick={() => clearSlot(slot.key)}
                                         className="inline-flex items-center gap-1 h-8 px-3 rounded-md bg-red-900/20 border border-red-700/40 hover:bg-red-800/30 text-xs text-red-300 disabled:opacity-40"
                                         disabled={!data}
@@ -522,6 +545,7 @@ export function CertificadoCapturasPanelControlado({
                                     </label>
 
                                     <button
+                                        type="button"
                                         onClick={() => pasteFromClipboard(slot.key)}
                                         className="inline-flex items-center gap-1 h-8 px-3 rounded-md bg-indigo-900/30 border border-indigo-700/50 hover:bg-indigo-800/40 text-xs text-indigo-300"
                                     >
@@ -530,6 +554,7 @@ export function CertificadoCapturasPanelControlado({
                                     </button>
 
                                     <button
+                                        type="button"
                                         onClick={() => copyImage(slot.key)}
                                         className="inline-flex items-center gap-1 h-8 px-3 rounded-md bg-emerald-900/25 border border-emerald-700/40 hover:bg-emerald-800/35 text-xs text-emerald-300 disabled:opacity-40"
                                         disabled={!data}
@@ -539,6 +564,7 @@ export function CertificadoCapturasPanelControlado({
                                     </button>
 
                                     <button
+                                        type="button"
                                         onClick={() => clearSlot(slot.key)}
                                         className="inline-flex items-center gap-1 h-8 px-3 rounded-md bg-red-900/20 border border-red-700/40 hover:bg-red-800/30 text-xs text-red-300 disabled:opacity-40"
                                         disabled={!data}

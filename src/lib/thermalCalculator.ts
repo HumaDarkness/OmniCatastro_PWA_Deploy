@@ -62,6 +62,7 @@ interface ParamsInforme {
   resultado: ResultadoTermico;
   sup_actuacion: number;
   sup_envolvente_total: number;
+  sup_huecos?: number;
   g: number;
   area_h_nh: number;
   area_nh_e: number;
@@ -254,7 +255,7 @@ export function calcularAhorroCAE(params: ParamsCAE): ResultadoTermico {
 // ---------------------------------------------------------------------------
 
 export function generarInformeTexto(params: ParamsInforme): string {
-  const { capas, resultado, sup_actuacion, sup_envolvente_total, g, area_h_nh, area_nh_e, zonaKey } = params;
+  const { capas, resultado, sup_actuacion, sup_envolvente_total, sup_huecos = 0, g, area_h_nh, area_nh_e, zonaKey } = params;
 
   const fmt = (v: number, d = 3) => Number(v).toFixed(d);
   const fmt2 = (v: number) => Number(v).toFixed(2);
@@ -262,12 +263,17 @@ export function generarInformeTexto(params: ParamsInforme): string {
   const capasExistentes = capas.filter(c => !c.es_nueva);
   const todasCapas = capas;
   const pct_afectado = sup_envolvente_total > 0 ? (sup_actuacion / sup_envolvente_total) * 100 : 0;
+  const huecos = Math.max(Number(sup_huecos) || 0, 0);
+  const opacosNetosEstimados = Math.max(sup_envolvente_total - huecos, 0);
 
   const lineas: string[] = [];
 
   lineas.push('1. SUPERFICIE Y PORCENTAJE AFECTADO');
   lineas.push('────────────────────────────────────');
   lineas.push(`Superficie envolvente total (S): ${fmt2(sup_envolvente_total)} m²`);
+  if (huecos > 0 && sup_envolvente_total >= huecos) {
+    lineas.push(`Desglose S (opacos netos + huecos): ${fmt2(opacosNetosEstimados)} + ${fmt2(huecos)} = ${fmt2(sup_envolvente_total)} m²`);
+  }
   lineas.push(`Superficie actuación (s = Ah-nh): ${fmt2(sup_actuacion)} m²`);
   lineas.push(`Porcentaje afectado: ${fmt2(sup_actuacion)} / ${fmt2(sup_envolvente_total)} = ${fmt2(pct_afectado)} %`);
   lineas.push('');
