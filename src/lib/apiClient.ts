@@ -9,7 +9,7 @@
  * El viejo `fetch` crudo ha sido eliminado.
  */
 
-import { kyClient } from "./kyClient";
+import { kyClient, kyFallbackClient, hasKyFallbackClient } from "./kyClient";
 import type { ParamsCAE, ResultadoTermico, Scenario, Caso } from "./thermalCalculator";
 
 const CLOUD_CALC_TIMEOUT_MS = 15000;
@@ -25,6 +25,23 @@ const NETWORK_ERROR_PATTERN = /(network error|failed to fetch|load failed|timed 
 let lastCloudWarmupAt = 0;
 let warmupInFlight: Promise<boolean> | null = null;
 let cloudTransientFailureCount = 0;
+
+async function requestWithCloudFallback<T>(request: (client: typeof kyClient) => Promise<T>): Promise<{
+    data: T;
+    viaFallback: boolean;
+}> {
+    try {
+        const data = await request(kyClient);
+        return { data, viaFallback: false };
+    } catch (primaryError) {
+        if (!hasKyFallbackClient) {
+            throw primaryError;
+        }
+
+        const data = await request(kyFallbackClient);
+        return { data, viaFallback: true };
+    }
+}
 
 // ─── Mapeos PWA → Backend ────────────────────────────────────────────
 
@@ -127,12 +144,14 @@ export async function getCloudAvailabilitySnapshot(options?: {
     const startedAt = nowMs();
 
     try {
-        await kyClient
-            .get("health", {
-                timeout: timeoutMs,
-                retry: { limit: 0 },
-            })
-            .json<Record<string, any>>();
+        const healthResponse = await requestWithCloudFallback((client) =>
+            client
+                .get("health", {
+                    timeout: timeoutMs,
+                    retry: { limit: 0 },
+                })
+                .json<Record<string, any>>()
+        );
 
         const finishedAt = nowMs();
         const latencyMs = Math.max(finishedAt - startedAt, 0);
@@ -144,7 +163,9 @@ export async function getCloudAvailabilitySnapshot(options?: {
             checkedAt: finishedAt,
             latencyMs,
             fromCache: false,
-            message: latencyMs > CLOUD_HIGH_LATENCY_MS
+            message: healthResponse.viaFallback
+                ? "Cloud activa (fallback API)"
+                : latencyMs > CLOUD_HIGH_LATENCY_MS
                 ? "Cloud activa con latencia elevada"
                 : "Cloud activa",
         };
@@ -195,12 +216,14 @@ export async function warmUpCloudApi(options?: { force?: boolean; timeoutMs?: nu
 
     warmupInFlight = (async () => {
         try {
-            await kyClient
-                .get("health", {
-                    timeout: timeoutMs,
-                    retry: { limit: 0 },
-                })
-                .json<Record<string, any>>();
+            await requestWithCloudFallback((client) =>
+                client
+                    .get("health", {
+                        timeout: timeoutMs,
+                        retry: { limit: 0 },
+                    })
+                    .json<Record<string, any>>()
+            );
             lastCloudWarmupAt = Date.now();
             cloudTransientFailureCount = 0;
             return true;
@@ -239,8 +262,8 @@ export async function calcularDbHeRemoto(params: ParamsCAE): Promise<RemoteCalcu
     };
 
     // 2. Ejecutar llamada vía Ky (retry automático + token refresh transparente)
-    const buildRequest = () =>
-        kyClient
+    const buildRequest = (client: typeof kyClient) =>
+        client
             .post("api/v1/calcular-db-he", {
                 json: payload,
                 timeout: CLOUD_CALC_TIMEOUT_MS,
@@ -248,7 +271,7 @@ export async function calcularDbHeRemoto(params: ParamsCAE): Promise<RemoteCalcu
             .json<Record<string, any>>();
 
     try {
-        const data = await buildRequest();
+        const { data } = await requestWithCloudFallback((client) => buildRequest(client));
         return mapRemoteResponse(params, data);
     } catch (error) {
         if (!isRetryableNetworkFailure(error)) {
@@ -256,7 +279,7 @@ export async function calcularDbHeRemoto(params: ParamsCAE): Promise<RemoteCalcu
         }
 
         await warmUpCloudApi({ force: true, timeoutMs: CLOUD_RECOVERY_WARMUP_TIMEOUT_MS });
-        const data = await buildRequest();
+        const { data } = await requestWithCloudFallback((client) => buildRequest(client));
         return mapRemoteResponse(params, data);
     }
 }
