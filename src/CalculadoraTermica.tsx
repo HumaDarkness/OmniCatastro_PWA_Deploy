@@ -1633,76 +1633,75 @@ export function CalculadoraTermica() {
         setIsCalculating(true);
         try {
             const gValue = VALORES_G[zonaKey] ?? 61;
-            
+            const applyOverrides = (base: ResultadoTermico): ResultadoTermico => {
+                const parsedUi = Number.parseFloat(overrideUi);
+                const parsedUf = Number.parseFloat(overrideUf);
+                const uiFinal = Number.isFinite(parsedUi) ? parsedUi : base.ui_final;
+                const ufFinal = Number.isFinite(parsedUf) ? parsedUf : base.uf_final;
+                const ahorroFinal = uiFinal > ufFinal ? Math.round((uiFinal - ufFinal) * supActuacion * gValue) : 0;
+
+                return {
+                    ...base,
+                    ui_final: uiFinal,
+                    uf_final: ufFinal,
+                    ahorro: ahorroFinal,
+                };
+            };
+
+            const calcularLocal = () => {
+                const localRes = calcularAhorroCAE({
+                    capas,
+                    area_h_nh: areaHNH,
+                    area_nh_e: areaNHE,
+                    superficie_actuacion: supActuacion,
+                    g: gValue,
+                    sup_envolvente_total: supEnvolvente,
+                    scenario_i: scenarioI,
+                    scenario_f: scenarioF,
+                    case_i: caseI,
+                    case_f: caseF,
+                    modoCE3X,
+                });
+                const nextResultado = applyOverrides(localRes);
+                latestResultadoRef.current = nextResultado;
+                setResultado(nextResultado);
+            };
+
             if (isCloudCalculation) {
-                // Calculation using Remote API
-                const res = await calcularDbHeRemoto({
-                    capas,
-                    area_h_nh: areaHNH,
-                    area_nh_e: areaNHE,
-                    superficie_actuacion: supActuacion,
-                    g: gValue,
-                    sup_envolvente_total: supEnvolvente,
-                    scenario_i: scenarioI,
-                    scenario_f: scenarioF,
-                    case_i: caseI,
-                    case_f: caseF,
-                    modoCE3X,
-                });
-                
-                const { resultado: resTermico, informe } = res;
-                setXmlImportMsg(`✅ Cálculo Cloud Completado. Informe: ${informe ? "Adjunto" : "Vacio"}`);
+                try {
+                    const res = await calcularDbHeRemoto({
+                        capas,
+                        area_h_nh: areaHNH,
+                        area_nh_e: areaNHE,
+                        superficie_actuacion: supActuacion,
+                        g: gValue,
+                        sup_envolvente_total: supEnvolvente,
+                        scenario_i: scenarioI,
+                        scenario_f: scenarioF,
+                        case_i: caseI,
+                        case_f: caseF,
+                        modoCE3X,
+                    });
 
-                const parsedUi = Number.parseFloat(overrideUi);
-                const parsedUf = Number.parseFloat(overrideUf);
-                const uiFinal = Number.isFinite(parsedUi) ? parsedUi : resTermico.ui_final;
-                const ufFinal = Number.isFinite(parsedUf) ? parsedUf : resTermico.uf_final;
-                const ahorroFinal = uiFinal > ufFinal ? Math.round((uiFinal - ufFinal) * supActuacion * gValue) : 0;
-                
-                const nextResultado: ResultadoTermico = {
-                    ...resTermico,
-                    ui_final: uiFinal,
-                    uf_final: ufFinal,
-                    ahorro: ahorroFinal,
-                };
-                
-                latestResultadoRef.current = nextResultado;
-                setResultado(nextResultado);
-            } else {
-                // Fallback to local calculation
-                const res = calcularAhorroCAE({
-                    capas,
-                    area_h_nh: areaHNH,
-                    area_nh_e: areaNHE,
-                    superficie_actuacion: supActuacion,
-                    g: gValue,
-                    sup_envolvente_total: supEnvolvente,
-                    scenario_i: scenarioI,
-                    scenario_f: scenarioF,
-                    case_i: caseI,
-                    case_f: caseF,
-                    modoCE3X,
-                });
-
-                const parsedUi = Number.parseFloat(overrideUi);
-                const parsedUf = Number.parseFloat(overrideUf);
-                const uiFinal = Number.isFinite(parsedUi) ? parsedUi : res.ui_final;
-                const ufFinal = Number.isFinite(parsedUf) ? parsedUf : res.uf_final;
-                const ahorroFinal = uiFinal > ufFinal ? Math.round((uiFinal - ufFinal) * supActuacion * gValue) : 0;
-
-                const nextResultado: ResultadoTermico = {
-                    ...res,
-                    ui_final: uiFinal,
-                    uf_final: ufFinal,
-                    ahorro: ahorroFinal,
-                };
-
-                latestResultadoRef.current = nextResultado;
-                setResultado(nextResultado);
+                    const { resultado: resTermico, informe } = res;
+                    setXmlImportMsg(`✅ Cálculo Cloud Completado. Informe: ${informe ? "Adjunto" : "Vacio"}`);
+                    const nextResultado = applyOverrides(resTermico);
+                    latestResultadoRef.current = nextResultado;
+                    setResultado(nextResultado);
+                    return;
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : "sin detalle";
+                    console.error("Cloud calculation failed, fallback to local:", error);
+                    setIsCloudCalculation(false);
+                    setXmlImportMsg(`⚠️ Cálculo Cloud no disponible (${message}). Se aplicó cálculo local.`);
+                }
             }
-        } catch (error: any) {
+
+            calcularLocal();
+        } catch (error: unknown) {
             setXmlImportMsg(null);
-            alert(`Error en el cálculo: ${error.message}`);
+            const message = error instanceof Error ? error.message : "Error desconocido";
+            alert(`Error en el cálculo: ${message}`);
         } finally {
             setIsCalculating(false);
         }

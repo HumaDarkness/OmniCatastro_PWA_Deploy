@@ -11,6 +11,10 @@ import ky from 'ky';
 import type { BeforeRequestHook, AfterResponseHook, BeforeRetryHook } from 'ky';
 import { supabase } from './supabase';
 
+const CLOUD_API_FALLBACK = 'https://omnicatastro-api.onrender.com';
+const DEFAULT_API_PREFIX = import.meta.env.DEV ? 'http://localhost:8000' : CLOUD_API_FALLBACK;
+const API_PREFIX = (import.meta.env.VITE_API_URL || DEFAULT_API_PREFIX).trim().replace(/\/+$/, '');
+
 const injectAuth: BeforeRequestHook = async ({ request }) => {
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.access_token) {
@@ -35,7 +39,7 @@ const logRetry: BeforeRetryHook = async ({ request, retryCount }) => {
 };
 
 export const kyClient = ky.create({
-  prefix: import.meta.env.VITE_API_URL || "http://localhost:8000",
+  prefix: API_PREFIX,
   timeout: 10000,
   retry: {
     limit: 3,
