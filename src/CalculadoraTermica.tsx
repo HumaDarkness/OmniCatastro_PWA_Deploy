@@ -28,7 +28,7 @@ import {
     CircleCheckBig,
     Archive,
     FileDown,
-    ChevronDown,
+    CheckCircle,
 } from "lucide-react";
 import {
     calcularAhorroCAE,
@@ -73,14 +73,14 @@ import {
 } from "./lib/syncService";
 import { fetchAltitudeAndProvince } from "./lib/climateZoneVerifier";
 import { consultarCatastro, esParcerlaMultiple, extraerDatosInmuebleUnico } from "./lib/catastroService";
-import {
-    CertificadoCapturasPanelControlado,
-    createEmptyCapturasState,
-    type CapturasState,
-} from "./components/CertificadoCapturasPanel";
+import { CertificadoCapturasPanelControlado, createEmptyCapturasState, type CapturasState } from "./components/CertificadoCapturasPanel";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./components/ui/card";
 import { Input } from "./components/ui/input";
 import { Badge } from "./components/ui/badge";
+import { ModoSwitch, useModoExperto } from "./components/ModoSwitch";
+import { GestionLotesSheet } from "./components/GestionLotesSheet";
+import { CertificadoSuccessState } from "./components/CertificadoSuccessState";
+import { Button } from "./components/ui/button";
 
 interface MaterialDB {
     id: string;
@@ -798,6 +798,8 @@ interface ExpedienteMvpSyncMeta {
 }
 
 export function CalculadoraTermica() {
+    const { isExperto } = useModoExperto();
+    const [isLotesSheetOpen, setIsLotesSheetOpen] = useState(false);
     const [expedienteRc, setExpedienteRc] = useState("");
     const [certStatus, setCertStatus] = useState<CertDraftStatus>("en_progreso");
 
@@ -4033,13 +4035,16 @@ export function CalculadoraTermica() {
                         Calcula el ahorro energético (kWh/año) según CTE DB-HE — Tabla 7.
                     </p>
                 </div>
-                <button
-                    onClick={clearLocalCalcMemory}
-                    className="h-8 px-3 rounded-md border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 text-xs"
-                    title="Borra memoria local del formulario guardada en este navegador"
-                >
-                    Limpiar memoria local
-                </button>
+                <div className="flex items-center gap-4">
+                    <ModoSwitch />
+                    <button
+                        onClick={clearLocalCalcMemory}
+                        className="h-8 px-3 rounded-md border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 text-xs hidden sm:flex"
+                        title="Borra memoria local del formulario guardada en este navegador"
+                    >
+                        Limpiar memoria local
+                    </button>
+                </div>
             </div>
 
             <Card className="bg-slate-900/40 border-slate-800">
@@ -4063,7 +4068,7 @@ export function CalculadoraTermica() {
                                 className="h-9 bg-slate-900/50 border-slate-700 text-slate-200 font-mono"
                             />
                         </div>
-                        <div>
+                        <div className={`transition-all duration-300 ${isExperto ? 'block' : 'hidden'}`}>
                             <label className="text-[10px] text-slate-500 uppercase font-bold">Estado</label>
                             <select
                                 value={certStatus}
@@ -4075,7 +4080,7 @@ export function CalculadoraTermica() {
                                 <option value="completado">Completado</option>
                             </select>
                         </div>
-                        <div className="md:col-span-2 grid grid-cols-3 gap-2 items-end">
+                        <div className={`md:col-span-2 grid-cols-3 gap-2 items-end transition-all duration-300 ${isExperto ? 'grid' : 'hidden'}`}>
                             <button
                                 onClick={() => saveCurrentDraft()}
                                 disabled={draftSaving}
@@ -4091,7 +4096,7 @@ export function CalculadoraTermica() {
                                 title="Flujo lote: completa el actual y abre automáticamente el siguiente pendiente"
                             >
                                 <CircleCheckBig className="h-3.5 w-3.5" />
-                                Completar + siguiente
+                                Completar + sig.
                             </button>
                             <button
                                 onClick={() => guardarSueltoRapido()}
@@ -4105,7 +4110,7 @@ export function CalculadoraTermica() {
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <div className={`flex flex-wrap items-center gap-2 text-xs transition-all duration-300 ${isExperto ? 'block' : 'hidden'}`}>
                         <span className="px-2 py-1 rounded border border-slate-700 text-slate-300 bg-slate-900/40">Total: {queueTotal}</span>
                         <span className="px-2 py-1 rounded border border-amber-700/40 text-amber-300 bg-amber-900/20">Pendientes: {queuePending}</span>
                         <span className="px-2 py-1 rounded border border-emerald-700/40 text-emerald-300 bg-emerald-900/20">Completados: {queueCompleted}</span>
@@ -4151,104 +4156,105 @@ export function CalculadoraTermica() {
                             Nuevo expediente
                         </button>
 
-                        {/* Más opciones dropdown */}
-                        <div className="relative" ref={moreOptionsRef}>
-                            <button
-                                onClick={() => setIsMoreOptionsOpen((prev) => !prev)}
-                                className="h-8 px-3 rounded-md bg-slate-700/60 border border-slate-600 text-slate-200 hover:bg-slate-600/60 text-xs inline-flex items-center gap-1"
+                        {/* Botón Gestión Avanzada de Lotes */}
+                        <div className="relative">
+                            <Button
+                                variant="outline"
+                                className="h-8 text-xs border-slate-600 bg-slate-700/40"
+                                onClick={() => setIsLotesSheetOpen(true)}
                             >
-                                Más opciones
-                                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isMoreOptionsOpen ? "rotate-180" : ""}`} />
-                            </button>
-                            {isMoreOptionsOpen && (
-                                <div className="absolute left-0 top-full mt-1 z-50 bg-slate-800 rounded-lg shadow-lg border border-slate-700 p-2 flex flex-col gap-1 min-w-[200px]">
+                                <Zap className="mr-2 h-3.5 w-3.5 text-cyan-400" />
+                                Gestión de Lotes
+                            </Button>
+                            
+                            <GestionLotesSheet open={isLotesSheetOpen} onOpenChange={setIsLotesSheetOpen}>
                                     <button
-                                        onClick={() => { void copiarDatosClavePDF(); setIsMoreOptionsOpen(false); }}
+                                        onClick={() => { void copiarDatosClavePDF(); setIsLotesSheetOpen(false); }}
                                         disabled={draftLoading || draftSaving}
-                                        className="h-8 px-3 rounded-md bg-teal-900/30 border border-teal-700/40 text-teal-300 hover:bg-teal-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1 w-full"
+                                        className="h-10 px-3 rounded-md bg-teal-900/30 border border-teal-700/40 text-teal-300 hover:bg-teal-800/40 disabled:opacity-40 text-sm inline-flex items-center gap-3 w-full"
                                         title="Copia RC, S, % envolvente y ahorro para pegar en PDF sin errores"
                                     >
-                                        <Copy className="h-3.5 w-3.5" />
+                                        <Copy className="h-4 w-4" />
                                         Copiar datos PDF
                                     </button>
                                     <button
-                                        onClick={() => { prepararSiguienteLote(); setIsMoreOptionsOpen(false); }}
+                                        onClick={() => { prepararSiguienteLote(); setIsLotesSheetOpen(false); }}
                                         disabled={draftLoading || draftSaving}
-                                        className="h-8 px-3 rounded-md bg-sky-900/30 border border-sky-700/40 text-sky-300 hover:bg-sky-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1 w-full"
+                                        className="h-10 px-3 rounded-md bg-sky-900/30 border border-sky-700/40 text-sky-300 hover:bg-sky-800/40 disabled:opacity-40 text-sm inline-flex items-center gap-3 w-full"
                                         title="Archiva completados activos, limpia el formulario y deja la cola lista para arrancar otro lote"
                                     >
-                                        <ArrowRight className="h-3.5 w-3.5" />
+                                        <ArrowRight className="h-4 w-4" />
                                         Preparar siguiente lote
                                     </button>
                                     <button
-                                        onClick={() => { void exportarHistorialEmitidosCSV(); setIsMoreOptionsOpen(false); }}
+                                        onClick={() => { void exportarHistorialEmitidosCSV(); setIsLotesSheetOpen(false); }}
                                         disabled={draftLoading || issuedCertificatesCount === 0}
-                                        className="h-8 px-3 rounded-md bg-cyan-900/30 border border-cyan-700/40 text-cyan-300 hover:bg-cyan-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1 w-full"
+                                        className="h-10 px-3 rounded-md bg-cyan-900/30 border border-cyan-700/40 text-cyan-300 hover:bg-cyan-800/40 disabled:opacity-40 text-sm inline-flex items-center gap-3 w-full"
                                         title="Exportar historial cloud de certificados emitidos"
                                     >
-                                        <FileDown className="h-3.5 w-3.5" />
+                                        <FileDown className="h-4 w-4" />
                                         Historial emitidos CSV
                                     </button>
                                     <button
-                                        onClick={() => { exportarLoteCSV(); setIsMoreOptionsOpen(false); }}
+                                        onClick={() => { exportarLoteCSV(); setIsLotesSheetOpen(false); }}
                                         disabled={queueTotal === 0}
-                                        className="h-8 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1 w-full"
+                                        className="h-10 px-3 rounded-md bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-40 text-sm inline-flex items-center gap-3 w-full"
                                     >
-                                        <FileDown className="h-3.5 w-3.5" />
+                                        <FileDown className="h-4 w-4" />
                                         Lote CSV
                                     </button>
                                     <button
-                                        onClick={() => { exportarBackupJSON(); setIsMoreOptionsOpen(false); }}
+                                        onClick={() => { exportarBackupJSON(); setIsLotesSheetOpen(false); }}
                                         disabled={draftLoading || queueTotal === 0}
-                                        className="h-8 px-3 rounded-md bg-cyan-900/30 border border-cyan-700/40 text-cyan-300 hover:bg-cyan-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1 w-full"
+                                        className="h-10 px-3 rounded-md bg-cyan-900/30 border border-cyan-700/40 text-cyan-300 hover:bg-cyan-800/40 disabled:opacity-40 text-sm inline-flex items-center gap-3 w-full"
                                         title="Exportar lote completo con imágenes en ZIP comprimido"
                                     >
-                                        <Save className="h-3.5 w-3.5" />
+                                        <Save className="h-4 w-4" />
                                         Exportar ZIP
                                     </button>
                                     <button
-                                        onClick={() => { fileInputRef.current?.click(); setIsMoreOptionsOpen(false); }}
+                                        onClick={() => { fileInputRef.current?.click(); setIsLotesSheetOpen(false); }}
                                         disabled={draftLoading}
-                                        className="h-8 px-3 rounded-md bg-blue-900/30 border border-blue-700/40 text-blue-300 hover:bg-blue-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1 w-full"
+                                        className="h-10 px-3 rounded-md bg-blue-900/30 border border-blue-700/40 text-blue-300 hover:bg-blue-800/40 disabled:opacity-40 text-sm inline-flex items-center gap-3 w-full"
                                         title="Importar backup JSON o ZIP"
                                     >
-                                        <UploadCloud className="h-3.5 w-3.5" />
+                                        <UploadCloud className="h-4 w-4" />
                                         Importar backup
                                     </button>
                                     <button
-                                        onClick={() => { archivarCompletados(); setIsMoreOptionsOpen(false); }}
+                                        onClick={() => { archivarCompletados(); setIsLotesSheetOpen(false); }}
                                         disabled={draftLoading || queueCompleted === 0}
-                                        className="h-8 px-3 rounded-md bg-rose-900/30 border border-rose-700/40 text-rose-300 hover:bg-rose-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1 w-full"
+                                        className="h-10 px-3 rounded-md bg-rose-900/30 border border-rose-700/40 text-rose-300 hover:bg-rose-800/40 disabled:opacity-40 text-sm inline-flex items-center gap-3 w-full"
                                         title="Mueve a archivados los expedientes completados de la cola activa"
                                     >
-                                        <Archive className="h-3.5 w-3.5" />
+                                        <Archive className="h-4 w-4" />
                                         Archivar completados
                                     </button>
                                     <button
-                                        onClick={() => { repararArchivadosEnvolvente(); setIsMoreOptionsOpen(false); }}
+                                        onClick={() => { repararArchivadosEnvolvente(); setIsLotesSheetOpen(false); }}
                                         disabled={draftLoading || archivedTotal === 0}
-                                        className="h-8 px-3 rounded-md bg-orange-900/30 border border-orange-700/40 text-orange-300 hover:bg-orange-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1 w-full"
+                                        className="h-10 px-3 rounded-md bg-orange-900/30 border border-orange-700/40 text-orange-300 hover:bg-orange-800/40 disabled:opacity-40 text-sm inline-flex items-center gap-3 w-full"
                                         title="Audita archivados, corrige S sin huecos y recalcula automáticamente"
                                     >
-                                        <Zap className="h-3.5 w-3.5" />
+                                        <Zap className="h-4 w-4" />
                                         Reparar S archivados
                                     </button>
                                     <button
-                                        onClick={() => { restaurarTodosArchivados(); setIsMoreOptionsOpen(false); }}
+                                        onClick={() => { restaurarTodosArchivados(); setIsLotesSheetOpen(false); }}
                                         disabled={draftLoading || archivedTotal === 0}
-                                        className="h-8 px-3 rounded-md bg-violet-900/30 border border-violet-700/40 text-violet-300 hover:bg-violet-800/40 disabled:opacity-40 text-xs inline-flex items-center gap-1 w-full"
+                                        className="h-10 px-3 rounded-md bg-violet-900/30 border border-violet-700/40 text-violet-300 hover:bg-violet-800/40 disabled:opacity-40 text-sm inline-flex items-center gap-3 w-full"
                                         title="Restaura todos los expedientes archivados a la cola"
                                     >
-                                        <RefreshCcw className="h-3.5 w-3.5" />
+                                        <RefreshCcw className="h-4 w-4" />
                                         Restaurar archivados
                                     </button>
-                                    <div className="h-8 px-2 rounded-md border border-slate-700 bg-slate-900/40 flex items-center gap-2 text-[11px] text-slate-300 w-full">
+                                    <div className="h-10 px-3 rounded-md border border-slate-700 bg-slate-900/40 flex flex-col justify-center gap-1 text-xs text-slate-300 w-full mb-4">
                                         <span>Acción al duplicar:</span>
                                         <select
                                             value={backupImportStrategy}
                                             onChange={(e) => setBackupImportStrategy(e.target.value as ImportMergeStrategy)}
                                             disabled={draftLoading}
-                                            className="h-6 rounded bg-slate-900 border border-slate-700 px-1 text-[11px]"
+                                            className="h-8 rounded bg-slate-900 border border-slate-700 px-2 text-xs w-full"
                                             title="Estrategia al detectar RC duplicada durante importación"
                                         >
                                             <option value="merge">Fusionar datos</option>
@@ -4256,8 +4262,7 @@ export function CalculadoraTermica() {
                                             <option value="skip">Omitir</option>
                                         </select>
                                     </div>
-                                </div>
-                            )}
+                            </GestionLotesSheet>
                         </div>
                     </div>
 
@@ -4344,7 +4349,7 @@ export function CalculadoraTermica() {
                         </div>
                     )}
 
-                    <div className={`grid grid-cols-1 ${showArchivedQueuePanel ? "md:grid-cols-2" : ""} gap-2`}>
+                    <div className={`grid grid-cols-1 ${showArchivedQueuePanel ? "md:grid-cols-2" : ""} gap-2 transition-all duration-300 ${isExperto ? 'block' : 'hidden'}`}>
                         <div className="flex items-center gap-2">
                             <Input
                                 value={queueSearch}
@@ -4389,7 +4394,7 @@ export function CalculadoraTermica() {
                         </p>
                     )}
 
-                    <div className="rounded-md border border-slate-800 bg-slate-950/30 max-h-52 overflow-y-auto">
+                    <div className={`rounded-md border border-slate-800 bg-slate-950/30 max-h-52 overflow-y-auto transition-all duration-300 ${isExperto ? 'block' : 'hidden'}`}>
                         {draftLoading ? (
                             <div className="px-3 py-3 text-xs text-slate-400">Cargando cola de certificados...</div>
                         ) : draftQueue.length === 0 ? (
@@ -5432,6 +5437,37 @@ export function CalculadoraTermica() {
                                 </div>
                             </CardContent>
                         </Card>
+                    )}
+
+                    {!isExperto && resultado && certStatus !== "completado" && (
+                        <div className="pt-6 border-t border-slate-800 flex justify-center">
+                            <Button 
+                                size="lg" 
+                                className="w-full sm:w-auto text-lg h-14 bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg"
+                                onClick={() => { 
+                                    setCertStatus("completado");
+                                    void saveCurrentDraft("completado", { suppressSuccessMessage: true });
+                                }}
+                                disabled={draftSaving || draftLoading}
+                            >
+                                <CheckCircle className="mr-2 h-6 w-6" />
+                                Finalizar Certificado
+                            </Button>
+                        </div>
+                    )}
+
+                    {certStatus === "completado" && (
+                        <CertificadoSuccessState
+                            referencia={expedienteRc}
+                            fecha={new Date().toLocaleDateString()}
+                            textoPDF={`Ref: ${expedienteRc}\nAhorro: ${resultado?.ahorro.toLocaleString() || '0'} kWh/año`}
+                            onDescargarPDF={() => { void generarCertificadoIntelliaPDF(); }}
+                            modoExperto={isExperto}
+                            onCrearOtro={() => {
+                                resetForNewCertificate();
+                                setCertStatus("en_progreso");
+                            }}
+                        />
                     )}
                 </div>
             </div>

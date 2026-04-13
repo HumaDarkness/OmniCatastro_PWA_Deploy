@@ -1,9 +1,19 @@
-import { supabase } from "./supabase";
+/**
+ * apiClient.ts — Migrado a Ky (abril 2026)
+ *
+ * Este módulo mantiene la misma API pública (`calcularDbHeRemoto`) para
+ * compatibilidad con CalculadoraTermica.tsx, pero internamente delega
+ * toda la comunicación HTTP al kyClient blindado (con auto-retry,
+ * token refresh silencioso y backoff exponencial).
+ *
+ * El viejo `fetch` crudo ha sido eliminado.
+ */
+
+import { kyClient } from "./kyClient";
 import type { ParamsCAE, ResultadoTermico, Scenario, Caso } from "./thermalCalculator";
 
-const API_URL = import.meta.env.VITE_API_URL || "";
+// ─── Mapeos PWA → Backend ────────────────────────────────────────────
 
-// Mapeos de PWA -> Backend
 function mapScenario(s: Scenario): string {
     switch (s) {
         case "particion_aislada": return "despues";
@@ -18,24 +28,17 @@ function mapCaso(c: Caso): number {
     return c === "estanco" ? 1 : 2;
 }
 
+// ─── Tipos públicos ──────────────────────────────────────────────────
+
 export interface RemoteCalculoResponse {
     resultado: ResultadoTermico;
     informe: string;
 }
 
+// ─── Función pública (firma intacta) ─────────────────────────────────
+
 export async function calcularDbHeRemoto(params: ParamsCAE): Promise<RemoteCalculoResponse> {
-    if (!API_URL) {
-        throw new Error("VITE_API_URL no está configurada.");
-    }
-
-    // 1. Obtener Token JWT de la sesión activa
-    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-    if (sessionError || !sessionData?.session) {
-        throw new Error("No hay sesión activa para realizar el cálculo remoto.");
-    }
-    const token = sessionData.session.access_token;
-
-    // 2. Traducir ParamsCAE -> CalcularDbHeRequest
+    // 1. Construir payload (la autenticación la inyecta kyClient.beforeRequest)
     const payload = {
         capas: params.capas.map(c => ({
             nombre: c.nombre,
@@ -53,34 +56,14 @@ export async function calcularDbHeRemoto(params: ParamsCAE): Promise<RemoteCalcu
         caso_i: mapCaso(params.case_i),
         escenario_f: mapScenario(params.scenario_f),
         caso_f: mapCaso(params.case_f),
-        // Si hay override (generalmente ui/uf no entran directamente en ParamsCAE pero por completitud si existieran)
-        // ui_override: params.ui_override,
-        // uf_override: params.uf_override
     };
 
-    // 3. Ejecutar Llamada
-    const response = await fetch(`${API_URL}/api/v1/calcular-db-he`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}`,
-            // Origin guard requiere que enviemos una petición legitima de un origin. Browsers lo hacen auto.
-        },
-        body: JSON.stringify(payload)
-    });
+    // 2. Ejecutar llamada vía Ky (retry automático + token refresh transparente)
+    const data = await kyClient
+        .post("api/v1/calcular-db-he", { json: payload })
+        .json<Record<string, any>>();
 
-    if (!response.ok) {
-        let errMessage = `Error API (${response.status})`;
-        try {
-            const errData = await response.json();
-            errMessage = errData.detail || errMessage;
-        } catch { }
-        throw new Error(errMessage);
-    }
-
-    const data = await response.json();
-
-    // 4. Mapear de vuelta a ResultadoTermico
+    // 3. Mapear respuesta backend → ResultadoTermico de la PWA
     const resultado: ResultadoTermico = {
         rt_inicial: data.rt_inicial,
         rt_final: data.rt_final,
@@ -91,17 +74,17 @@ export async function calcularDbHeRemoto(params: ParamsCAE): Promise<RemoteCalcu
         ui_final: data.ui_final,
         uf_final: data.uf_final,
         ratio: data.ratio,
-        ahorro: data.ahorro_kwh, // backend lo llama ahorro_kwh, PWA lo llama ahorro
+        ahorro: data.ahorro_kwh, // backend: ahorro_kwh → PWA: ahorro
         pct_envolvente: data.pct_envolvente,
-        // En PWA tenemos r_mat_inicial y r_mat_final que no vienen directamente pero se calculaban en la PWA
-        // Igual la UI usa los otros valores, pero si es 100% necesario lo podemos meter en ceros, 
-        // o mapearlo si no se utiliza estrictamente
-        r_mat_inicial: params.capas.filter(c => !c.es_nueva).reduce((s, c) => s + (Number(c.r_valor) || ((Number(c.espesor) || 0) / (Number(c.lambda_val) || 1))), 0),
-        r_mat_final: params.capas.reduce((s, c) => s + (Number(c.r_valor) || ((Number(c.espesor) || 0) / (Number(c.lambda_val) || 1))), 0)
+        r_mat_inicial: params.capas
+            .filter(c => !c.es_nueva)
+            .reduce((s, c) => s + (Number(c.r_valor) || ((Number(c.espesor) || 0) / (Number(c.lambda_val) || 1))), 0),
+        r_mat_final: params.capas
+            .reduce((s, c) => s + (Number(c.r_valor) || ((Number(c.espesor) || 0) / (Number(c.lambda_val) || 1))), 0),
     };
 
     return {
         resultado,
-        informe: data.informe_texto
+        informe: data.informe_texto,
     };
 }
