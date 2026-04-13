@@ -15,6 +15,9 @@ import {
     CircleAlert,
     CircleCheck,
     ArrowRight,
+    Cloud,
+    CloudOff,
+    Loader2,
 } from "lucide-react";
 import { CentralDocumental } from "../CentralDocumental";
 import { ConsultaCatastral } from "../ConsultaCatastral";
@@ -23,6 +26,8 @@ import { ProyectosView } from "../ProyectosView";
 import { ClientesView } from "../ClientesView";
 import { ResumenGeneral } from "./ResumenGeneral";
 import { getUxRecoverySnapshot, type LicenseTier, type UxRecoverySnapshot } from "../lib/supabase";
+import { getCloudAvailabilitySnapshot, type CloudAvailabilitySnapshot } from "../lib/apiClient";
+import { getCatastroAvailabilitySnapshot, type CatastroAvailabilitySnapshot } from "../lib/catastroService";
 
 type DashboardView = "resumen" | "central-documental" | "calculadora" | "consulta-catastral" | "clientes" | "mis-proyectos" | "ajustes";
 
@@ -60,6 +65,24 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [uxSnapshot, setUxSnapshot] = useState<UxRecoverySnapshot | null>(null);
     const [uxLoading, setUxLoading] = useState(true);
+    const [cloudStatus, setCloudStatus] = useState<CloudAvailabilitySnapshot>({
+        state: "starting",
+        checkedAt: Date.now(),
+        latencyMs: null,
+        fromCache: false,
+        message: "Inicializando cloud...",
+    });
+    const [cloudChecking, setCloudChecking] = useState(false);
+    const [catastroStatus, setCatastroStatus] = useState<CatastroAvailabilitySnapshot>({
+        state: "offline",
+        checkedAt: Date.now(),
+        latencyMs: null,
+        message: "Comprobando Catastro...",
+        maintenanceUntil: null,
+        details: null,
+    });
+    const [catastroChecking, setCatastroChecking] = useState(false);
+    const [showServiceInfo, setShowServiceInfo] = useState(false);
 
     const navItems: NavItem[] = [
         { id: "resumen", label: "Resumen General", icon: <LayoutDashboard className="w-5 h-5" /> },
@@ -84,6 +107,20 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
         setUxLoading(false);
     };
 
+    const refreshCloudStatus = async (force = true) => {
+        setCloudChecking(true);
+        const snapshot = await getCloudAvailabilitySnapshot({ force });
+        setCloudStatus(snapshot);
+        setCloudChecking(false);
+    };
+
+    const refreshCatastroStatus = async () => {
+        setCatastroChecking(true);
+        const snapshot = await getCatastroAvailabilitySnapshot();
+        setCatastroStatus(snapshot);
+        setCatastroChecking(false);
+    };
+
     useEffect(() => {
         let isMounted = true;
 
@@ -102,6 +139,133 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
             window.clearInterval(timer);
         };
     }, []);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const poll = async () => {
+            const snapshot = await getCatastroAvailabilitySnapshot();
+            if (!isMounted) return;
+            setCatastroStatus(snapshot);
+            setCatastroChecking(false);
+        };
+
+        setCatastroChecking(true);
+        void poll();
+        const timer = window.setInterval(() => {
+            void poll();
+        }, 90000);
+
+        return () => {
+            isMounted = false;
+            window.clearInterval(timer);
+        };
+    }, []);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const poll = async (force = false) => {
+            const snapshot = await getCloudAvailabilitySnapshot({ force });
+            if (!isMounted) return;
+            setCloudStatus(snapshot);
+            setCloudChecking(false);
+        };
+
+        setCloudChecking(true);
+        void poll(true);
+        const timer = window.setInterval(() => {
+            void poll(false);
+        }, 60000);
+
+        return () => {
+            isMounted = false;
+            window.clearInterval(timer);
+        };
+    }, []);
+
+    const cloudBadge = (() => {
+        if (cloudChecking) {
+            return {
+                label: "Cloud comprobando...",
+                meta: "",
+                className: "border-slate-700 text-slate-300 bg-slate-900/40",
+                icon: <Loader2 className="w-3.5 h-3.5 animate-spin" />,
+            };
+        }
+
+        if (cloudStatus.state === "active") {
+            return {
+                label: "Cloud activa",
+                meta: cloudStatus.latencyMs !== null
+                    ? `${cloudStatus.latencyMs} ms`
+                    : cloudStatus.fromCache
+                        ? "cache"
+                        : "lista",
+                className: "border-emerald-700/40 text-emerald-300 bg-emerald-900/20",
+                icon: <Cloud className="w-3.5 h-3.5" />,
+            };
+        }
+
+        if (cloudStatus.state === "starting") {
+            return {
+                label: "Cloud iniciando",
+                meta: "reintentando",
+                className: "border-amber-700/40 text-amber-300 bg-amber-900/20",
+                icon: <Loader2 className="w-3.5 h-3.5 animate-spin" />,
+            };
+        }
+
+        return {
+            label: "Cloud no disponible",
+            meta: "local activo",
+            className: "border-rose-700/40 text-rose-300 bg-rose-900/20",
+            icon: <CloudOff className="w-3.5 h-3.5" />,
+        };
+    })();
+
+    const catastroBadge = (() => {
+        if (catastroChecking) {
+            return {
+                label: "Catastro comprobando...",
+                meta: "",
+                className: "border-slate-700 text-slate-300 bg-slate-900/40",
+                icon: <Loader2 className="w-3.5 h-3.5 animate-spin" />,
+            };
+        }
+
+        if (catastroStatus.state === "active") {
+            return {
+                label: "Catastro activo",
+                meta: catastroStatus.latencyMs !== null ? `${catastroStatus.latencyMs} ms` : "operativo",
+                className: "border-emerald-700/40 text-emerald-300 bg-emerald-900/20",
+                icon: <Building2 className="w-3.5 h-3.5" />,
+            };
+        }
+
+        if (catastroStatus.state === "maintenance") {
+            return {
+                label: "Catastro mantenimiento",
+                meta: catastroStatus.maintenanceUntil ? `hasta ${catastroStatus.maintenanceUntil}` : "en curso",
+                className: "border-amber-700/40 text-amber-300 bg-amber-900/20",
+                icon: <CircleAlert className="w-3.5 h-3.5" />,
+            };
+        }
+
+        return {
+            label: "Catastro no disponible",
+            meta: "reintento",
+            className: "border-rose-700/40 text-rose-300 bg-rose-900/20",
+            icon: <CloudOff className="w-3.5 h-3.5" />,
+        };
+    })();
+
+    const formatCheckedAt = (timestamp: number): string =>
+        new Date(timestamp).toLocaleTimeString("es-ES", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+        });
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -280,7 +444,29 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
                                 )}
                             </div>
 
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap justify-end">
+                                <div
+                                    className={`h-8 px-3 rounded-md border text-xs inline-flex items-center gap-1 ${cloudBadge.className}`}
+                                    title={cloudStatus.message}
+                                >
+                                    {cloudBadge.icon}
+                                    <span>{cloudBadge.label}</span>
+                                    {cloudBadge.meta ? <span className="opacity-80">· {cloudBadge.meta}</span> : null}
+                                </div>
+                                <div
+                                    className={`h-8 px-3 rounded-md border text-xs inline-flex items-center gap-1 ${catastroBadge.className}`}
+                                    title={catastroStatus.message}
+                                >
+                                    {catastroBadge.icon}
+                                    <span>{catastroBadge.label}</span>
+                                    {catastroBadge.meta ? <span className="opacity-80">· {catastroBadge.meta}</span> : null}
+                                </div>
+                                <button
+                                    onClick={() => setShowServiceInfo((prev) => !prev)}
+                                    className="h-8 px-3 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs"
+                                >
+                                    {showServiceInfo ? "Ocultar info" : "Más información"}
+                                </button>
                                 {suggestedAction && (
                                     <button
                                         onClick={suggestedAction.onClick}
@@ -291,7 +477,11 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
                                     </button>
                                 )}
                                 <button
-                                    onClick={refreshUxSnapshot}
+                                    onClick={() => {
+                                        void refreshUxSnapshot();
+                                        void refreshCloudStatus(true);
+                                        void refreshCatastroStatus();
+                                    }}
                                     className="h-8 px-3 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs inline-flex items-center gap-1"
                                 >
                                     <RefreshCw className="w-3.5 h-3.5" />
@@ -299,6 +489,25 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
                                 </button>
                             </div>
                         </div>
+
+                        {showServiceInfo && (
+                            <div className="mt-2 rounded-md border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-300 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                    <p className="text-slate-200 font-semibold">Cloud</p>
+                                    <p>Estado: {cloudStatus.message}</p>
+                                    <p>Última comprobación: {formatCheckedAt(cloudStatus.checkedAt)}</p>
+                                    {cloudStatus.latencyMs !== null && <p>Latencia: {cloudStatus.latencyMs} ms</p>}
+                                </div>
+                                <div className="space-y-1">
+                                    <p className="text-slate-200 font-semibold">Catastro</p>
+                                    <p>Estado: {catastroStatus.message}</p>
+                                    <p>Última comprobación: {formatCheckedAt(catastroStatus.checkedAt)}</p>
+                                    {catastroStatus.latencyMs !== null && <p>Latencia: {catastroStatus.latencyMs} ms</p>}
+                                    {catastroStatus.maintenanceUntil && <p>Mantenimiento estimado hasta: {catastroStatus.maintenanceUntil}</p>}
+                                    {catastroStatus.details && <p className="text-slate-400">Detalle: {catastroStatus.details}</p>}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <div className="flex-1 overflow-hidden">

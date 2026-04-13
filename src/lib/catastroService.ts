@@ -38,6 +38,17 @@ export interface ConstruccionData {
     superficie: string;
 }
 
+export type CatastroAvailabilityState = "active" | "maintenance" | "offline";
+
+export interface CatastroAvailabilitySnapshot {
+    state: CatastroAvailabilityState;
+    checkedAt: number;
+    latencyMs: number | null;
+    message: string;
+    maintenanceUntil: string | null;
+    details: string | null;
+}
+
 // ─── Validación de RC ────────────────────────────────────────────────
 
 export function validarRC(rc: string): { valido: boolean; resultado: string } {
@@ -81,6 +92,171 @@ async function buscarEnCache(rc: string): Promise<any | null> {
 
 const CATASTRO_API_URL =
     "https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCallejero/COVCCallejero.svc/json/Consulta_DNPRC";
+const CATASTRO_STATUS_PROBE_RC = "0000000AA0000A0000AA";
+const CATASTRO_STATUS_TIMEOUT_MS = 8000;
+const CATASTRO_MAINTENANCE_PATTERN = /(mantenim|temporalm|interrup|indisponib|fuera de servicio|servicio no disponible|ca[ii]d[ao]|no operativo)/i;
+
+function normalizeServiceMessage(value: string): string {
+    return value.replace(/\s+/g, " ").trim();
+}
+
+function extractCatastroErrors(datos: any): string[] {
+    const root = datos?.consulta_dnprcResult ?? datos?.consulta_dnp ?? datos;
+    const control = root?.control ?? {};
+    const cuerr = Number.parseInt(String(control?.cuerr ?? "0"), 10);
+
+    if (!Number.isFinite(cuerr) || cuerr <= 0) {
+        return [];
+    }
+
+    const lerr = root?.lerr?.err;
+    if (!lerr) return [];
+
+    const errores = Array.isArray(lerr) ? lerr : [lerr];
+    return errores
+        .map((entry: any) => normalizeServiceMessage(String(entry?.des ?? "")))
+        .filter(Boolean);
+}
+
+function extractMaintenanceUntil(message: string): string | null {
+    const normalized = normalizeServiceMessage(message);
+    if (!normalized) return null;
+
+    const fullDateTime = normalized.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(\d{1,2}[:.]\d{2})\b/i);
+    if (fullDateTime) {
+        return `${fullDateTime[1]} ${fullDateTime[2].replace(".", ":")}`;
+    }
+
+    const untilTime = normalized.match(/hasta\s+las?\s+(\d{1,2}[:.]\d{2})\b/i);
+    if (untilTime) {
+        return `hoy ${untilTime[1].replace(".", ":")}`;
+    }
+
+    const genericTime = normalized.match(/\b(\d{1,2}[:.]\d{2})\s*h\b/i);
+    if (genericTime) {
+        return `hoy ${genericTime[1].replace(".", ":")}`;
+    }
+
+    return null;
+}
+
+function parseCatastroProbeBody(rawBody: string, latencyMs: number): CatastroAvailabilitySnapshot {
+    const checkedAt = Date.now();
+    const normalizedBody = normalizeServiceMessage(rawBody);
+
+    if (!normalizedBody) {
+        return {
+            state: "active",
+            checkedAt,
+            latencyMs,
+            message: "Catastro operativo",
+            maintenanceUntil: null,
+            details: null,
+        };
+    }
+
+    let parsedJson: any = null;
+    try {
+        parsedJson = JSON.parse(normalizedBody);
+    } catch {
+        parsedJson = null;
+    }
+
+    if (parsedJson) {
+        const errors = extractCatastroErrors(parsedJson);
+        const details = errors.length ? errors.join(" | ") : null;
+
+        if (details && CATASTRO_MAINTENANCE_PATTERN.test(details)) {
+            return {
+                state: "maintenance",
+                checkedAt,
+                latencyMs,
+                message: "Catastro en mantenimiento",
+                maintenanceUntil: extractMaintenanceUntil(details),
+                details,
+            };
+        }
+
+        return {
+            state: "active",
+            checkedAt,
+            latencyMs,
+            message: "Catastro operativo",
+            maintenanceUntil: null,
+            details,
+        };
+    }
+
+    if (CATASTRO_MAINTENANCE_PATTERN.test(normalizedBody)) {
+        return {
+            state: "maintenance",
+            checkedAt,
+            latencyMs,
+            message: "Catastro en mantenimiento",
+            maintenanceUntil: extractMaintenanceUntil(normalizedBody),
+            details: normalizedBody.slice(0, 220),
+        };
+    }
+
+    return {
+        state: "active",
+        checkedAt,
+        latencyMs,
+        message: "Catastro operativo",
+        maintenanceUntil: null,
+        details: null,
+    };
+}
+
+export async function getCatastroAvailabilitySnapshot(options?: {
+    timeoutMs?: number;
+}): Promise<CatastroAvailabilitySnapshot> {
+    const timeoutMs = options?.timeoutMs ?? CATASTRO_STATUS_TIMEOUT_MS;
+    const probeUrl = `${CATASTRO_API_URL}?RefCat=${encodeURIComponent(CATASTRO_STATUS_PROBE_RC)}`;
+    const startedAt = Date.now();
+
+    const controller = new AbortController();
+    const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        const response = await fetch(probeUrl, {
+            signal: controller.signal,
+            cache: "no-store",
+        });
+        const latencyMs = Math.max(Date.now() - startedAt, 0);
+        const bodyText = await response.text();
+
+        if (!response.ok) {
+            const parsedBody = parseCatastroProbeBody(bodyText, latencyMs);
+            if (parsedBody.state === "maintenance") {
+                return parsedBody;
+            }
+
+            return {
+                state: "offline",
+                checkedAt: Date.now(),
+                latencyMs,
+                message: `Catastro no disponible (HTTP ${response.status})`,
+                maintenanceUntil: null,
+                details: normalizeServiceMessage(bodyText).slice(0, 220) || null,
+            };
+        }
+
+        return parseCatastroProbeBody(bodyText, latencyMs);
+    } catch (error: any) {
+        const isAbort = error instanceof DOMException && error.name === "AbortError";
+        return {
+            state: "offline",
+            checkedAt: Date.now(),
+            latencyMs: null,
+            message: isAbort ? "Catastro sin respuesta (timeout)" : "Catastro no disponible (red)",
+            maintenanceUntil: null,
+            details: error?.message ? String(error.message) : null,
+        };
+    } finally {
+        globalThis.clearTimeout(timeoutId);
+    }
+}
 
 async function llamarAPICatastro(rc: string): Promise<any | null> {
     try {

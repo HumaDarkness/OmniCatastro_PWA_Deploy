@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Shield, Sparkles, Database, Layers, ArrowLeft, Loader2 } from 'lucide-react';
 import { loginWithEmail, logoutUser, restoreSessionFromAuth, validateUserLicense } from './lib/supabase';
+import { warmUpCloudApi } from './lib/apiClient';
 import type { LicenseTier } from './lib/supabase';
 import { LandingPage } from './LandingPage';
 import { DashboardLayout } from './components/DashboardLayout';
@@ -31,6 +32,7 @@ function App() {
           setSessionTier(result.tier || 'pwa_only');
           setSessionKey(result.licenseKey || '');
           setView('dashboard');
+          void warmUpCloudApi({ force: true });
         }
       } finally {
         if (!cancelled) setIsBootstrapping(false);
@@ -76,6 +78,7 @@ function App() {
         setSessionTier(result.tier || 'pwa_only');
         setSessionKey(result.licenseKey || '');
         setView('dashboard');
+        void warmUpCloudApi({ force: true });
       } else {
         setErrorMsg(result.message || 'Credenciales inválidas.');
       }
@@ -228,6 +231,7 @@ function App() {
               setSessionTier('suite_pro');
               setSessionKey('DEMO-MODE');
               setView('dashboard');
+              void warmUpCloudApi({ force: true });
             }}
             className="mt-4 w-full text-xs text-slate-600 hover:text-slate-400 transition-colors py-2 border border-dashed border-slate-800 rounded-lg"
           >

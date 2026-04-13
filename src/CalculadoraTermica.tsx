@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import JSZip from "jszip";
 import {
     Calculator,
@@ -40,7 +40,7 @@ import {
     type Scenario,
     type Caso,
 } from "./lib/thermalCalculator";
-import { calcularDbHeRemoto } from "./lib/apiClient";
+import { calcularDbHeRemoto, warmUpCloudApi } from "./lib/apiClient";
 import { generarPDFAnexoE1 } from "./lib/anexoE1Generator";
 import {
     buildIntelliaCertificateFilename,
@@ -826,6 +826,8 @@ export function CalculadoraTermica() {
     const [resultado, setResultado] = useState<ResultadoTermico | null>(null);
     const [copied, setCopied] = useState(false);
     const [intelliaTemplateCopied, setIntelliaTemplateCopied] = useState(false);
+    const [cloudReportText, setCloudReportText] = useState<string | null>(null);
+    const [cloudReportCopied, setCloudReportCopied] = useState(false);
     const [materialesDB, setMaterialesDB] = useState<MaterialDB[]>([]);
     const [filtroMetodo, setFiltroMetodo] = useState<Record<number, string>>({});
     const [materialSearchByLayer, setMaterialSearchByLayer] = useState<Record<number, string>>({});
@@ -892,6 +894,19 @@ export function CalculadoraTermica() {
     useEffect(() => {
         latestResultadoRef.current = resultado;
     }, [resultado]);
+
+    useEffect(() => {
+        if (!isCloudCalculation) {
+            return;
+        }
+
+        void warmUpCloudApi();
+        const keepAliveId = window.setInterval(() => {
+            void warmUpCloudApi();
+        }, 8 * 60 * 1000);
+
+        return () => window.clearInterval(keepAliveId);
+    }, [isCloudCalculation]);
 
     const applySyncReportToUi = (report: ExpedienteSyncReport) => {
         setMvpSyncPendingCount(report.pending);
@@ -1631,6 +1646,8 @@ export function CalculadoraTermica() {
 
     const calcular = async () => {
         setIsCalculating(true);
+        setCloudReportText(null);
+        setCloudReportCopied(false);
         try {
             const gValue = VALORES_G[zonaKey] ?? 61;
             const applyOverrides = (base: ResultadoTermico): ResultadoTermico => {
@@ -1684,15 +1701,23 @@ export function CalculadoraTermica() {
                     });
 
                     const { resultado: resTermico, informe } = res;
-                    setXmlImportMsg(`✅ Cálculo Cloud Completado. Informe: ${informe ? "Adjunto" : "Vacio"}`);
+                    const normalizedInforme = typeof informe === "string" && informe.trim() ? informe.trim() : null;
+                    setCloudReportText(normalizedInforme);
+                    setXmlImportMsg(normalizedInforme
+                        ? "✅ Cálculo Cloud completado. Informe cloud listo para copiar."
+                        : "✅ Cálculo Cloud completado.");
                     const nextResultado = applyOverrides(resTermico);
                     latestResultadoRef.current = nextResultado;
                     setResultado(nextResultado);
                     return;
                 } catch (error) {
-                    const message = error instanceof Error ? error.message : "sin detalle";
+                    const rawMessage = error instanceof Error ? error.message : "sin detalle";
+                    const message = /(network error|failed to fetch|timeout|timed out|load failed)/i.test(rawMessage)
+                        ? "latencia/red o API en arranque"
+                        : rawMessage;
                     console.error("Cloud calculation failed, fallback to local:", error);
                     setIsCloudCalculation(false);
+                    setCloudReportText(null);
                     setXmlImportMsg(`⚠️ Cálculo Cloud no disponible (${message}). Se aplicó cálculo local.`);
                 }
             }
@@ -1776,6 +1801,30 @@ export function CalculadoraTermica() {
             setTimeout(() => setCopied(false), 2500);
         } catch {
             setDraftError("No se pudo copiar el informe. Revisa permisos del navegador.");
+        }
+    };
+
+    const copiarInformeCloud = async () => {
+        if (!cloudReportText) {
+            setDraftError("No hay informe cloud disponible todavía. Ejecuta un cálculo en modo On-Cloud.");
+            return;
+        }
+
+        const rcNormalized = normalizeRc(expedienteRc) || "SIN_RC";
+        const encabezado = [
+            "INFORME CLOUD DB-HE",
+            `RC: ${rcNormalized}`,
+            `Fecha: ${new Date().toLocaleString("es-ES")}`,
+            "",
+        ].join("\n");
+
+        try {
+            await navigator.clipboard.writeText(`${encabezado}${cloudReportText}`);
+            setDraftError(null);
+            setCloudReportCopied(true);
+            setTimeout(() => setCloudReportCopied(false), 2500);
+        } catch {
+            setDraftError("No se pudo copiar el informe cloud. Revisa permisos del navegador.");
         }
     };
 
@@ -4633,12 +4682,14 @@ export function CalculadoraTermica() {
                         </div>
 
                         {dniPreview ? (
-                            <img
+                            <HoverZoomImage
                                 src={dniPreview.dataUrl}
                                 alt="DNI cliente"
                                 onClick={() => openCapturaPreview("dni_cliente", "DNI cliente")}
-                                className="w-full h-44 md:h-56 object-contain rounded border border-indigo-700/30 bg-slate-950/40 cursor-zoom-in"
-                                title="Click para ampliar"
+                                imageClassName="w-full h-44 md:h-56 object-contain rounded border border-indigo-700/30 bg-slate-950/40"
+                                panelTitle="Zoom DNI"
+                                zoomPanelClassName="w-[420px] h-[280px]"
+                                zoom={3}
                             />
                         ) : (
                             <div className="w-full h-24 rounded border border-dashed border-indigo-700/30 flex items-center justify-center text-[11px] text-slate-500">
@@ -4984,20 +5035,32 @@ export function CalculadoraTermica() {
                             <CardContent>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {capturas.ce3x_antes?.dataUrl && (
-                                        <div className="space-y-2 text-center cursor-zoom-in group border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors" onClick={() => openCapturaPreview("ce3x_antes", "CE3X Antes")}>
-                                            <div className="w-full h-40 max-h-48 rounded-md overflow-hidden relative border border-slate-700 bg-black">
-                                                <img src={capturas.ce3x_antes.dataUrl} className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-opacity" />
-                                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-sm font-bold">Ampliar</div>
-                                            </div>
+                                        <div className="space-y-2 text-center border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors">
+                                            <HoverZoomImage
+                                                src={capturas.ce3x_antes.dataUrl}
+                                                alt="CE3X Antes"
+                                                onClick={() => openCapturaPreview("ce3x_antes", "CE3X Antes")}
+                                                frameClassName="w-full h-40 max-h-48 rounded-md overflow-hidden border border-slate-700 bg-black"
+                                                imageClassName="w-full h-full object-contain opacity-90 hover:opacity-100 transition-opacity"
+                                                panelTitle="Zoom CE3X Antes"
+                                                zoomPanelClassName="w-[420px] h-[260px]"
+                                                zoom={2.8}
+                                            />
                                             <p className="text-xs text-slate-400 font-bold uppercase">Estado Actual (CE3X Antes)</p>
                                         </div>
                                     )}
                                     {capturas.ce3x_despues?.dataUrl && (
-                                        <div className="space-y-2 text-center cursor-zoom-in group border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors" onClick={() => openCapturaPreview("ce3x_despues", "CE3X Después")}>
-                                            <div className="w-full h-40 max-h-48 rounded-md overflow-hidden relative border border-slate-700 bg-black">
-                                                <img src={capturas.ce3x_despues.dataUrl} className="w-full h-full object-contain opacity-90 group-hover:opacity-100 transition-opacity" />
-                                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity text-white text-sm font-bold">Ampliar</div>
-                                            </div>
+                                        <div className="space-y-2 text-center border border-slate-700/50 p-2 rounded-lg bg-slate-900/50 hover:border-slate-500 transition-colors">
+                                            <HoverZoomImage
+                                                src={capturas.ce3x_despues.dataUrl}
+                                                alt="CE3X Después"
+                                                onClick={() => openCapturaPreview("ce3x_despues", "CE3X Después")}
+                                                frameClassName="w-full h-40 max-h-48 rounded-md overflow-hidden border border-slate-700 bg-black"
+                                                imageClassName="w-full h-full object-contain opacity-90 hover:opacity-100 transition-opacity"
+                                                panelTitle="Zoom CE3X Después"
+                                                zoomPanelClassName="w-[420px] h-[260px]"
+                                                zoom={2.8}
+                                            />
                                             <p className="text-xs text-slate-400 font-bold uppercase">Estado Mejorado (CE3X Después)</p>
                                         </div>
                                     )}
@@ -5448,13 +5511,22 @@ export function CalculadoraTermica() {
                             </Card>
 
                             {/* Botones de acción */}
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                            <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
                                 <button
                                     onClick={() => void copiarInforme()}
                                     className="h-11 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all flex items-center justify-center gap-2 ring-1 ring-slate-700"
                                 >
                                     {copied ? <Check className="h-5 w-5 text-emerald-400" /> : <Copy className="h-5 w-5" />}
                                     {copied ? "¡Copiado!" : "Copiar informe"}
+                                </button>
+                                <button
+                                    onClick={() => void copiarInformeCloud()}
+                                    disabled={!cloudReportText}
+                                    className="h-11 rounded-md bg-cyan-700/20 hover:bg-cyan-700/40 text-cyan-300 hover:text-cyan-200 transition-all flex items-center justify-center gap-2 ring-1 ring-cyan-500/40 disabled:opacity-40"
+                                    title={cloudReportText ? "Copia informe textual generado por backend cloud" : "Disponible tras calcular en modo On-Cloud"}
+                                >
+                                    {cloudReportCopied ? <Check className="h-5 w-5 text-emerald-400" /> : <UploadCloud className="h-5 w-5" />}
+                                    {cloudReportCopied ? "Cloud copiado" : "Informe Cloud"}
                                 </button>
                                 <button
                                     onClick={copiarPlantillaIntellia}
@@ -5578,6 +5650,102 @@ function ResultRow({ label, value, color }: { label: string; value: string; colo
         <div className="flex items-center justify-between">
             <span className="text-slate-500">{label}</span>
             <span className={`font-mono ${colorClasses[color ?? ""] ?? "text-slate-300"}`}>{value}</span>
+        </div>
+    );
+}
+
+interface HoverZoomImageProps {
+    src: string;
+    alt: string;
+    onClick?: () => void;
+    imageClassName: string;
+    frameClassName?: string;
+    zoomPanelClassName?: string;
+    zoom?: number;
+    panelTitle?: string;
+}
+
+function HoverZoomImage({
+    src,
+    alt,
+    onClick,
+    imageClassName,
+    frameClassName = "",
+    zoomPanelClassName = "w-[360px] h-[240px]",
+    zoom = 2.6,
+    panelTitle = "Zoom",
+}: HoverZoomImageProps) {
+    const [supportsHover, setSupportsHover] = useState(false);
+    const [isHovering, setIsHovering] = useState(false);
+    const [focusPoint, setFocusPoint] = useState({ x: 50, y: 50 });
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+
+        const media = window.matchMedia("(hover: hover) and (pointer: fine)");
+        const update = () => setSupportsHover(media.matches);
+        update();
+
+        if (typeof media.addEventListener === "function") {
+            media.addEventListener("change", update);
+            return () => media.removeEventListener("change", update);
+        }
+
+        media.addListener(update);
+        return () => media.removeListener(update);
+    }, []);
+
+    const handleMove = (event: ReactMouseEvent<HTMLDivElement>) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+
+        const x = ((event.clientX - rect.left) / rect.width) * 100;
+        const y = ((event.clientY - rect.top) / rect.height) * 100;
+
+        setFocusPoint({
+            x: Math.max(0, Math.min(100, x)),
+            y: Math.max(0, Math.min(100, y)),
+        });
+    };
+
+    const zoomStyle = {
+        backgroundImage: `url(${src})`,
+        backgroundPosition: `${focusPoint.x}% ${focusPoint.y}%`,
+        backgroundSize: `${zoom * 100}%`,
+        backgroundRepeat: "no-repeat",
+    };
+
+    return (
+        <div
+            className="relative"
+            onMouseEnter={() => supportsHover && setIsHovering(true)}
+            onMouseLeave={() => setIsHovering(false)}
+            onMouseMove={handleMove}
+        >
+            <div className={`relative ${frameClassName}`}>
+                <img
+                    src={src}
+                    alt={alt}
+                    onClick={onClick}
+                    className={`${imageClassName} ${onClick ? "cursor-zoom-in" : ""}`}
+                    title={supportsHover ? "Hover para acercar · click para ampliar" : "Click para ampliar"}
+                />
+
+                {supportsHover && (
+                    <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-slate-950/70 border border-slate-700 px-2 py-0.5 text-[10px] text-slate-300">
+                        Hover para zoom
+                    </div>
+                )}
+            </div>
+
+            {supportsHover && isHovering && (
+                <div className={`pointer-events-none hidden xl:flex absolute left-[calc(100%+12px)] top-0 z-30 rounded-lg border border-cyan-700/50 bg-slate-950 shadow-2xl ${zoomPanelClassName} flex-col overflow-hidden`}>
+                    <div className="px-2 py-1 text-[10px] uppercase tracking-wide font-bold text-cyan-300 border-b border-slate-800">
+                        {panelTitle}
+                    </div>
+                    <div className="flex-1" style={zoomStyle} />
+                </div>
+            )}
         </div>
     );
 }
