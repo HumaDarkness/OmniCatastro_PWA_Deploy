@@ -74,10 +74,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
     const imageOptions = {
         centered: false,
         getImage: (tagValue: any, _tagName: string) => {
-            if (!tagValue) return getTransparentPixel();
-            if (tagValue instanceof ArrayBuffer) return tagValue;
-            if (typeof tagValue === 'string') return dataURLToArrayBuffer(tagValue);
-            return getTransparentPixel();
+            return tagValue;
         },
         getSize: (_img: any, _tagValue: string, tagName: string) => {
             return IMG_SIZES[tagName] || [400, 280]; 
@@ -169,13 +166,13 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
         ciudadFirma: payload.ciudadFirma || "Madrid",
         fechaFirma: new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }),
 
-        // Capturas
-        imgCerramientosEnvolvente: c.ce3x_antes?.dataUrl || "",
-        imgLibreriaAntes:          c.materiales_antes?.dataUrl || "",
-        imgLibreriaDespues:        c.materiales_despues?.dataUrl || "",
-        imgFichaTecnica:           c.ficha_tecnica?.dataUrl || "",
-        imgCEEAntes:               c.cee_inicial?.dataUrl || "",
-        imgCEEDespues:             c.ce3x_despues?.dataUrl || "" 
+        // Capturas convertidas directamente a ArrayBuffer
+        imgCerramientosEnvolvente: dataURLToArrayBuffer(c.ce3x_antes?.dataUrl),
+        imgLibreriaAntes:          dataURLToArrayBuffer(c.materiales_antes?.dataUrl),
+        imgLibreriaDespues:        dataURLToArrayBuffer(c.materiales_despues?.dataUrl),
+        imgFichaTecnica:           dataURLToArrayBuffer(c.ficha_tecnica?.dataUrl),
+        imgCEEAntes:               dataURLToArrayBuffer(c.cee_inicial?.dataUrl),
+        imgCEEDespues:             dataURLToArrayBuffer(c.ce3x_despues?.dataUrl)
     };
 
     try {
