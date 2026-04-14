@@ -42,6 +42,7 @@ import {
 } from "./lib/thermalCalculator";
 import { calcularDbHeRemoto, warmUpCloudApi } from "./lib/apiClient";
 import { generarPDFAnexoE1 } from "./lib/anexoE1Generator";
+import { generarCertificadoE1_3_5_DOCX } from "./lib/docxE1_3_5_Generator";
 import {
     buildIntelliaCertificateFilename,
     buildIntelliaCertificateText,
@@ -1963,6 +1964,44 @@ export function CalculadoraTermica() {
             );
         } catch {
             setDraftError("No se pudo generar el PDF INTELLIA. Revisa la consola del navegador.");
+        }
+    };
+
+    const generarDocumentoWord = async () => {
+        const resultadoActual = getResultadoActual();
+        if (!resultadoActual) {
+            setDraftError("Primero calcula el expediente para generar el Word.");
+            return;
+        }
+
+        try {
+            setDraftMsg("Generando documento Word... (esto puede tardar unos segundos si hay imágenes grandes)");
+            
+            await generarCertificadoE1_3_5_DOCX({
+                version: CERT_DRAFT_VERSION,
+                rc: expedienteRc,
+                status: certStatus,
+                updatedAt: new Date().toISOString(),
+                clienteNombre: [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2].filter(Boolean).join(" "),
+                direccionInmueble,
+                municipioInmueble,
+                cpInmueble,
+                provinciaInmueble,
+                supEnvolvente,
+                supActuacion,
+                zonaKey,
+                alturaMsnm: alturaMsnm ? Number(alturaMsnm) : undefined,
+                areaNHE,
+                capas,
+                resultado: resultadoActual,
+                capturas
+            });
+
+            setDraftError(null);
+            setDraftMsg("Documento Word generado correctamente.");
+        } catch (error: any) {
+            console.error("Error al generar el Word:", error);
+            setDraftError(error?.message ?? "Error al generar el Word.");
         }
     };
 
@@ -5511,7 +5550,7 @@ export function CalculadoraTermica() {
                             </Card>
 
                             {/* Botones de acción */}
-                            <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                            <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-2">
                                 <button
                                     onClick={() => void copiarInforme()}
                                     className="h-11 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all flex items-center justify-center gap-2 ring-1 ring-slate-700"
@@ -5547,6 +5586,12 @@ export function CalculadoraTermica() {
                                     className="h-11 rounded-md bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 hover:text-blue-300 transition-all flex items-center justify-center gap-2 ring-1 ring-blue-500/50"
                                 >
                                     Generar Anexo E.1
+                                </button>
+                                <button
+                                    onClick={() => void generarDocumentoWord()}
+                                    className="h-11 rounded-md bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 hover:text-indigo-300 transition-all flex items-center justify-center gap-2 ring-1 ring-indigo-500/50"
+                                >
+                                    Generar Word DOCX
                                 </button>
                             </div>
                         </>
