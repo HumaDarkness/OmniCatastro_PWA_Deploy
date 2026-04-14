@@ -211,13 +211,11 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
 
     // --- Find the applied insulation material ---
     let espesorMM = 0;
-    let materialNombre = "N/A";
     const nuevaCapa = payload.capas?.find((capa) => capa.es_nueva);
     if (nuevaCapa) {
         // CapaMaterial.espesor is in meters; convert to mm
         const espesorM = Number(nuevaCapa.espesor) || 0;
         espesorMM = espesorM * 1000;
-        materialNombre = nuevaCapa.nombre || "N/A";
     }
 
     // --- Build full address string (includes comunidad autónoma) ---
@@ -258,7 +256,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
 
         areaNHE: formatES(payload.areaNHE, 2),
         espesorMM: String(Math.round(espesorMM)),
-        materialNombre,
+        materialNombre: "KNAUF SUPAFIL LOFT",
 
         alturaMsnm: String(Number(payload.alturaMsnm) || 0),
         zonaClimatica: payload.zonaKey || "-",
