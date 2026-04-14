@@ -19,6 +19,7 @@ export interface DocxE135Payload {
     municipioInmueble?: string;
     cpInmueble?: string;
     provinciaInmueble?: string;
+    comunidadInmueble?: string;
     supEnvolvente?: number | string;
     supActuacion?: number | string;
     zonaKey?: string;
@@ -30,6 +31,67 @@ export interface DocxE135Payload {
     capturas?: CapturasState;
     // Campos ignorados pero presentes del payload general
     [key: string]: unknown;
+}
+
+/** Mapa provincia → comunidad autónoma */
+const PROVINCIA_CCAA: Record<string, string> = {
+    "álava": "País Vasco", "alava": "País Vasco", "araba": "País Vasco",
+    "albacete": "Castilla-La Mancha",
+    "alicante": "Comunidad Valenciana", "alacant": "Comunidad Valenciana",
+    "almería": "Andalucía", "almeria": "Andalucía",
+    "asturias": "Asturias",
+    "ávila": "Castilla y León", "avila": "Castilla y León",
+    "badajoz": "Extremadura",
+    "barcelona": "Cataluña",
+    "burgos": "Castilla y León",
+    "cáceres": "Extremadura", "caceres": "Extremadura",
+    "cádiz": "Andalucía", "cadiz": "Andalucía",
+    "cantabria": "Cantabria",
+    "castellón": "Comunidad Valenciana", "castellon": "Comunidad Valenciana",
+    "ciudad real": "Castilla-La Mancha",
+    "córdoba": "Andalucía", "cordoba": "Andalucía",
+    "cuenca": "Castilla-La Mancha",
+    "gerona": "Cataluña", "girona": "Cataluña",
+    "granada": "Andalucía",
+    "guadalajara": "Castilla-La Mancha",
+    "guipúzcoa": "País Vasco", "guipuzcoa": "País Vasco", "gipuzkoa": "País Vasco",
+    "huelva": "Andalucía",
+    "huesca": "Aragón",
+    "islas baleares": "Islas Baleares", "illes balears": "Islas Baleares", "baleares": "Islas Baleares",
+    "jaén": "Andalucía", "jaen": "Andalucía",
+    "la coruña": "Galicia", "a coruña": "Galicia", "coruña": "Galicia",
+    "la rioja": "La Rioja", "rioja": "La Rioja",
+    "las palmas": "Canarias",
+    "león": "Castilla y León", "leon": "Castilla y León",
+    "lérida": "Cataluña", "lleida": "Cataluña", "lerida": "Cataluña",
+    "lugo": "Galicia",
+    "madrid": "Comunidad de Madrid",
+    "málaga": "Andalucía", "malaga": "Andalucía",
+    "murcia": "Región de Murcia",
+    "navarra": "Navarra",
+    "orense": "Galicia", "ourense": "Galicia",
+    "palencia": "Castilla y León",
+    "pontevedra": "Galicia",
+    "salamanca": "Castilla y León",
+    "santa cruz de tenerife": "Canarias", "tenerife": "Canarias",
+    "segovia": "Castilla y León",
+    "sevilla": "Andalucía",
+    "soria": "Castilla y León",
+    "tarragona": "Cataluña",
+    "teruel": "Aragón",
+    "toledo": "Castilla-La Mancha",
+    "valencia": "Comunidad Valenciana", "valència": "Comunidad Valenciana",
+    "valladolid": "Castilla y León",
+    "vizcaya": "País Vasco", "bizkaia": "País Vasco",
+    "zamora": "Castilla y León",
+    "zaragoza": "Aragón",
+    "ceuta": "Ceuta",
+    "melilla": "Melilla",
+};
+
+function getComunidad(provincia: string): string {
+    if (!provincia) return "";
+    return PROVINCIA_CCAA[provincia.toLowerCase().trim()] || "";
 }
 
 // ---------------------------------------------------------------------------
@@ -158,14 +220,16 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
         materialNombre = nuevaCapa.nombre || "N/A";
     }
 
-    // --- Build full address string ---
+    // --- Build full address string (includes comunidad autónoma) ---
+    const comunidad = payload.comunidadInmueble || getComunidad(payload.provinciaInmueble || "");
     const dirArr = [
         payload.direccionInmueble,
         payload.cpInmueble,
         payload.municipioInmueble,
         payload.provinciaInmueble,
+        comunidad,
     ].filter(Boolean);
-    const direccionFull = dirArr.length > 0 ? dirArr.join(", ") : "Dirección no especificada";
+    const direccionFull = dirArr.length > 0 ? dirArr.join(", ").toUpperCase() : "DIRECCIÓN NO ESPECIFICADA";
 
     // --- Numeric helpers ---
     const factorGNum = VALORES_G[payload.zonaKey || ""] || 0;
@@ -186,6 +250,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
         // ─── COMMON / NEW VARIABLES ────────────────────────────────────
         clienteNombre: (payload.clienteNombre || "").toUpperCase(),
         direccionInmueble: direccionFull,
+        direccionInmueblePag5: direccionFull,
         supEnvolvente: formatES(supEnvolvente, 2),
         tipoElemento: payload.tipoElemento || "partición",
         supActuacion: formatES(supActuacion, 2),
