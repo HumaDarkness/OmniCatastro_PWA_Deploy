@@ -157,12 +157,12 @@ function formatES(value: number | undefined | null, decimals: number): string {
 
 /** Tamaños en pt (ancho, alto) por slot de imagen en la plantilla Word */
 const IMG_SIZES: Record<string, [number, number]> = {
-    capturaCEEInicial: [470, 260],         // pág 1 – CEE Inicial (cerramientos/huecos)
-    capturaLibreriaAntes: [316, 249],      // pág 2 – materiales antes
-    capturaLibreriaDespues: [405, 319],    // pág 4 – materiales después
-    imgFichaTecnica: [480, 679],           // pág 6 – ficha técnica
-    capturaCE3X_1: [470, 260],             // pág 7 – CE3X antes
-    capturaCE3X_2: [470, 260],             // pág 7 – CE3X después
+    capturaCEEInicial: [540, 351],         // pág 1 – CEE Inicial (+35%)
+    capturaLibreriaAntes: [427, 336],      // pág 2 – materiales antes (+35%)
+    capturaLibreriaDespues: [547, 431],    // pág 4 – materiales después (+35%)
+    imgFichaTecnica: [540, 760],           // pág 6 – ficha técnica (más grande)
+    capturaCE3X_1: [540, 351],             // pág 7 – CE3X antes (+35%)
+    capturaCE3X_2: [540, 351],             // pág 7 – CE3X después (+35%)
 };
 
 export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
