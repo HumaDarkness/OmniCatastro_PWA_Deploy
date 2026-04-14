@@ -1,79 +1,94 @@
 import { SignatureProcessError } from '../../contracts/hoja-encargo';
+import type { SignatureWorkerInput, SignatureWorkerOutput } from './signatureCleaner.worker';
+
+// Instancia única del worker — se reutiliza entre llamadas
+let _worker: Worker | null = null;
+
+function getWorker(): Worker {
+  if (!_worker) {
+    // Vite: ?worker&url hace que el import sea la URL del bundle del worker
+    _worker = new Worker(
+      new URL('./signatureCleaner.worker.ts', import.meta.url),
+      { type: 'module' }
+    );
+  }
+  return _worker;
+}
+
+/** Termina el worker si ya no se necesita (ej: al desmontar AjustesView) */
+export function disposeSignatureWorker(): void {
+  _worker?.terminate();
+  _worker = null;
+}
 
 /**
- * Recibe un File o Blob nativo, limpia el fondo aplicándole el umbral de transparecia,
- * y le hace un bounding box (Crop matemático) a los bordes visuales de la firma.
- * Prioriza OffscreenCanvas si el navegador lo soporta para no tocar el DOM.
+ * Pipeline completo: File/Blob → Worker Sauvola → auto-crop → PNG Blob
+ * No bloquea el hilo principal. Zero-copy via Transferable.
  */
-export async function processSignatureWithAutoCrop(file: File | Blob): Promise<Blob> {
-    try {
-        const bmp = await createImageBitmap(file);
+export async function processSignatureWithAutoCrop(
+  file: File | Blob,
+  options?: { windowSize?: number; k?: number }
+): Promise<Blob> {
+  try {
+    const bmp = await createImageBitmap(file);
+    const offscreen = new OffscreenCanvas(bmp.width, bmp.height);
+    const ctx = offscreen.getContext('2d')!;
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close();
 
-        let canvas: HTMLCanvasElement | OffscreenCanvas;
-        let ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+    const imageData = ctx.getImageData(0, 0, bmp.width, bmp.height);
 
-        if (typeof OffscreenCanvas !== 'undefined') {
-            canvas = new OffscreenCanvas(bmp.width, bmp.height);
-            ctx = canvas.getContext('2d') as OffscreenCanvasRenderingContext2D;
-        } else {
-            canvas = document.createElement('canvas');
-            canvas.width = bmp.width;
-            canvas.height = bmp.height;
-            ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
-        }
+    const payload: SignatureWorkerInput = {
+      imageData,
+      width: bmp.width,
+      height: bmp.height,
+      windowSize: options?.windowSize ?? 31,
+      k: options?.k ?? 0.25,
+    };
 
-        ctx.drawImage(bmp, 0, 0);
+    // Despachar al Worker — transferir buffer (zero-copy)
+    const result = await _dispatchToWorker(payload, [imageData.data.buffer]);
 
-        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imgData.data;
-
-        let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0;
-
-        // Limpieza de pixeles + Calculo de BBOX en pasada unificada
-        for (let y = 0; y < canvas.height; y++) {
-            for (let x = 0; x < canvas.width; x++) {
-                const idx = (y * canvas.width + x) * 4;
-                const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-                // Umbral estricto: > 170 -> Alpha 0
-                if (r > 170 && g > 170 && b > 170) {
-                    data[idx + 3] = 0; 
-                } else {
-                    // Update bbox si el píxel NO fue descartado
-                    if (x < minX) minX = x;
-                    if (y < minY) minY = y;
-                    if (x > maxX) maxX = x;
-                    if (y > maxY) maxY = y;
-                }
-            }
-        }
-
-        // Si la imagen era completamente en blanco/transparente
-        if (maxX < minX || maxY < minY) {
-            throw new SignatureProcessError("La firma detectada está vacía o es íntegramENTE del color del fondo.");
-        }
-
-        const cropW = maxX - minX + 1;
-        const cropH = maxY - minY + 1;
-        
-        const croppedImgData = ctx.getImageData(minX, minY, cropW, cropH);
-
-        // Resize Canvas down to Bounding Box
-        canvas.width = cropW;
-        canvas.height = cropH;
-        ctx.putImageData(croppedImgData, 0, 0);
-
-        // Retornar en blob binario puro en alta calidad
-        if (typeof OffscreenCanvas !== 'undefined') {
-            return await (canvas as OffscreenCanvas).convertToBlob({ type: 'image/png' });
-        } else {
-            return new Promise((resolve, reject) => {
-                (canvas as HTMLCanvasElement).toBlob((b) => {
-                    if (b) resolve(b);
-                    else reject(new SignatureProcessError("Fallo final a Blob()"));
-                }, 'image/png');
-            });
-        }
-    } catch (err) {
-        throw new SignatureProcessError(`Error en el pipeline de la firma: ${err instanceof Error ? err.message : 'Unknown'}`);
+    if ('error' in result) {
+      throw new SignatureProcessError(result.error as string);
     }
+
+    const { imageData: cleanedData, bbox } = result as SignatureWorkerOutput;
+
+    // Validar que la firma no esté vacía
+    if (bbox.maxX < bbox.minX || bbox.maxY < bbox.minY) {
+      throw new SignatureProcessError('La firma detectada está vacía o es completamente del color del fondo.');
+    }
+
+    // Auto-crop al bounding box
+    const cropW = bbox.maxX - bbox.minX + 1;
+    const cropH = bbox.maxY - bbox.minY + 1;
+
+    const cropCanvas = new OffscreenCanvas(cropW, cropH);
+    const cropCtx = cropCanvas.getContext('2d')!;
+    cropCtx.putImageData(cleanedData, -bbox.minX, -bbox.minY);
+
+    return cropCanvas.convertToBlob({ type: 'image/png' });
+  } catch (err) {
+    if (err instanceof SignatureProcessError) throw err;
+    throw new SignatureProcessError(
+      `Error en el pipeline de la firma: ${err instanceof Error ? err.message : 'Unknown'}`
+    );
+  }
+}
+
+function _dispatchToWorker(
+  payload: SignatureWorkerInput,
+  transfer: Transferable[]
+): Promise<SignatureWorkerOutput | { error: string }> {
+  return new Promise((resolve, reject) => {
+    const worker = getWorker();
+    const handler = (e: MessageEvent) => {
+      worker.removeEventListener('message', handler);
+      resolve(e.data);
+    };
+    worker.addEventListener('message', handler);
+    worker.addEventListener('error', (e) => reject(new Error(e.message)), { once: true });
+    worker.postMessage(payload, transfer);
+  });
 }

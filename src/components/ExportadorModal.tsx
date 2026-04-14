@@ -7,7 +7,7 @@ import jsPDF from "jspdf";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
 import type { Project } from "../ProyectosView";
-import type { Client } from "../ClientesView";
+import { db, type ClienteLocal } from "../infra/db/OmniCatastroDB";
 import type { Photo } from "../ProyectoDetalle";
 
 type NamingTokens = {
@@ -80,7 +80,7 @@ interface ExportadorModalProps {
 
 export function ExportadorModal({ project, photos, onClose }: ExportadorModalProps) {
     const [loading, setLoading] = useState(true);
-    const [client, setClient] = useState<Client | null>(null);
+    const [client, setClient] = useState<ClienteLocal | null>(null);
     const [exporting, setExporting] = useState(false);
     const [progress, setProgress] = useState(0);
     const [statusText, setStatusText] = useState("");
@@ -119,8 +119,15 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
     });
 
     async function loadClient() {
-        const { data } = await supabase.from('clients').select('*').eq('id', project.client_id).single();
-        if (data) setClient(data as Client);
+        if (!project.client_id) {
+            setLoading(false);
+            return;
+        }
+        const numericId = Number(project.client_id);
+        if (!isNaN(numericId)) {
+            const clientLocal = await db.clientes.get(numericId);
+            if (clientLocal) setClient(clientLocal);
+        }
         setLoading(false);
     }
 
@@ -155,7 +162,7 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
 
     function getNamingTokens(docLabel: string, idx?: number): NamingTokens {
         const clientName = client
-            ? `${client.last_name_1} ${client.first_name}`.trim().toUpperCase()
+            ? `${client.nombre} ${client.apellidos}`.trim().toUpperCase()
             : "SIN_CLIENTE";
         const homeName = homeAlias.trim() || project.address?.trim() || "SIN_VIVIENDA";
         const rcValue = project.rc?.trim().toUpperCase() || "SIN_RC";
@@ -349,43 +356,37 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
         setStatusText("Iniciando exportación...");
         setProgress(10);
         const zip = new JSZip();
-        const clientName = client ? `${client.last_name_1} ${client.first_name}`.trim().toUpperCase() : "SIN_CLIENTE";
+        const clientName = client ? `${client.nombre} ${client.apellidos}`.trim().toUpperCase() : "SIN_CLIENTE";
         const includesIdxToken = fileTemplate.includes("{IDX}");
         const baseFolderName = buildZipBaseName();
         const baseFolder = zip.folder(baseFolderName);
 
         try {
             // 1. Generate DNI PDF
-            if (includePdfDni && client && (client.dni_front_path || client.dni_back_path)) {
+            if (includePdfDni && client && (client.dniBlobFront || client.dniBlobBack)) {
                 setStatusText("Generando PDF unificado del DNI...");
                 setProgress(30);
                 const doc = new jsPDF('p', 'mm', 'a4');
                 let yPos = 20;
 
                 doc.setFontSize(14);
-                doc.text(`Documento de Identidad: ${clientName} (${client.dni || 'S/N'})`, 20, yPos);
+                doc.text(`Documento de Identidad: ${clientName} (${client.nif || 'S/N'})`, 20, yPos);
                 yPos += 15;
 
-                if (client.dni_front_path) {
-                    const frontBlob = await fetchImageBlob(client.dni_front_path);
-                    if (frontBlob) {
-                        const b64 = await blobToDataUrl(frontBlob);
-                        // A4 is 210x297. Put image centered, max width 150mm
-                        doc.text("Anverso:", 20, yPos);
-                        yPos += 5;
-                        doc.addImage(b64, 'JPEG', 30, yPos, 150, 95); // Approximate ID card aspect ratio
-                        yPos += 105;
-                    }
+                if (client.dniBlobFront) {
+                    const b64 = await blobToDataUrl(client.dniBlobFront);
+                    // A4 is 210x297. Put image centered, max width 150mm
+                    doc.text("Anverso:", 20, yPos);
+                    yPos += 5;
+                    doc.addImage(b64, 'JPEG', 30, yPos, 150, 95); // Approximate ID card aspect ratio
+                    yPos += 105;
                 }
 
-                if (client.dni_back_path) {
-                    const backBlob = await fetchImageBlob(client.dni_back_path);
-                    if (backBlob) {
-                        const b64 = await blobToDataUrl(backBlob);
-                        doc.text("Reverso:", 20, yPos);
-                        yPos += 5;
-                        doc.addImage(b64, 'JPEG', 30, yPos, 150, 95);
-                    }
+                if (client.dniBlobBack) {
+                    const b64 = await blobToDataUrl(client.dniBlobBack);
+                    doc.text("Reverso:", 20, yPos);
+                    yPos += 5;
+                    doc.addImage(b64, 'JPEG', 30, yPos, 150, 95);
                 }
 
                 const pdfBlob = doc.output('blob');
@@ -553,8 +554,8 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
                             <div className="bg-[#0a0a1a] p-4 rounded-xl border border-slate-800">
                                 <p className="text-sm text-slate-400">Titular del Expediente:</p>
                                 <p className="text-lg font-semibold text-white">
-                                    {client ? `${client.first_name} ${client.last_name_1}` : "Sin cliente asociado"}
-                                    {client?.dni && <span className="ml-2 text-sm text-indigo-400 font-mono">({client.dni})</span>}
+                                    {client ? `${client.nombre} ${client.apellidos}` : "Sin cliente asociado"}
+                                    {client?.nif && <span className="ml-2 text-sm text-indigo-400 font-mono">({client.nif})</span>}
                                 </p>
                             </div>
 
@@ -702,7 +703,7 @@ export function ExportadorModal({ project, photos, onClose }: ExportadorModalPro
                                     <div className="flex items-start gap-3 bg-black/20 p-3 rounded-lg border border-slate-800">
                                         <input
                                             type="checkbox" checked={includePdfDni} onChange={e => setIncludePdfDni(e.target.checked)}
-                                            className="mt-1 accent-indigo-500" disabled={!client?.dni_front_path}
+                                            className="mt-1 accent-indigo-500" disabled={!client?.dniBlobFront}
                                         />
                                         <div className="w-full">
                                             <p className="text-sm font-medium text-slate-200 flex items-center gap-1">

@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { FolderOpen, Plus, MapPin, Calendar, CircleAlert, CircleCheck } from "lucide-react";
 import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 import { ProyectoDetalle } from "./ProyectoDetalle";
-import type { Client } from "./ClientesView";
+import { useLiveQuery } from "dexie-react-hooks";
+import { db } from "./infra/db/OmniCatastroDB";
 
 export interface Project {
     id: string;
@@ -33,23 +34,13 @@ export function ProyectosView() {
     const [uxInfo, setUxInfo] = useState<string | null>(null);
 
     // Data list
-    const [clientsList, setClientsList] = useState<Pick<Client, 'id' | 'first_name' | 'last_name_1' | 'dni'>[]>([]);
+    const clientsList = useLiveQuery(() => db.clientes.orderBy('updatedAt').reverse().toArray()) || [];
 
     useEffect(() => {
         if (!selectedProject) {
             loadProjects();
-            loadClientsList();
         }
     }, [selectedProject]);
-
-    async function loadClientsList() {
-        const { data, error } = await supabase.from('clients').select('id, first_name, last_name_1, dni').order('created_at', { ascending: false });
-        if (data) {
-            setClientsList(data);
-        } else if (error) {
-            setUxError("No se pudo cargar el listado de clientes para asignar al proyecto.");
-        }
-    }
 
     async function loadProjects() {
         setLoading(true);
@@ -248,7 +239,7 @@ export function ProyectosView() {
                                     <option value="" className="bg-[#0f0f23]">-- Sin Asignar (Proyecto Libre) --</option>
                                     {clientsList.map(c => (
                                         <option key={c.id} value={c.id} className="bg-[#0f0f23]">
-                                            {c.first_name} {c.last_name_1} ({c.dni || 'S/DNI'})
+                                            {c.nombre} {c.apellidos} ({c.nif || 'S/DNI'})
                                         </option>
                                     ))}
                                 </select>

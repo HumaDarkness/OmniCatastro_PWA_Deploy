@@ -73,7 +73,7 @@ import {
     type SyncReason,
 } from "./lib/syncService";
 import { fetchAltitudeAndProvince } from "./lib/climateZoneVerifier";
-import { consultarCatastro, esParcerlaMultiple, extraerDatosInmuebleUnico } from "./lib/catastroService";
+import { consultarCatastro, esParcerlaMultiple, extraerDatosInmuebleUnico, fetchLointDataFromRC } from "./lib/catastroService";
 import { CertificadoCapturasPanelControlado, createEmptyCapturasState, type CapturasState } from "./components/CertificadoCapturasPanel";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./components/ui/card";
 import { Input } from "./components/ui/input";
@@ -1466,7 +1466,28 @@ export function CalculadoraTermica() {
                 locationMsg = "ℹ️ RC con múltiples inmuebles; la verificación de ubicación es parcial.";
             } else {
                 const catastroInfo = extraerDatosInmuebleUnico(catastroCheck.datos);
-                const catDireccion = (catastroInfo.direccion || "").trim();
+                let catDireccion = (catastroInfo.direccion || "").trim();
+                
+                if (rcNormalized.length === 20) {
+                    try {
+                        const loints = await fetchLointDataFromRC(rcNormalized);
+                        if (loints.length > 0) {
+                            const l = loints[0];
+                            const parts = [];
+                            if (l.bloque && l.bloque !== 'N/D' && l.bloque !== '-' && l.bloque !== '—') parts.push(`Blq. ${l.bloque}`);
+                            if (l.escalera && l.escalera !== 'N/D' && l.escalera !== '-' && l.escalera !== '—') parts.push(`Esc. ${l.escalera}`);
+                            if (l.planta && l.planta !== 'N/D' && l.planta !== '-' && l.planta !== '—') parts.push(`Pl. ${l.planta}`);
+                            if (l.puerta && l.puerta !== 'N/D' && l.puerta !== '-' && l.puerta !== '—') parts.push(`Pt. ${l.puerta}`);
+
+                            if (parts.length > 0) {
+                                catDireccion = `${catDireccion}, ${parts.join(' ')}`;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("No se pudo obtener datos Loint (Codigos)", e);
+                    }
+                }
+
                 const catMunicipio = (catastroInfo.municipio || "").trim();
                 const catProvincia = (catastroInfo.provincia || "").trim();
                 const catCp = (catastroInfo.codigoPostal || "").trim();

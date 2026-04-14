@@ -25,6 +25,7 @@ import { CalculadoraTermica } from "../CalculadoraTermica";
 import { ProyectosView } from "../ProyectosView";
 import { ClientesView } from "../ClientesView";
 import { HojaEncargoStandaloneView } from "../HojaEncargoStandaloneView";
+import { AjustesView } from "../AjustesView";
 import { ResumenGeneral } from "./ResumenGeneral";
 import { getUxRecoverySnapshot, type LicenseTier, type UxRecoverySnapshot } from "../lib/supabase";
 import { getCloudAvailabilitySnapshot, type CloudAvailabilitySnapshot } from "../lib/apiClient";
@@ -39,8 +40,10 @@ const HASH_VIEWS: DashboardView[] = [
     "calculadora",
     "clientes",
     "mis-proyectos",
-    "hojas-encargo"
+    "hojas-encargo",
+    "ajustes"
 ];
+
 
 function parseDashboardViewFromHash(): DashboardView {
     if (typeof window === "undefined") return "resumen";
@@ -94,8 +97,9 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
         { id: "clientes", label: "Clientes", icon: <Users className="w-5 h-5" /> },
         { id: "mis-proyectos", label: "Mis Proyectos", icon: <FileStack className="w-5 h-5" /> },
         { id: "hojas-encargo", label: "Hojas de Encargo", icon: <FileText className="w-5 h-5" /> },
-        { id: "ajustes", label: "Ajustes", icon: <Settings className="w-5 h-5" />, badge: "Pronto", disabled: true },
+        { id: "ajustes", label: "Ajustes", icon: <Settings className="w-5 h-5" /> },
     ];
+
 
     const tierLabels: Record<LicenseTier, string> = {
         desktop_only: "Desktop",
@@ -324,6 +328,8 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
                 return <ProyectosView />;
             case "hojas-encargo":
                 return <HojaEncargoStandaloneView />;
+            case "ajustes":
+                return <AjustesView />;
             default:
                 return (
                     <div className="flex items-center justify-center h-full text-slate-500">

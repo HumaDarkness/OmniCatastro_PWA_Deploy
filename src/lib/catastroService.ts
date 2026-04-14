@@ -493,3 +493,62 @@ function extraerCodigosGeo(root: any): { cp: string; cmc: string } {
         cmc: dt?.cmc ?? loine?.cm ?? "",
     };
 }
+
+// ─── Extraer Escalera, Planta, Puerta (Consulta_DNPRC_Codigos) ──────
+
+const CATASTRO_BASE = 'https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCallejero/COVCCallejeroCodigos.svc/json';
+
+/** Descompone una RC de 20 caracteres en sus partes constitutivas */
+function _parseRC20(rc: string): { pc1: string; pc2: string; car: string; cc1: string; cc2: string } | null {
+  if (rc.length !== 20) return null;
+  return {
+    pc1: rc.slice(0, 7),
+    pc2: rc.slice(7, 14),
+    car: rc.slice(14, 18),   // "cargo" = identificador de unidad constructiva
+    cc1: rc[18],
+    cc2: rc[19],
+  };
+}
+
+export interface LointData {
+  escalera: string | null;
+  planta: string | null;
+  puerta: string | null;
+  bloque: string | null;
+  superficieTotal: number | null;
+}
+
+/**
+ * Para RCs de 20 dígitos: usa Consulta_DNPRC_Codigos para obtener
+ * escalera, planta y puerta del nodo <loint> (Localización Interior).
+ */
+export async function fetchLointDataFromRC(rc: string): Promise<LointData[]> {
+  const parts = _parseRC20(rc.trim().toUpperCase());
+  if (!parts) throw new Error(`RC inválida: ${rc} (debe tener 20 caracteres)`);
+
+  const url = `${CATASTRO_BASE}/Consulta_DNPRC_Codigos?RefCat=${rc}`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Catastro HTTP ${res.status}`);
+
+  const json = await res.json();
+
+  // El nodo de datos está en consulta_dnp > bico > bi
+  const bi = json?.consulta_dnp?.bico?.bi;
+  if (!bi) return [];
+
+  // lcons puede contener un objeto único o un array si hay varias unidades
+  const consList: any[] = Array.isArray(bi?.lcons?.cons)
+    ? bi.lcons.cons
+    : bi?.lcons?.cons
+      ? [bi.lcons.cons]
+      : [];
+
+  return consList.map((cons: any): LointData => ({
+    escalera:       cons?.dt?.lourb?.loint?.es   ?? null,
+    planta:         cons?.dt?.lourb?.loint?.pt   ?? null,
+    puerta:         cons?.dt?.lourb?.loint?.pu   ?? null,
+    bloque:         cons?.dt?.lourb?.loint?.bq   ?? null,
+    superficieTotal: cons?.dfcons?.stl != null ? Number(cons.dfcons.stl) : null,
+  }));
+}
