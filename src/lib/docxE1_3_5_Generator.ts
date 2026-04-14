@@ -137,34 +137,27 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
     const imgFichaTecnicaBuffer = c.ficha_tecnica?.dataUrl || "";
 
     const dataDocx = {
-        // --- VARIABLES NUEVAS ---
+        // --- VARIABLES NUEVAS / COMUNES ---
         clienteNombre: (payload.clienteNombre || "").toUpperCase(),
         direccionInmueble: direccionFull,
         supEnvolvente: formatES(supEnvolvente, 2),
         tipoElemento: payload.tipoElemento || "partición",
         supActuacion: formatES(supActuacion, 2),
         porcentajeAfectado: formatES(pctAfectado, 2),
-        rCapasIniciales: formatES(r.r_capas_iniciales || 0, 3),
-        RTi: formatES(r.rt_inicial || 0, 3),
-        Upi: formatES(r.up_inicial || 0, 3),
+        
         areaNHE: formatES(payload.areaNHE || 0, 2),
-        ratioB: formatES(r.ratio_b || 0, 2),
-        bInicial: formatES(r.b_inicial || 0, 2),
-        Ui: formatES(r.ui || 0, 2),
         espesorMM: String(Math.round(espesorMM)),
         materialNombre: materialNombre,
-        rCapasFinales: formatES(r.r_capas_finales || 0, 3),
-        RTf: formatES(r.rt_final || 0, 3),
-        Upf: formatES(r.up_final || 0, 3),
-        bFinal: formatES(r.b_final || 0, 2),
-        Uf: formatES(r.uf || 0, 2),
+
         alturaMsnm: String(payload.alturaMsnm || 0),
         zonaClimatica: payload.zonaKey || "-",
         factorG: formatES(factorGNum, 2),
-        formulaAE: `1 × (${formatES(r.ui || 0, 2)} − ${formatES(r.uf || 0, 2)}) × ${formatES(supActuacion, 2)} × ${formatES(factorGNum, 2)}`,
-        ahorroKwh: String(Math.round(r.ahorro_kwh || 0)),
+        formulaAE: `1 × (${formatES(r.ui_final || 0, 2)} − ${formatES(r.uf_final || 0, 2)}) × ${formatES(supActuacion, 2)} × ${formatES(factorGNum, 2)}`,
+        ahorroKwh: String(Math.round(r.ahorro || 0)),
         ciudadFirma: payload.ciudadFirma || "Madrid",
         fechaFirma: new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }),
+
+        // Capturas
         imgCerramientosEnvolvente: imgCerramientosEnBuffer,
         imgLibreriaAntes:          imgLibreriaAntesBuffer,
         imgLibreriaDespues:        imgLibreriaDespuesBuffer,
@@ -172,19 +165,32 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
         imgCEEAntes:               imgCEEAntesBuffer,
         imgCEEDespues:             imgCEEDespuesBuffer,
 
+        // --- VARIABLES DE DOCX V2 ---
+        rCapasIniciales: formatES(r.r_mat_inicial || 0, 3),
+        RTi: formatES(r.rt_inicial || 0, 3),
+        Upi: formatES(r.up_inicial || 0, 3),
+        ratioB: formatES(r.ratio || 0, 2),
+        bInicial: formatES(r.b_inicial || 0, 2),
+        Ui: formatES(r.ui_final || 0, 2),
+        rCapasFinales: formatES(r.r_mat_final || 0, 3),
+        RTf: formatES(r.rt_final || 0, 3),
+        Upf: formatES(r.up_final || 0, 3),
+        bFinal: formatES(r.b_final || 0, 2),
+        Uf: formatES(r.uf_final || 0, 2),
+
         // --- VARIABLES LEGACY (Para compatibilidad con la plantilla Word actual) ---
-        RBase: formatES(r.r_capas_iniciales || 0, 3),
+        RBase: formatES(r.r_mat_inicial || 0, 3),
         RtBaseVal: formatES(r.rt_inicial || 0, 3),
         RtBase: formatES(r.rt_inicial || 0, 3),
         UpBase: formatES(r.up_inicial || 0, 3),
         areaNhe: formatES(payload.areaNHE || 0, 2),
-        factorHnhNhe: formatES(r.ratio_b || 0, 2),
+        factorHnhNhe: formatES(r.ratio || 0, 2), // r.ratio (ratio_b)
         bBase: formatES(r.b_inicial || 0, 2),
-        UiBase: formatES(r.ui || 0, 2),
-        RtMaterial: formatES((espesorMM/1000) / 0.035, 3), // aprox si no hay
+        UiBase: formatES(r.ui_final || 0, 2),
+        RtMaterial: formatES(r.r_mat_final || 0, 3), 
         RtFinal: formatES(r.rt_final || 0, 3),
         UpFinal: formatES(r.up_final || 0, 3),
-        UiFinal: formatES(r.uf || 0, 2),
+        UiFinal: formatES(r.uf_final || 0, 2),
 
         // --- IMÁGENES LEGACY ---
         capturaCE3X_1: imgCerramientosEnBuffer,
