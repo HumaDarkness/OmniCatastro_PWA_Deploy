@@ -97,7 +97,6 @@ function formatES(value: number | undefined | null, decimals: number): string {
 const IMG_SIZES: Record<string, [number, number]> = {
     capturaCEEInicial: [470, 394],         // pág 1 – CEE Inicial (cerramientos/huecos)
     capturaLibreriaAntes: [316, 249],      // pág 2 – materiales antes
-    capturaSuperficiales: [362, 297],      // pág 2-3 – superficies/resistencias
     capturaLibreriaDespues: [405, 319],    // pág 4 – materiales después
     imgFichaTecnica: [480, 679],           // pág 6 – ficha técnica
     capturaCE3X_1: [470, 340],             // pág 7 – CE3X antes
@@ -238,7 +237,6 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
         // ─── IMAGES (tags must match {%tagName} in the Word template) ──
         capturaCEEInicial: imgCEEInicial,           // pág 1 – CEE Inicial (cerramientos/huecos)
         capturaLibreriaAntes: imgLibAntes,          // pág 2 – Materiales antes
-        capturaSuperficiales: imgCEEInicial,        // pág 2-3 – misma imagen CEE si no hay otra
         capturaLibreriaDespues: imgLibDespues,      // pág 4 – Materiales después
         imgFichaTecnica: imgFicha,                  // pág 6 – Ficha técnica
         capturaCE3X_1: imgCE3XAntes,                // pág 7 – CE3X antes
