@@ -60,6 +60,8 @@ import {
     countOfflineExpedienteWrites,
     upsertOfflineExpedienteWrite,
 } from "./lib/offlineQueue";
+import { db } from "./infra/db/OmniCatastroDB";
+import { clientSyncService } from "./lib/clientSyncService";
 import {
     announceExpedienteTabWrite,
     EXPEDIENTE_NEEDS_RESOLUTION_EVENT,
@@ -1330,54 +1332,44 @@ export function CalculadoraTermica() {
     const guardarCliente = async () => {
         const dni = normalizeDni(clienteDni);
         if (!dni) { setDniLookupMsg("Introduce un DNI para guardar el cliente."); return; }
-        if (!supabase) { setDniLookupMsg("Supabase no está configurado."); return; }
         if (!clienteFirstName.trim() || !clienteLastName1.trim()) { setDniLookupMsg("Introduce al menos primer nombre y primer apellido."); return; }
 
         setSavingCliente(true);
         try {
-            const organizationId = await resolveOrganizationOrThrow();
             const first_name = clienteFirstName.trim();
-            const middle_name = clienteMiddleName.trim() || null;
+            const middle_name = clienteMiddleName.trim() || "";
             const last_name_1 = clienteLastName1.trim();
-            const last_name_2 = clienteLastName2.trim() || null;
+            const last_name_2 = clienteLastName2.trim() || "";
+            const apellidos = [last_name_1, last_name_2].filter(Boolean).join(" ");
+            const nombre = [first_name, middle_name].filter(Boolean).join(" ");
 
-            const { data: newClient, error } = await supabase
-                .from("clients")
-                .upsert(
-                    { organization_id: organizationId, dni, first_name, middle_name, last_name_1, last_name_2, dni_address: clienteDireccionDni.trim() || null },
-                    { onConflict: "organization_id,dni" }
-                )
-                .select()
-                .single();
-
-            if (error) {
-                setDniLookupMsg(`Error al guardar: ${error.message}`);
-            } else if (newClient) {
-                if (capturas.dni_cliente) {
-                    try {
-                        setDniLookupMsg(`Subiendo imagen de DNI...`);
-                        const dniCaptura = capturas.dni_cliente;
-                        const response = await fetch(dniCaptura.dataUrl);
-                        const blob = await response.blob();
-                        const fileExt = dniCaptura.fileName.split('.').pop() || 'png';
-                        const fileName = `dni_front_${Date.now()}.${fileExt}`;
-                        const filePath = `${organizationId}/clients/${newClient.id}/${fileName}`;
-
-                        const { error: uploadError } = await supabase.storage
-                            .from('work_photos')
-                            .upload(filePath, blob, { upsert: true });
-
-                        if (!uploadError) {
-                            await supabase.from("clients").update({ dni_front_path: filePath }).eq("id", newClient.id);
-                        }
-                    } catch (err) {
-                        console.error("Error subiendo DNI:", err);
-                    }
-                }
-                setDniLookupMsg(`✅ Cliente ${first_name} ${last_name_1} guardado en BD.`);
+            let dniBlobFront: Blob | undefined;
+            if (capturas.dni_cliente) {
+                const response = await fetch(capturas.dni_cliente.dataUrl);
+                dniBlobFront = await response.blob();
             }
-        } catch {
-            setDniLookupMsg("Fallo inesperado al guardar cliente.");
+
+            // Guardado Local First
+            const clienteId = await db.clientes.add({
+                nif: dni,
+                nombre,
+                apellidos,
+                fuenteOrigen: 'manual',
+                dniBlobFront,
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+            });
+
+            if (clienteId !== undefined) {
+                await clientSyncService.enqueueClienteUpsert(clienteId as number, 'user_action');
+                setDniLookupMsg(`✅ Cliente ${first_name} ${last_name_1} guardado en local y encolado para sync.`);
+            } else {
+                setDniLookupMsg('No se pudo guardar el cliente localmente.');
+            }
+
+        } catch (err: any) {
+            console.error("Fallo inesperado al guardar cliente:", err);
+            setDniLookupMsg(`Fallo inesperado al guardar cliente: ${err.message || 'Desconocido'}`);
         } finally {
             setSavingCliente(false);
         }

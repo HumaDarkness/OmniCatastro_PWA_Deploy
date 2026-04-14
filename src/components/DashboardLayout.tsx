@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     FileText,
     LayoutDashboard,
@@ -30,6 +30,9 @@ import { ResumenGeneral } from "./ResumenGeneral";
 import { getUxRecoverySnapshot, type LicenseTier, type UxRecoverySnapshot } from "../lib/supabase";
 import { getCloudAvailabilitySnapshot, type CloudAvailabilitySnapshot } from "../lib/apiClient";
 import { getCatastroAvailabilitySnapshot, type CatastroAvailabilitySnapshot } from "../lib/catastroService";
+import { clientSyncService } from "../lib/clientSyncService";
+import { db } from "../infra/db/OmniCatastroDB";
+import { useLiveQuery } from "dexie-react-hooks";
 
 type DashboardView = "resumen" | "central-documental" | "calculadora" | "consulta-catastral" | "clientes" | "mis-proyectos" | "hojas-encargo" | "ajustes";
 
@@ -97,7 +100,7 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
         { id: "clientes", label: "Clientes", icon: <Users className="w-5 h-5" /> },
         { id: "mis-proyectos", label: "Mis Proyectos", icon: <FileStack className="w-5 h-5" /> },
         { id: "hojas-encargo", label: "Hojas de Encargo", icon: <FileText className="w-5 h-5" /> },
-        { id: "ajustes", label: "Ajustes", icon: <Settings className="w-5 h-5" /> },
+        { id: "ajustes", label: "Ajustes", icon: <Settings className="w-5 h-5" />, badge: deadLetterCount > 0 ? `${deadLetterCount} err` : undefined },
     ];
 
 
@@ -187,6 +190,47 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
 
         return () => {
             isMounted = false;
+            window.clearInterval(timer);
+        };
+    }, []);
+
+    // ── Sync Outbox Coordinator ──────────────────────────────────────────────
+    const syncRunningRef = useRef(false);
+    const deadLetterCount = useLiveQuery(() =>
+        db.sync_jobs.where('status').equals('dead_letter').count()
+    ) ?? 0;
+
+    useEffect(() => {
+        const drainQueue = async () => {
+            if (syncRunningRef.current) return; // anti-reentry guard
+            if (document.visibilityState !== 'visible') return;
+            syncRunningRef.current = true;
+            try {
+                await clientSyncService.recoverStaleLocks();
+                await clientSyncService.processBatch({
+                    lockToken: crypto.randomUUID(),
+                    limit: 5,
+                    leaseMs: 30_000
+                });
+            } catch (e) {
+                console.warn('[SyncOutbox] drain error:', e);
+            } finally {
+                syncRunningRef.current = false;
+            }
+        };
+
+        // Trigger 1: app-ready
+        void drainQueue();
+
+        // Trigger 2: online event
+        const onOnline = () => void drainQueue();
+        window.addEventListener('online', onOnline);
+
+        // Trigger 3: periodic poll (45s)
+        const timer = window.setInterval(drainQueue, 45_000);
+
+        return () => {
+            window.removeEventListener('online', onOnline);
             window.clearInterval(timer);
         };
     }, []);

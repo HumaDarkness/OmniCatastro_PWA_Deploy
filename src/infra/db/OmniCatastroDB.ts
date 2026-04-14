@@ -1,6 +1,7 @@
 import Dexie from 'dexie';
 import type { Table } from 'dexie';
 import type { QuickFillClientDTO, AssetDTO } from '../../contracts/hoja-encargo';
+import type { SyncJobRecord } from '../../lib/clientSyncService.types';
 
 // ── Nuevas interfaces ────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ export class OmniCatastroDB extends Dexie {
   assets!: Table<AssetDTO, number>;
   clientes!: Table<ClienteLocal, number>;
   ingenieros!: Table<IngenieroLocal, number>;
+  sync_jobs!: Table<SyncJobRecord, number>;
 
   constructor() {
     super('OmniCatastroDB');
@@ -59,6 +61,32 @@ export class OmniCatastroDB extends Dexie {
       clientes:   '++id, &nif, nombre, fuenteOrigen, syncedAt, createdAt',
       ingenieros: '++id, &nif, isActive, createdAt',
       // Nota: los campos Blob NO se indexan, solo se almacenan
+    });
+
+    // v3: Outbox queue genérica para sincronización en background
+    this.version(3).stores({
+      quickFillClients: '++id, nif, lastUsedAt',
+      assets: '++id, alias, type, createdAt',
+      clientes: '++id, &nif, nombre, fuenteOrigen, syncedAt, createdAt, updatedAt',
+      ingenieros: '++id, &nif, isActive, createdAt, updatedAt',
+      sync_jobs: [
+        '++id',
+        'queue',
+        'status',
+        'runAfter',
+        'priority',
+        'entityType',
+        'entityId',
+        'operation',
+        '&dedupeKey',
+        'idempotencyKey',
+        '[status+runAfter]',
+        '[status+priority]',
+        '[entityType+entityId]',
+        '[queue+status+runAfter]',
+        'createdAt',
+        'updatedAt'
+      ].join(', ')
     });
   }
 

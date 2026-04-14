@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect } from "react";
 import { Users, Plus, UploadCloud, Save, ChevronLeft, Image as ImageIcon, Search, Trash2 } from "lucide-react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type ClienteLocal } from "./infra/db/OmniCatastroDB";
+import { clientSyncService } from "./lib/clientSyncService";
 
 function normalizeClientSearch(value: string): string {
     return value
@@ -110,6 +111,10 @@ export function ClientesView() {
             await db.clientes.update(editingClient.id, { ...payload, updatedAt: Date.now() });
         } else {
             savedId = await db.clientes.add({ ...payload, createdAt: Date.now(), updatedAt: Date.now() });
+        }
+
+        if (savedId !== undefined) {
+             clientSyncService.enqueueClienteUpsert(savedId as number, 'user_action').catch(console.error);
         }
 
         setEditingClient(null);
