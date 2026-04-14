@@ -34,52 +34,8 @@ export interface HojaEncargoPayload {
     lugarFirma: string;
     fechaFirma: Date;
     tipoCliente: string; // "PROPIETARIO", "REPRESENTANTE", etc.
-    firmaTecnicoDataUrl?: string;
-    firmaPropietarioDataUrl?: string;
-}
-
-/**
- * Procesa una imagen base64 (DataURL) en un Canvas para hacer que los píxeles blancos 
- * (r>170, g>170, b>170) sean 100% transparentes, emulando la lógica de Pillow.
- */
-async function procesarFirmaTransparente(dataUrl: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = "Anonymous";
-        img.onload = () => {
-            const canvas = document.createElement("canvas");
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext("2d");
-            if (!ctx) {
-                return resolve(dataUrl); // Fallback
-            }
-            
-            ctx.drawImage(img, 0, 0);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const data = imageData.data;
-            
-            // Loop over all pixels
-            for (let i = 0; i < data.length; i += 4) {
-                const r = data[i];
-                const g = data[i + 1];
-                const b = data[i + 2];
-                
-                // If white-ish, make transparent
-                if (r > 170 && g > 170 && b > 170) {
-                    data[i + 3] = 0; // Alpha
-                }
-            }
-            
-            ctx.putImageData(imageData, 0, 0);
-            
-            // Recortar espacio en blanco (Auto-crop)
-            // (Una versión simple no hace crop, pero la transparencia ya ayuda mucho a no tapar las líneas)
-            resolve(canvas.toDataURL("image/png"));
-        };
-        img.onerror = () => reject(new Error("No se pudo cargar la imagen de la firma."));
-        img.src = dataUrl;
-    });
+    firmaTecnicoBlob?: Blob;
+    firmaPropietarioBlob?: Blob;
 }
 
 function getMesNombre(fecha: Date): string {
@@ -93,7 +49,7 @@ function getMesNombre(fecha: Date): string {
  * pdf-lib no tiene "widgets" tan accesibles como PyMuPDF, por lo que usaremos coordenadas conocidas
  * o buscaremos las coordenadas de los campos FdoTecnico y FdoPromotor.
  */
-async function incrustarFirma(pdfDoc: PDFDocument, form: any, fieldName: string, firmaDataUrl: string) {
+async function incrustarFirma(pdfDoc: PDFDocument, form: any, fieldName: string, firmaBlob: Blob) {
     try {
         const field = form.getTextField(fieldName);
         const widgets = field.acroField.getWidgets();
@@ -116,8 +72,9 @@ async function incrustarFirma(pdfDoc: PDFDocument, form: any, fieldName: string,
         }
 
         // Cargar imagen
-        const isPng = firmaDataUrl.startsWith("data:image/png");
-        const imageFile = isPng ? await pdfDoc.embedPng(firmaDataUrl) : await pdfDoc.embedJpg(firmaDataUrl);
+        const isPng = firmaBlob.type === "image/png";
+        const firmBytes = new Uint8Array(await firmaBlob.arrayBuffer());
+        const imageFile = isPng ? await pdfDoc.embedPng(firmBytes) : await pdfDoc.embedJpg(firmBytes);
         
         // Calcular Aspect Ratio (igual que PyMuPDF)
         const imgW = imageFile.width;
@@ -233,14 +190,12 @@ export async function generarHojaEncargoPDF(payload: HojaEncargoPayload): Promis
         });
 
         // 5. Inserción de firmas
-        if (payload.firmaTecnicoDataUrl) {
-            const procesada = await procesarFirmaTransparente(payload.firmaTecnicoDataUrl);
-            await incrustarFirma(pdfDoc, form, "FdoTecnico", procesada);
+        if (payload.firmaTecnicoBlob) {
+            await incrustarFirma(pdfDoc, form, "FdoTecnico", payload.firmaTecnicoBlob);
         }
 
-        if (payload.firmaPropietarioDataUrl) {
-            const procesada = await procesarFirmaTransparente(payload.firmaPropietarioDataUrl);
-            await incrustarFirma(pdfDoc, form, "FdoPromotor", procesada);
+        if (payload.firmaPropietarioBlob) {
+            await incrustarFirma(pdfDoc, form, "FdoPromotor", payload.firmaPropietarioBlob);
         }
 
         // 6. Remover botones (Imprimir, Limpiar Formulario)

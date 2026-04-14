@@ -8,7 +8,7 @@ import type { HojaEncargoPayload } from './lib/pdfHojaEncargoGenerator';
 import { saveAs } from 'file-saver';
 import { supabase } from './lib/supabase';
 import { consultarCatastro, extraerDatosInmuebleUnico } from './lib/catastroService';
-
+import { useSignatureProcessing } from './features/hoja-encargo/hooks/useSignatureProcessing';
 
 export function HojaEncargoStandaloneView() {
     // ---- Stores ----
@@ -23,6 +23,7 @@ export function HojaEncargoStandaloneView() {
 
     // ---- Form States ----
     const [loading, setLoading] = useState(false);
+    const { processAndSaveTechnicalSignature, processSignature } = useSignatureProcessing();
     
 
     const [techFirmaUrl, setTechFirmaUrl] = useState<string | null>(tecnico.firmaBase64 || null);
@@ -155,13 +156,18 @@ export function HojaEncargoStandaloneView() {
         }
     }
 
-    const handleUploadTechSignature = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleUploadTechSignature = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                setTechFirmaUrl(ev.target?.result as string);
-            };
-            reader.readAsDataURL(e.target.files[0]);
+            setLoading(true);
+            try {
+                const blob = await processAndSaveTechnicalSignature(e.target.files[0]);
+                if (blob) setTechFirmaUrl(URL.createObjectURL(blob));
+            } catch(e) {
+               console.error(e);
+               setUxMessage({ type: 'error', text: 'Error procesando la firma.' });
+            } finally {
+                setLoading(false);
+            }
         }
     };
 
@@ -190,14 +196,18 @@ export function HojaEncargoStandaloneView() {
             }
 
             // Firmas
-            let finalTechFirma = techFirmaUrl;
+            let tecnicoBlob = undefined;
             if (techSigCanvasRef.current && !techSigCanvasRef.current.isEmpty()) {
-                finalTechFirma = techSigCanvasRef.current.getTrimmedCanvas().toDataURL("image/png");
-                setTechFirmaUrl(finalTechFirma);
+                const blob = await fetch(techSigCanvasRef.current.getTrimmedCanvas().toDataURL("image/png")).then(r => r.blob());
+                tecnicoBlob = await processAndSaveTechnicalSignature(blob) || undefined;
+            } else if (techFirmaUrl) {
+                tecnicoBlob = await fetch(techFirmaUrl).then(r => r.blob());
             }
-            let finalPropFirma = undefined;
+
+            let propietarioBlob = undefined;
             if (sigCanvasRef.current && !sigCanvasRef.current.isEmpty()) {
-                finalPropFirma = sigCanvasRef.current.getTrimmedCanvas().toDataURL("image/png");
+                const blob = await fetch(sigCanvasRef.current.getTrimmedCanvas().toDataURL("image/png")).then(r => r.blob());
+                propietarioBlob = await processSignature(blob) || undefined;
             }
 
             const payload: HojaEncargoPayload = {
@@ -207,8 +217,8 @@ export function HojaEncargoStandaloneView() {
                 lugarFirma: lugarFirma || inmueble.municipio || "MADRID",
                 fechaFirma,
                 tipoCliente: representante,
-                firmaTecnicoDataUrl: finalTechFirma || undefined,
-                firmaPropietarioDataUrl: finalPropFirma
+                firmaTecnicoBlob: tecnicoBlob,
+                firmaPropietarioBlob: propietarioBlob
             };
 
             const pdfBlob = await generarHojaEncargoPDF(payload);
