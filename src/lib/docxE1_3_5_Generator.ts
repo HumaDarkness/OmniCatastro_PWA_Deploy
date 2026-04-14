@@ -95,18 +95,13 @@ function formatES(value: number | undefined | null, decimals: number): string {
 
 /** Tamaños en pt (ancho, alto) por slot de imagen en la plantilla Word */
 const IMG_SIZES: Record<string, [number, number]> = {
-    imgCerramientosEnvolvente: [470, 394],
-    imgLibreriaAntes: [316, 249],
-    imgLibreriaDespues: [405, 319],
-    imgFichaTecnica: [480, 679],
-    imgCEEAntes: [362, 297],
-    imgCEEDespues: [389, 319],
-    // Legacy aliases – apuntan a los mismos tamaños
-    capturaCE3X_1: [470, 394],
-    capturaLibreriaAntes: [316, 249],
-    capturaSuperficiales: [362, 297],
-    capturaLibreriaDespues: [405, 319],
-    capturaCE3X_2: [389, 319],
+    // Tags que usa la plantilla .docx actualmente
+    capturaSuperficiales: [362, 297],      // pág 1 – CEE inicial
+    capturaLibreriaAntes: [316, 249],      // pág 2 – materiales antes
+    capturaLibreriaDespues: [405, 319],    // pág 4 – materiales después
+    imgFichaTecnica: [480, 679],           // pág 6 – ficha técnica (ocupa toda la hoja)
+    capturaCE3X_1: [470, 340],             // pág 7 – CE3X antes
+    capturaCE3X_2: [470, 340],             // pág 7 – CE3X después
 };
 
 export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
@@ -179,31 +174,12 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
     const pctAfectado = supEnvolvente > 0 ? (supActuacion / supEnvolvente) * 100 : 0;
 
     // --- Image DataURLs (strings — the ImageModule converts them internally) ---
-    // DIAGNOSTIC: Log what actually arrives in capturas
-    console.group("🖼️ DOCX Image Diagnostic");
-    const capturaSlots = ["ce3x_antes", "ce3x_despues", "materiales_antes", "materiales_despues", "cee_inicial", "ficha_tecnica"] as const;
-    for (const slot of capturaSlots) {
-        const entry = c[slot];
-        const dataUrl = entry?.dataUrl;
-        console.log(`  ${slot}: entry=${entry === null ? "null" : entry === undefined ? "undefined" : "CapturaData"}, dataUrl=${dataUrl ? `${dataUrl.substring(0, 60)}... (${dataUrl.length} chars)` : String(dataUrl)}`);
-    }
-    console.groupEnd();
-
-    const imgCerramientos = c.ce3x_antes?.dataUrl || "";
+    const imgCE3XAntes = c.ce3x_antes?.dataUrl || "";
+    const imgCE3XDespues = c.ce3x_despues?.dataUrl || "";
     const imgLibAntes = c.materiales_antes?.dataUrl || "";
-    const imgCEEAntes = c.cee_inicial?.dataUrl || "";
     const imgLibDespues = c.materiales_despues?.dataUrl || "";
-    const imgCEEDespues = c.ce3x_despues?.dataUrl || "";
+    const imgCEEInicial = c.cee_inicial?.dataUrl || "";
     const imgFicha = c.ficha_tecnica?.dataUrl || "";
-
-    // DIAGNOSTIC: Log what the template will actually receive
-    console.group("🔗 DOCX Template Tag Values");
-    console.log(`  capturaCE3X_1 (ce3x_antes) → ${imgCerramientos ? `${imgCerramientos.length} chars` : "EMPTY"}`);
-    console.log(`  capturaLibreriaAntes (materiales_antes) → ${imgLibAntes ? `${imgLibAntes.length} chars` : "EMPTY"}`);
-    console.log(`  capturaSuperficiales (cee_inicial) → ${imgCEEAntes ? `${imgCEEAntes.length} chars` : "EMPTY"}`);
-    console.log(`  capturaLibreriaDespues (materiales_despues) → ${imgLibDespues ? `${imgLibDespues.length} chars` : "EMPTY"}`);
-    console.log(`  capturaCE3X_2 (ce3x_despues) → ${imgCEEDespues ? `${imgCEEDespues.length} chars` : "EMPTY"}`);
-    console.groupEnd();
 
     // --- Build the data object for docxtemplater ---
     const dataDocx: Record<string, unknown> = {
@@ -231,15 +207,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
             year: "numeric",
         }),
 
-        // ─── MODERN IMAGES ─────────────────────────────────────────────
-        imgCerramientosEnvolvente: imgCerramientos,
-        imgLibreriaAntes: imgLibAntes,
-        imgLibreriaDespues: imgLibDespues,
-        imgFichaTecnica: imgFicha,
-        imgCEEAntes: imgCEEAntes,
-        imgCEEDespues: imgCEEDespues,
-
-        // ─── THERMAL V2 (named by purpose) ─────────────────────────────
+        // ─── THERMAL VALUES ────────────────────────────────────────────
         rCapasIniciales: formatES(r.r_mat_inicial, 3),
         RTi: formatES(r.rt_inicial, 3),
         Upi: formatES(r.up_inicial, 3),
@@ -253,27 +221,26 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
         Uf: formatES(r.uf_final, 2),
 
         // ─── LEGACY VARIABLES (for current Word template) ──────────────
-        // Initial state
-        RBase: formatES(r.r_mat_inicial, 3),       // ΣR materiales (sin Rsi/Rse)
-        RtBaseVal: formatES(r.rt_inicial, 3),       // Rt = ΣR + Rsi + Rse
-        RtBase: formatES(r.rt_inicial, 3),          // alias
-        UpBase: formatES(r.up_inicial, 3),          // Up = 1/Rt
-        areaNhe: formatES(payload.areaNHE, 2),      // m² partición nh-e
-        factorHnhNhe: formatES(r.ratio, 2),         // ratio = area_h_nh / area_nh_e → para b
-        bBase: formatES(r.b_inicial, 2),            // factor b antes
-        UiBase: formatES(r.ui_final, 2),            // U transmitancia antes (con b)
-        // Final state
-        RtMaterial: formatES(r.r_mat_final, 3),     // ΣR materiales mejorado (sin Rsi/Rse)
-        RtFinal: formatES(r.rt_final, 3),           // Rt mejorado
-        UpFinal: formatES(r.up_final, 3),           // Up mejorado
-        UiFinal: formatES(r.uf_final, 2),           // U transmitancia después (con b)
+        RBase: formatES(r.r_mat_inicial, 3),
+        RtBaseVal: formatES(r.rt_inicial, 3),
+        RtBase: formatES(r.rt_inicial, 3),
+        UpBase: formatES(r.up_inicial, 3),
+        areaNhe: formatES(payload.areaNHE, 2),
+        factorHnhNhe: formatES(r.ratio, 2),
+        bBase: formatES(r.b_inicial, 2),
+        UiBase: formatES(r.ui_final, 2),
+        RtMaterial: formatES(r.r_mat_final, 3),
+        RtFinal: formatES(r.rt_final, 3),
+        UpFinal: formatES(r.up_final, 3),
+        UiFinal: formatES(r.uf_final, 2),
 
-        // ─── LEGACY IMAGES ─────────────────────────────────────────────
-        capturaCE3X_1: imgCerramientos,
-        capturaLibreriaAntes: imgLibAntes,
-        capturaSuperficiales: imgCEEAntes,
-        capturaLibreriaDespues: imgLibDespues,
-        capturaCE3X_2: imgCEEDespues,
+        // ─── IMAGES (tags must match {%tagName} in the Word template) ──
+        capturaSuperficiales: imgCEEInicial,       // pág 1 – CEE Inicial
+        capturaLibreriaAntes: imgLibAntes,          // pág 2 – Materiales antes
+        capturaLibreriaDespues: imgLibDespues,      // pág 4 – Materiales después
+        imgFichaTecnica: imgFicha,                  // pág 6 – Ficha técnica
+        capturaCE3X_1: imgCE3XAntes,                // pág 7 – CE3X antes
+        capturaCE3X_2: imgCE3XDespues,              // pág 7 – CE3X después
     };
 
     // 4. Render and save
