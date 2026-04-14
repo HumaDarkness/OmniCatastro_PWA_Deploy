@@ -4,6 +4,7 @@ import PizZip from "pizzip";
 // @ts-ignore
 import ImageModule from "open-docxtemplater-image-module";
 import { saveAs } from "file-saver";
+import { VALORES_G } from "./thermalCalculator";
 
 // We import the payload interface, but since we just need the structure, any is fine or we explicitly define it.
 // Assuming CertificateDraftPayload is passed directly.
@@ -73,11 +74,15 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
     let espesorMM = "0";
     let materialNombre = "Aislamiento";
     let RtMaterial = "0.000";
-    const nuevaCapa = payload.capas.find((c: any) => c.esNueva);
+    const nuevaCapa = payload.capas?.find((c: any) => c.esNueva) || payload.capas?.find((c: any) => c.es_nueva);
     if (nuevaCapa && nuevaCapa.material) {
         espesorMM = (nuevaCapa.espesorMetros * 1000).toFixed(0);
         materialNombre = nuevaCapa.material.nombre;
         RtMaterial = nuevaCapa.resistencia.toFixed(3);
+    } else if (nuevaCapa) {
+        espesorMM = (Number(nuevaCapa.espesor) * 1000).toFixed(0);
+        materialNombre = nuevaCapa.nombre;
+        RtMaterial = (Number(nuevaCapa.r_valor) || (Number(nuevaCapa.espesor) / Number(nuevaCapa.lambda_val))).toFixed(3);
     }
 
     // Prepare address string
@@ -93,31 +98,33 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
     // "ce3x_antes", "ce3x_despues", "materiales_antes", "materiales_despues", "cee_inicial", "ficha_tecnica"
     const c = payload.capturas || {};
     
+    const factorGNum = VALORES_G[payload.zonaKey] || 0;
+
     const dataDocx = {
         clienteNombre: payload.clienteNombre || "CLIENTE NO ESPECIFICADO",
         direccionInmueble: direccionFull,
         supEnvolvente: (payload.supEnvolvente || 0).toFixed(2),
         supActuacion: (payload.supActuacion || 0).toFixed(2),
-        porcentajeAfectado: r.porcentajeAfectado.toFixed(2),
-        RtBaseVal: r.RtBase.toFixed(3), // The python script replaces 0.130 to {RtBaseVal}
-        RBase: r.RBase.toFixed(2),
-        RtBase: r.RtBase.toFixed(3),
-        UpBase: r.UpBase.toFixed(3),
+        porcentajeAfectado: (r.pct_envolvente || 0).toFixed(2),
+        RtBaseVal: (r.rt_inicial || 0).toFixed(3),
+        RBase: (r.r_mat_inicial || 0).toFixed(2),
+        RtBase: (r.rt_inicial || 0).toFixed(3),
+        UpBase: (r.up_inicial || 0).toFixed(3),
         areaNhe: (payload.areaNHE || 0).toFixed(2),
-        factorHnhNhe: r.bBase.toFixed(2), // We used bBase directly for the ratio in DOCX
-        bBase: r.bBase.toFixed(2),
-        UiBase: r.UiBase.toFixed(2),
+        factorHnhNhe: (r.ratio || 0).toFixed(2),
+        bBase: (r.b_inicial || 0).toFixed(2),
+        UiBase: (r.ui_final || 0).toFixed(2), // ui_final in interface represents Ui after b
         espesorMM: espesorMM,
         materialNombre: materialNombre,
         RtMaterial: RtMaterial,
-        RtFinal: r.RtFinal.toFixed(3),
-        bFinal: r.bFinal.toFixed(2),
-        UpFinal: r.UpFinal.toFixed(3),
-        UiFinal: r.UiFinal.toFixed(2),
+        RtFinal: (r.rt_final || 0).toFixed(3),
+        bFinal: (r.b_final || 0).toFixed(2),
+        UpFinal: (r.up_final || 0).toFixed(3),
+        UiFinal: (r.uf_final || 0).toFixed(2),
         alturaMsnm: payload.alturaMsnm || 0,
         zonaClimatica: payload.zonaKey || "E1",
-        factorG: r.factorG.toFixed(2),
-        ahorroKwh: Math.round(payload.ahorroKwh || 0),
+        factorG: factorGNum.toFixed(2),
+        ahorroKwh: Math.round(r.ahorro || payload.ahorroKwh || 0),
         fechaFirma: new Date().toLocaleDateString("es-ES"),
 
         // Imágenes en base64 de las capturas (el DOCX recibe el string, y el ImageModule lo convierte)
