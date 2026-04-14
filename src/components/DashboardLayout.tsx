@@ -24,12 +24,13 @@ import { ConsultaCatastral } from "../ConsultaCatastral";
 import { CalculadoraTermica } from "../CalculadoraTermica";
 import { ProyectosView } from "../ProyectosView";
 import { ClientesView } from "../ClientesView";
+import { HojaEncargoStandaloneView } from "../HojaEncargoStandaloneView";
 import { ResumenGeneral } from "./ResumenGeneral";
 import { getUxRecoverySnapshot, type LicenseTier, type UxRecoverySnapshot } from "../lib/supabase";
 import { getCloudAvailabilitySnapshot, type CloudAvailabilitySnapshot } from "../lib/apiClient";
 import { getCatastroAvailabilitySnapshot, type CatastroAvailabilitySnapshot } from "../lib/catastroService";
 
-type DashboardView = "resumen" | "central-documental" | "calculadora" | "consulta-catastral" | "clientes" | "mis-proyectos" | "ajustes";
+type DashboardView = "resumen" | "central-documental" | "calculadora" | "consulta-catastral" | "clientes" | "mis-proyectos" | "hojas-encargo" | "ajustes";
 
 const HASH_VIEWS: DashboardView[] = [
     "resumen",
@@ -38,6 +39,7 @@ const HASH_VIEWS: DashboardView[] = [
     "calculadora",
     "clientes",
     "mis-proyectos",
+    "hojas-encargo"
 ];
 
 function parseDashboardViewFromHash(): DashboardView {
@@ -91,6 +93,7 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
         { id: "calculadora", label: "Calculadora Térmica", icon: <Calculator className="w-5 h-5" /> },
         { id: "clientes", label: "Clientes", icon: <Users className="w-5 h-5" /> },
         { id: "mis-proyectos", label: "Mis Proyectos", icon: <FileStack className="w-5 h-5" /> },
+        { id: "hojas-encargo", label: "Hojas de Encargo", icon: <FileText className="w-5 h-5" /> },
         { id: "ajustes", label: "Ajustes", icon: <Settings className="w-5 h-5" />, badge: "Pronto", disabled: true },
     ];
 
@@ -319,6 +322,8 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
                 return <ClientesView />;
             case "mis-proyectos":
                 return <ProyectosView />;
+            case "hojas-encargo":
+                return <HojaEncargoStandaloneView />;
             default:
                 return (
                     <div className="flex items-center justify-center h-full text-slate-500">

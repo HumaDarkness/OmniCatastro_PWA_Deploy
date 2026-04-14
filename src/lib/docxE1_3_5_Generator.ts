@@ -151,6 +151,22 @@ function formatES(value: number | undefined | null, decimals: number): string {
     return (Number(value) || 0).toFixed(decimals).replace(".", ",");
 }
 
+async function getImageDimensionsFromDataUrl(dataUrl: string): Promise<[number, number]> {
+    return new Promise((resolve) => {
+        if (!dataUrl) return resolve([0, 0]);
+        const img = new Image();
+        img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
+        img.onerror = () => resolve([0, 0]);
+        img.src = dataUrl;
+    });
+}
+
+function calculateAspectRatioFit(srcWidth: number, srcHeight: number, maxWidth: number, maxHeight: number): [number, number] {
+    if (!srcWidth || !srcHeight) return [maxWidth, maxHeight];
+    const ratio = Math.min(maxWidth / srcWidth, maxHeight / srcHeight);
+    return [Math.round(srcWidth * ratio), Math.round(srcHeight * ratio)];
+}
+
 // ---------------------------------------------------------------------------
 // Main generator
 // ---------------------------------------------------------------------------
@@ -170,7 +186,41 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
         throw new Error("No hay resultados térmicos calculados para generar el DOCX.");
     }
 
-    // 1. Fetch template from public folder (with cache-busting to ensure latest patched version)
+    // 3. Extract data from payload
+    const r: ResultadoTermico = payload.resultado;
+    const c: Partial<CapturasState> = payload.capturas || {};
+
+    // --- Image DataURLs ---
+    const imgCE3XAntes = c.ce3x_antes?.dataUrl || "";
+    const imgCE3XDespues = c.ce3x_despues?.dataUrl || "";
+    const imgLibAntes = c.materiales_antes?.dataUrl || "";
+    const imgLibDespues = c.materiales_despues?.dataUrl || "";
+    const imgCEEInicial = c.cee_inicial?.dataUrl || "";
+    const imgFicha = c.ficha_tecnica?.dataUrl || "";
+
+    // --- Pre-calculate dynamic aspect-ratio constrained sizes ---
+    const dynamicSizes: Record<string, [number, number]> = {};
+
+    const imagePairs = [
+        ["capturaCEEInicial", imgCEEInicial],
+        ["capturaLibreriaAntes", imgLibAntes],
+        ["capturaLibreriaDespues", imgLibDespues],
+        ["imgFichaTecnica", imgFicha],
+        ["capturaCE3X_1", imgCE3XAntes],
+        ["capturaCE3X_2", imgCE3XDespues],
+    ] as const;
+
+    for (const [tagName, dataUrl] of imagePairs) {
+        if (dataUrl) {
+            const [w, h] = await getImageDimensionsFromDataUrl(dataUrl);
+            const [maxW, maxH] = IMG_SIZES[tagName];
+            dynamicSizes[tagName] = calculateAspectRatioFit(w, h, maxW, maxH);
+        } else {
+            dynamicSizes[tagName] = IMG_SIZES[tagName];
+        }
+    }
+
+    // 4. Fetch template from public folder
     const timestamp = new Date().getTime();
     const res = await fetch(`/templates/E1-3-5_TEMPLATE.docx?v=${timestamp}`, { cache: "no-store" });
     if (!res.ok) throw new Error("No se pudo cargar la plantilla E1-3-5_TEMPLATE.docx");
@@ -178,7 +228,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
     const blob = await res.blob();
     const arrayBuffer = await blob.arrayBuffer();
 
-    // 2. Setup PizZip and ImageModule
+    // 5. Setup PizZip and ImageModule
     const zip = new PizZip(arrayBuffer);
 
     const imageOptions = {
@@ -193,7 +243,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
             return getTransparentPixel();
         },
         getSize: (_img: unknown, _tagValue: string, tagName: string) => {
-            return IMG_SIZES[tagName] || [400, 280];
+            return dynamicSizes[tagName] || IMG_SIZES[tagName] || [400, 280];
         },
     };
 
@@ -204,12 +254,6 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
         paragraphLoop: true,
         linebreaks: true,
     });
-
-    // 3. Extract data from payload
-    const r: ResultadoTermico = payload.resultado;
-    const c: Partial<CapturasState> = payload.capturas || {};
-
-    // --- Find the applied insulation material ---
     let espesorMM = 0;
     const nuevaCapa = payload.capas?.find((capa) => capa.es_nueva);
     if (nuevaCapa) {
@@ -234,14 +278,6 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
     const supEnvolvente = Number(payload.supEnvolvente) || 0;
     const supActuacion = Number(payload.supActuacion) || 0;
     const pctAfectado = supEnvolvente > 0 ? (supActuacion / supEnvolvente) * 100 : 0;
-
-    // --- Image DataURLs (strings — the ImageModule converts them internally) ---
-    const imgCE3XAntes = c.ce3x_antes?.dataUrl || "";
-    const imgCE3XDespues = c.ce3x_despues?.dataUrl || "";
-    const imgLibAntes = c.materiales_antes?.dataUrl || "";
-    const imgLibDespues = c.materiales_despues?.dataUrl || "";
-    const imgCEEInicial = c.cee_inicial?.dataUrl || "";
-    const imgFicha = c.ficha_tecnica?.dataUrl || "";
 
     // --- Build the data object for docxtemplater ---
     const dataDocx: Record<string, unknown> = {

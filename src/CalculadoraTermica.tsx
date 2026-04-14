@@ -82,6 +82,7 @@ import { ModoSwitch, useModoExperto } from "./components/ModoSwitch";
 import { GestionLotesSheet } from "./components/GestionLotesSheet";
 import { CertificadoSuccessState } from "./components/CertificadoSuccessState";
 import { Button } from "./components/ui/button";
+import { HojaEncargoModal } from "./components/HojaEncargoModal";
 
 interface MaterialDB {
     id: string;
@@ -809,6 +810,7 @@ interface ExpedienteMvpSyncMeta {
 export function CalculadoraTermica() {
     const { isExperto } = useModoExperto();
     const [isLotesSheetOpen, setIsLotesSheetOpen] = useState(false);
+    const [isHojaEncargoModalOpen, setIsHojaEncargoModalOpen] = useState(false);
     const [expedienteRc, setExpedienteRc] = useState("");
     const [certStatus, setCertStatus] = useState<CertDraftStatus>("en_progreso");
 
@@ -5582,6 +5584,13 @@ export function CalculadoraTermica() {
                                     Generar PDF INTELLIA
                                 </button>
                                 <button
+                                    onClick={() => setIsHojaEncargoModalOpen(true)}
+                                    disabled={false}
+                                    className="h-11 rounded-md bg-pink-600/20 hover:bg-pink-600/40 text-pink-400 hover:text-pink-300 transition-all flex items-center justify-center gap-2 ring-1 ring-pink-500/50 disabled:opacity-40"
+                                >
+                                    Hoja de Encargo
+                                </button>
+                                <button
                                     onClick={() => void generarAnexoE1PDF()}
                                     className="h-11 rounded-md bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 hover:text-blue-300 transition-all flex items-center justify-center gap-2 ring-1 ring-blue-500/50"
                                 >
@@ -5648,6 +5657,32 @@ export function CalculadoraTermica() {
                 capturas={capturas}
                 onCapturasChange={setCapturas}
             />
+
+            {isHojaEncargoModalOpen && (
+                <HojaEncargoModal
+                    prefillData={{
+                        propietario: { 
+                            nombre: "", 
+                            nif: "", 
+                            direccion: "" 
+                        },
+                        inmueble: {
+                            tipoVia: "CALLE",
+                            nombreVia: "",
+                            numero: "",
+                            bloque: "",
+                            escalera: "",
+                            planta: "",
+                            puerta: "",
+                            municipio: "",
+                            provincia: "",
+                            cp: "",
+                            uso: "RESIDENCIAL"
+                        }
+                    }}
+                    onClose={() => setIsHojaEncargoModalOpen(false)}
+                />
+            )}
 
             {capturaPreview && (
                 <div
