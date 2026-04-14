@@ -1354,7 +1354,7 @@ export function CalculadoraTermica() {
                 nif: dni,
                 nombre,
                 apellidos,
-                fuenteOrigen: 'manual',
+                fuenteOrigen: 'calculadora',
                 dniBlobFront,
                 createdAt: Date.now(),
                 updatedAt: Date.now()

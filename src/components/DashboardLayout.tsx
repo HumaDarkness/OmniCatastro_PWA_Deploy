@@ -92,6 +92,10 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
     const [catastroChecking, setCatastroChecking] = useState(false);
     const [showServiceInfo, setShowServiceInfo] = useState(false);
 
+    const deadLetterCount = useLiveQuery(() =>
+        db.sync_jobs.where('status').equals('dead_letter').count()
+    ) ?? 0;
+
     const navItems: NavItem[] = [
         { id: "resumen", label: "Resumen General", icon: <LayoutDashboard className="w-5 h-5" /> },
         { id: "central-documental", label: "Central Documental", icon: <FileText className="w-5 h-5" /> },
@@ -196,9 +200,6 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
 
     // ── Sync Outbox Coordinator ──────────────────────────────────────────────
     const syncRunningRef = useRef(false);
-    const deadLetterCount = useLiveQuery(() =>
-        db.sync_jobs.where('status').equals('dead_letter').count()
-    ) ?? 0;
 
     useEffect(() => {
         const drainQueue = async () => {

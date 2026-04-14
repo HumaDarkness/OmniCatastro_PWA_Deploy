@@ -1,4 +1,4 @@
-import { db, type OmniCatastroDB, type ClienteLocal } from '../infra/db/OmniCatastroDB';
+import { db, type OmniCatastroDB } from '../infra/db/OmniCatastroDB';
 import { supabase } from './supabase';
 import { getCurrentOrganizationId } from './supabase';
 import type { 
@@ -175,7 +175,7 @@ class OmniClientSyncService implements ClientSyncService {
     });
   }
 
-  async executeJob(job: SyncJobRecord, ctx?: SyncExecutionContext): Promise<JobExecutionResult> {
+  async executeJob(job: SyncJobRecord): Promise<JobExecutionResult> {
     const orgId = getCurrentOrganizationId();
     if (!orgId) {
       return { ok: false, retryable: true, errorCode: 'NO_ORG_ID', errorMessage: 'Organización no disponible' };
@@ -302,10 +302,10 @@ class OmniClientSyncService implements ClientSyncService {
     for (const job of jobs) {
       if (ctx?.signal?.aborted) break;
 
-      const result = await this.executeJob(job, ctx);
+      const result = await this.executeJob(job);
 
       if (result.ok) {
-        await this.markDone(job.id!, options.lockToken, { remoteId: result.remoteId });
+        await this.markDone(job.id!, options.lockToken);
         succeeded++;
       } else if (result.retryable) {
         await this.markRetry(job.id!, options.lockToken, result);
