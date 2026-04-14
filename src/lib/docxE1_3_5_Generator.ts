@@ -47,18 +47,29 @@ function getTransparentPixel(): ArrayBuffer {
 }
 
 function dataURLToArrayBuffer(dataUrl: string): ArrayBuffer {
-    if (!dataUrl) return getTransparentPixel();
+    if (!dataUrl || typeof dataUrl !== "string") {
+        console.warn("⚠️ [DOCX Image] dataUrl vacía o tipo incorrecto, usando pixel.");
+        return getTransparentPixel();
+    }
 
-    const match = dataUrl.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?(;base64)?,(.*)$/i);
-    if (!match) return getTransparentPixel();
+    const commaIdx = dataUrl.indexOf(",");
+    if (commaIdx === -1) {
+        console.warn("⚠️ [DOCX Image] Formato inválido (sin coma), usando pixel.");
+        return getTransparentPixel();
+    }
 
-    const isBase64 = Boolean(match[2]);
-    const payload = match[3] || "";
+    const header = dataUrl.substring(0, Math.min(commaIdx, 200));
+    const payload = dataUrl.substring(commaIdx + 1);
+    // Remover espacios en blanco o saltos de línea basura que rompen atob
+    const cleanPayload = payload.replace(/\s+/g, "");
+    
+    const isBase64 = header.toLowerCase().includes("base64");
 
     let binary: string;
     try {
-        binary = isBase64 ? atob(payload) : decodeURIComponent(payload);
-    } catch {
+        binary = isBase64 ? atob(cleanPayload) : decodeURIComponent(cleanPayload);
+    } catch (e: unknown) {
+        console.error("⚠️ [DOCX Image] Falla al decodificar (atob/URI). Usando pixel.", e);
         return getTransparentPixel();
     }
 
@@ -168,12 +179,31 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
     const pctAfectado = supEnvolvente > 0 ? (supActuacion / supEnvolvente) * 100 : 0;
 
     // --- Image DataURLs (strings — the ImageModule converts them internally) ---
+    // DIAGNOSTIC: Log what actually arrives in capturas
+    console.group("🖼️ DOCX Image Diagnostic");
+    const capturaSlots = ["ce3x_antes", "ce3x_despues", "materiales_antes", "materiales_despues", "cee_inicial", "ficha_tecnica"] as const;
+    for (const slot of capturaSlots) {
+        const entry = c[slot];
+        const dataUrl = entry?.dataUrl;
+        console.log(`  ${slot}: entry=${entry === null ? "null" : entry === undefined ? "undefined" : "CapturaData"}, dataUrl=${dataUrl ? `${dataUrl.substring(0, 60)}... (${dataUrl.length} chars)` : String(dataUrl)}`);
+    }
+    console.groupEnd();
+
     const imgCerramientos = c.ce3x_antes?.dataUrl || "";
     const imgLibAntes = c.materiales_antes?.dataUrl || "";
     const imgCEEAntes = c.cee_inicial?.dataUrl || "";
     const imgLibDespues = c.materiales_despues?.dataUrl || "";
     const imgCEEDespues = c.ce3x_despues?.dataUrl || "";
     const imgFicha = c.ficha_tecnica?.dataUrl || "";
+
+    // DIAGNOSTIC: Log what the template will actually receive
+    console.group("🔗 DOCX Template Tag Values");
+    console.log(`  capturaCE3X_1 (ce3x_antes) → ${imgCerramientos ? `${imgCerramientos.length} chars` : "EMPTY"}`);
+    console.log(`  capturaLibreriaAntes (materiales_antes) → ${imgLibAntes ? `${imgLibAntes.length} chars` : "EMPTY"}`);
+    console.log(`  capturaSuperficiales (cee_inicial) → ${imgCEEAntes ? `${imgCEEAntes.length} chars` : "EMPTY"}`);
+    console.log(`  capturaLibreriaDespues (materiales_despues) → ${imgLibDespues ? `${imgLibDespues.length} chars` : "EMPTY"}`);
+    console.log(`  capturaCE3X_2 (ce3x_despues) → ${imgCEEDespues ? `${imgCEEDespues.length} chars` : "EMPTY"}`);
+    console.groupEnd();
 
     // --- Build the data object for docxtemplater ---
     const dataDocx: Record<string, unknown> = {
