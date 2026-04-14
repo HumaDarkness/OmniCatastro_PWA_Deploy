@@ -109,8 +109,9 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
         throw new Error("No hay resultados térmicos calculados para generar el DOCX.");
     }
 
-    // 1. Fetch template from public folder
-    const res = await fetch("/templates/E1-3-5_TEMPLATE.docx");
+    // 1. Fetch template from public folder (with cache-busting to ensure latest patched version)
+    const timestamp = new Date().getTime();
+    const res = await fetch(`/templates/E1-3-5_TEMPLATE.docx?v=${timestamp}`, { cache: "no-store" });
     if (!res.ok) throw new Error("No se pudo cargar la plantilla E1-3-5_TEMPLATE.docx");
 
     const blob = await res.blob();
