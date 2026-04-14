@@ -13,7 +13,14 @@ function normalizeClientSearch(value: string): string {
 }
 
 export function ClientesView() {
-    const clients = useLiveQuery(() => db.clientes.orderBy('updatedAt').reverse().toArray()) || [];
+    const clients = useLiveQuery(async () => {
+        try {
+            return await db.clientes.orderBy('updatedAt').reverse().toArray();
+        } catch {
+            // Fallback si el índice updatedAt no existe en registros antiguos
+            return await db.clientes.toArray();
+        }
+    }) || [];
     
     const [editingClient, setEditingClient] = useState<Partial<ClienteLocal> | null>(null);
     const [clientSearch, setClientSearch] = useState("");
@@ -301,6 +308,19 @@ export function ClientesView() {
                         </div>
                     ))}
                 </div>
+                {filteredClients.length === 0 && (
+                    <div className="flex flex-col items-center justify-center py-16 text-center">
+                        <Users className="w-12 h-12 text-slate-700 mb-4" />
+                        <h3 className="text-lg font-semibold text-slate-400 mb-2">
+                            {clientSearch ? "Sin resultados" : "Sin clientes locales"}
+                        </h3>
+                        <p className="text-sm text-slate-500 max-w-md">
+                            {clientSearch
+                                ? `No se encontraron clientes que coincidan con "${clientSearch}".`
+                                : "Los clientes que guardes desde la Calculadora Térmica o con el botón \"Nuevo Cliente\" aparecerán aquí. Los clientes de la nube se muestran en el contador superior."}
+                        </p>
+                    </div>
+                )}
             </div>
         </div>
     );

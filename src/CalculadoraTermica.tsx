@@ -869,6 +869,7 @@ export function CalculadoraTermica() {
     const [provinciaInmueble, setProvinciaInmueble] = useState("");
     const [buscandoDni, setBuscandoDni] = useState(false);
     const [dniLookupMsg, setDniLookupMsg] = useState<string | null>(null);
+    const [dniFlipped, setDniFlipped] = useState(false);
     const [capturaPreview, setCapturaPreview] = useState<{
         label: string;
         fileName: string;
@@ -4743,66 +4744,90 @@ export function CalculadoraTermica() {
                     </div>
 
                     <div className="rounded-md border border-indigo-500/20 bg-indigo-500/5 p-3">
-                        <p className="text-[10px] uppercase font-bold text-indigo-300 mb-2">Vista previa DNI cliente</p>
+                        <div className="flex items-center justify-between mb-2">
+                            <p className="text-[10px] uppercase font-bold text-indigo-300">Vista previa DNI cliente</p>
+                            <button
+                                onClick={() => setDniFlipped(f => !f)}
+                                className="h-7 px-3 rounded-md bg-indigo-900/40 border border-indigo-700/40 text-indigo-300 hover:bg-indigo-800/50 text-[10px] font-bold inline-flex items-center gap-1.5 transition-all active:scale-95"
+                                title="Voltear: intercambiar Anverso ↔ Reverso"
+                            >
+                                <RefreshCcw className={`h-3.5 w-3.5 transition-transform duration-300 ${dniFlipped ? 'rotate-180' : ''}`} />
+                                Voltear
+                            </button>
+                        </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {/* Anverso */}
-                            <div>
-                                <div className="flex items-center justify-between mb-1">
-                                    <span className="text-[9px] uppercase font-bold text-slate-400">Anverso</span>
-                                    <button
-                                        onClick={() => openCapturaPreview("dni_cliente", "DNI Anverso")}
-                                        disabled={!dniPreview}
-                                        className="h-6 px-2 rounded bg-indigo-900/30 border border-indigo-700/40 text-indigo-300 hover:bg-indigo-800/40 disabled:opacity-40 text-[10px] inline-flex items-center gap-1"
-                                    >
-                                        <ZoomIn className="h-3 w-3" />
-                                        Zoom
-                                    </button>
-                                </div>
-                                {dniPreview ? (
-                                    <HoverZoomImage
-                                        src={dniPreview.dataUrl}
-                                        alt="DNI Anverso"
-                                        onClick={() => openCapturaPreview("dni_cliente", "DNI Anverso")}
-                                        imageClassName="w-full h-36 md:h-44 object-contain rounded border border-indigo-700/30 bg-slate-950/40"
-                                        panelTitle="Zoom DNI Anverso"
-                                        zoomPanelClassName="w-[420px] h-[280px]"
-                                        zoom={3}
-                                    />
-                                ) : (
-                                    <div className="w-full h-20 rounded border border-dashed border-indigo-700/30 flex items-center justify-center text-[10px] text-slate-500">
-                                        Sin captura (panel inferior)
+                            {/* Panel Izquierdo (depende del flip) */}
+                            {(() => {
+                                const leftKey = dniFlipped ? "dni_cliente_back" : "dni_cliente";
+                                const leftLabel = dniFlipped ? "Reverso" : "Anverso";
+                                const leftData = dniFlipped ? dniBackPreview : dniPreview;
+                                return (
+                                    <div>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <span className="text-[9px] uppercase font-bold text-slate-400">{leftLabel}</span>
+                                            <button
+                                                onClick={() => openCapturaPreview(leftKey, `DNI ${leftLabel}`)}
+                                                disabled={!leftData}
+                                                className="h-6 px-2 rounded bg-indigo-900/30 border border-indigo-700/40 text-indigo-300 hover:bg-indigo-800/40 disabled:opacity-40 text-[10px] inline-flex items-center gap-1"
+                                            >
+                                                <ZoomIn className="h-3 w-3" />
+                                                Zoom
+                                            </button>
+                                        </div>
+                                        {leftData ? (
+                                            <HoverZoomImage
+                                                src={leftData.dataUrl}
+                                                alt={`DNI ${leftLabel}`}
+                                                onClick={() => openCapturaPreview(leftKey, `DNI ${leftLabel}`)}
+                                                imageClassName="w-full h-36 md:h-44 object-contain rounded border border-indigo-700/30 bg-slate-950/40"
+                                                panelTitle={`Zoom DNI ${leftLabel}`}
+                                                zoomPanelClassName="w-[420px] h-[280px]"
+                                                zoom={3}
+                                            />
+                                        ) : (
+                                            <div className="w-full h-20 rounded border border-dashed border-indigo-700/30 flex items-center justify-center text-[10px] text-slate-500">
+                                                Sin captura (panel inferior)
+                                            </div>
+                                        )}
                                     </div>
-                                )}
-                            </div>
-                            {/* Reverso */}
-                            <div>
-                                <div className="flex items-center justify-between mb-1">
-                                    <span className="text-[9px] uppercase font-bold text-slate-400">Reverso</span>
-                                    <button
-                                        onClick={() => openCapturaPreview("dni_cliente_back", "DNI Reverso")}
-                                        disabled={!dniBackPreview}
-                                        className="h-6 px-2 rounded bg-indigo-900/30 border border-indigo-700/40 text-indigo-300 hover:bg-indigo-800/40 disabled:opacity-40 text-[10px] inline-flex items-center gap-1"
-                                    >
-                                        <ZoomIn className="h-3 w-3" />
-                                        Zoom
-                                    </button>
-                                </div>
-                                {dniBackPreview ? (
-                                    <HoverZoomImage
-                                        src={dniBackPreview.dataUrl}
-                                        alt="DNI Reverso"
-                                        onClick={() => openCapturaPreview("dni_cliente_back", "DNI Reverso")}
-                                        imageClassName="w-full h-36 md:h-44 object-contain rounded border border-indigo-700/30 bg-slate-950/40"
-                                        panelTitle="Zoom DNI Reverso"
-                                        zoomPanelClassName="w-[420px] h-[280px]"
-                                        zoom={3}
-                                    />
-                                ) : (
-                                    <div className="w-full h-20 rounded border border-dashed border-indigo-700/30 flex items-center justify-center text-[10px] text-slate-500">
-                                        Sin captura (panel inferior)
+                                );
+                            })()}
+                            {/* Panel Derecho (depende del flip) */}
+                            {(() => {
+                                const rightKey = dniFlipped ? "dni_cliente" : "dni_cliente_back";
+                                const rightLabel = dniFlipped ? "Anverso" : "Reverso";
+                                const rightData = dniFlipped ? dniPreview : dniBackPreview;
+                                return (
+                                    <div>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <span className="text-[9px] uppercase font-bold text-slate-400">{rightLabel}</span>
+                                            <button
+                                                onClick={() => openCapturaPreview(rightKey, `DNI ${rightLabel}`)}
+                                                disabled={!rightData}
+                                                className="h-6 px-2 rounded bg-indigo-900/30 border border-indigo-700/40 text-indigo-300 hover:bg-indigo-800/40 disabled:opacity-40 text-[10px] inline-flex items-center gap-1"
+                                            >
+                                                <ZoomIn className="h-3 w-3" />
+                                                Zoom
+                                            </button>
+                                        </div>
+                                        {rightData ? (
+                                            <HoverZoomImage
+                                                src={rightData.dataUrl}
+                                                alt={`DNI ${rightLabel}`}
+                                                onClick={() => openCapturaPreview(rightKey, `DNI ${rightLabel}`)}
+                                                imageClassName="w-full h-36 md:h-44 object-contain rounded border border-indigo-700/30 bg-slate-950/40"
+                                                panelTitle={`Zoom DNI ${rightLabel}`}
+                                                zoomPanelClassName="w-[420px] h-[280px]"
+                                                zoom={3}
+                                            />
+                                        ) : (
+                                            <div className="w-full h-20 rounded border border-dashed border-indigo-700/30 flex items-center justify-center text-[10px] text-slate-500">
+                                                Sin captura (panel inferior)
+                                            </div>
+                                        )}
                                     </div>
-                                )}
-                            </div>
+                                );
+                            })()}
                         </div>
                     </div>
 
