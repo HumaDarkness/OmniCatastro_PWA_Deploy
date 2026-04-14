@@ -2,7 +2,7 @@
 import Docxtemplater from "docxtemplater";
 import PizZip from "pizzip";
 // @ts-ignore
-import ImageModule from "open-docxtemplater-image-module";
+import ImageModule from "docxtemplater-image-module-free";
 import { saveAs } from "file-saver";
 import { VALORES_G } from "./thermalCalculator";
 
@@ -74,7 +74,13 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
     const imageOptions = {
         centered: false,
         getImage: (tagValue: any, _tagName: string) => {
-            return tagValue;
+            if (typeof tagValue === "string") {
+                return dataURLToArrayBuffer(tagValue);
+            }
+            if (tagValue instanceof ArrayBuffer) {
+                return tagValue;
+            }
+            return getTransparentPixel();
         },
         getSize: (_img: any, _tagValue: string, tagName: string) => {
             return IMG_SIZES[tagName] || [400, 280]; 
@@ -122,57 +128,70 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
     const supActuacion = Number(payload.supActuacion) || 0;
     const pctAfectado = supEnvolvente > 0 ? (supActuacion / supEnvolvente) * 100 : 0;
 
+    // We pass STRINGS to the dataDocx so the ImageModule doesn't confuse ArrayBuffers with pre-rendered tags.
+    const imgCerramientosEnBuffer = c.ce3x_antes?.dataUrl || "";
+    const imgLibreriaAntesBuffer = c.materiales_antes?.dataUrl || "";
+    const imgCEEAntesBuffer = c.cee_inicial?.dataUrl || "";
+    const imgLibreriaDespuesBuffer = c.materiales_despues?.dataUrl || "";
+    const imgCEEDespuesBuffer = c.ce3x_despues?.dataUrl || "";
+    const imgFichaTecnicaBuffer = c.ficha_tecnica?.dataUrl || "";
+
     const dataDocx = {
-        // Bloque 1
+        // --- VARIABLES NUEVAS ---
         clienteNombre: (payload.clienteNombre || "").toUpperCase(),
         direccionInmueble: direccionFull,
-        
-        // Bloque 2
         supEnvolvente: formatES(supEnvolvente, 2),
         tipoElemento: payload.tipoElemento || "partición",
         supActuacion: formatES(supActuacion, 2),
         porcentajeAfectado: formatES(pctAfectado, 2),
-
-        // Bloque 3
         rCapasIniciales: formatES(r.r_capas_iniciales || 0, 3),
         RTi: formatES(r.rt_inicial || 0, 3),
         Upi: formatES(r.up_inicial || 0, 3),
-
-        // Bloque 4
         areaNHE: formatES(payload.areaNHE || 0, 2),
         ratioB: formatES(r.ratio_b || 0, 2),
         bInicial: formatES(r.b_inicial || 0, 2),
         Ui: formatES(r.ui || 0, 2),
-
-        // Bloque 5
         espesorMM: String(Math.round(espesorMM)),
         materialNombre: materialNombre,
-
-        // Bloque 6
         rCapasFinales: formatES(r.r_capas_finales || 0, 3),
         RTf: formatES(r.rt_final || 0, 3),
         Upf: formatES(r.up_final || 0, 3),
         bFinal: formatES(r.b_final || 0, 2),
         Uf: formatES(r.uf || 0, 2),
-
-        // Bloque 7
         alturaMsnm: String(payload.alturaMsnm || 0),
         zonaClimatica: payload.zonaKey || "-",
         factorG: formatES(factorGNum, 2),
         formulaAE: `1 × (${formatES(r.ui || 0, 2)} − ${formatES(r.uf || 0, 2)}) × ${formatES(supActuacion, 2)} × ${formatES(factorGNum, 2)}`,
         ahorroKwh: String(Math.round(r.ahorro_kwh || 0)),
-
-        // Bloque 8
         ciudadFirma: payload.ciudadFirma || "Madrid",
         fechaFirma: new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }),
+        imgCerramientosEnvolvente: imgCerramientosEnBuffer,
+        imgLibreriaAntes:          imgLibreriaAntesBuffer,
+        imgLibreriaDespues:        imgLibreriaDespuesBuffer,
+        imgFichaTecnica:           imgFichaTecnicaBuffer,
+        imgCEEAntes:               imgCEEAntesBuffer,
+        imgCEEDespues:             imgCEEDespuesBuffer,
 
-        // Capturas convertidas directamente a ArrayBuffer
-        imgCerramientosEnvolvente: dataURLToArrayBuffer(c.ce3x_antes?.dataUrl),
-        imgLibreriaAntes:          dataURLToArrayBuffer(c.materiales_antes?.dataUrl),
-        imgLibreriaDespues:        dataURLToArrayBuffer(c.materiales_despues?.dataUrl),
-        imgFichaTecnica:           dataURLToArrayBuffer(c.ficha_tecnica?.dataUrl),
-        imgCEEAntes:               dataURLToArrayBuffer(c.cee_inicial?.dataUrl),
-        imgCEEDespues:             dataURLToArrayBuffer(c.ce3x_despues?.dataUrl)
+        // --- VARIABLES LEGACY (Para compatibilidad con la plantilla Word actual) ---
+        RBase: formatES(r.r_capas_iniciales || 0, 3),
+        RtBaseVal: formatES(r.rt_inicial || 0, 3),
+        RtBase: formatES(r.rt_inicial || 0, 3),
+        UpBase: formatES(r.up_inicial || 0, 3),
+        areaNhe: formatES(payload.areaNHE || 0, 2),
+        factorHnhNhe: formatES(r.ratio_b || 0, 2),
+        bBase: formatES(r.b_inicial || 0, 2),
+        UiBase: formatES(r.ui || 0, 2),
+        RtMaterial: formatES((espesorMM/1000) / 0.035, 3), // aprox si no hay
+        RtFinal: formatES(r.rt_final || 0, 3),
+        UpFinal: formatES(r.up_final || 0, 3),
+        UiFinal: formatES(r.uf || 0, 2),
+
+        // --- IMÁGENES LEGACY ---
+        capturaCE3X_1: imgCerramientosEnBuffer,
+        capturaLibreriaAntes: imgLibreriaAntesBuffer,
+        capturaSuperficiales: imgCEEAntesBuffer,
+        capturaLibreriaDespues: imgLibreriaDespuesBuffer,
+        capturaCE3X_2: imgCEEDespuesBuffer
     };
 
     try {
