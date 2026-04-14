@@ -104,10 +104,10 @@ function processSignature(
     for (let x = 0; x < W; x++) {
       const isFg = binary[y * W + x] === 0;
       const idx  = (y * W + x) * 4;
-      out.data[idx]     = 0;   // R: negro puro
-      out.data[idx + 1] = 0;   // G
-      out.data[idx + 2] = 0;   // B
-      out.data[idx + 3] = isFg ? 255 : 0; // Alpha: trazo opaco, fondo 100% transparente
+      out.data[idx]     = isFg ? 0 : 255;   // R: negro puro o blanco
+      out.data[idx + 1] = isFg ? 0 : 255;   // G
+      out.data[idx + 2] = isFg ? 0 : 255;   // B
+      out.data[idx + 3] = 255; // Alpha: siempre 100% opaco
       if (isFg) {
         if (x < minX) minX = x; if (y < minY) minY = y;
         if (x > maxX) maxX = x; if (y > maxY) maxY = y;

@@ -411,11 +411,34 @@ export function extraerDatosInmuebleUnico(datos: any): {
     const tv = dir?.tv ?? "";
     const nv = dir?.nv ?? "";
     const num = dir?.pnp ?? "";
-    const direccion = `${tv} ${nv} ${num}`.trim();
-
     // Municipio/Provincia — directamente en dt.nm y dt.np
     const municipio = dt?.nm ?? locs?.locm?.nm ?? "";
     const provincia = dt?.np ?? "";
+
+    // Dirección Completa extraída fielmente del Catastro (ldt) garantizando plantas, escaleras, puertas.
+    let direccion = `${tv} ${nv} ${num}`.trim();
+    if (bi?.ldt && typeof bi.ldt === 'string') {
+        const ldt = bi.ldt.trim();
+        // Extraemos solo la parte inicial antes del CP (24008 LEON ...)
+        const matchLdt = ldt.match(/^(.*?)[ ]+\d{5}/);
+        if (matchLdt) {
+            direccion = matchLdt[1].trim();
+        } else {
+            // Fallback si no hay código postal, quitamos el municipio del final
+            const suffix = municipio ? ` ${municipio.toUpperCase()}` : "";
+            if (suffix && ldt.includes(suffix)) {
+                direccion = ldt.split(suffix)[0].trim();
+            } else {
+                direccion = ldt;
+            }
+        }
+    } else {
+        const loint = lourb?.loint ?? dt?.loint ?? {};
+        const planta = loint?.pt ? ` Pl:${loint.pt}` : "";
+        const puerta = loint?.pu ? ` Pt:${loint.pu}` : "";
+        const escalera = loint?.es ? ` Es:${loint.es}` : "";
+        direccion = `${direccion}${escalera}${planta}${puerta}`.trim();
+    }
 
     // Código Postal — dt.locs.lous.lourb.dp
     const codigoPostal = lourb?.dp ?? "";
