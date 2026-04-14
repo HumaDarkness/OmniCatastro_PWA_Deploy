@@ -1288,13 +1288,29 @@ export function CalculadoraTermica() {
             return;
         }
 
-        if (!supabase) {
-            setDniLookupMsg("Supabase no esta configurado en esta sesion.");
-            return;
-        }
-
         setBuscandoDni(true);
         try {
+            // ── 1. Búsqueda LOCAL-FIRST en Dexie (funciona offline) ──
+            const localClient = await db.clientes.where('nif').equals(dni).first();
+            if (localClient) {
+                // Separar nombre/apellidos almacenados como strings compuestos
+                const nameParts = (localClient.nombre || "").split(" ");
+                const surnameParts = (localClient.apellidos || "").split(" ");
+                setClienteFirstName(nameParts[0] || "");
+                setClienteMiddleName(nameParts.slice(1).join(" ") || "");
+                setClienteLastName1(surnameParts[0] || "");
+                setClienteLastName2(surnameParts.slice(1).join(" ") || "");
+                const fullName = `${localClient.nombre} ${localClient.apellidos}`.trim();
+                setDniLookupMsg(`📱 Cliente cargado desde local: ${fullName}`);
+                return;
+            }
+
+            // ── 2. Fallback a Supabase (si está configurado y hay red) ──
+            if (!supabase) {
+                setDniLookupMsg("No existe en local. Supabase no configurado.");
+                return;
+            }
+
             const { data, error } = await supabase
                 .from("clients")
                 .select("id, first_name, middle_name, last_name_1, last_name_2, dni, dni_address")
@@ -1303,13 +1319,13 @@ export function CalculadoraTermica() {
                 .maybeSingle();
 
             if (error) {
-                setDniLookupMsg("No se pudo consultar la base de clientes.");
+                setDniLookupMsg("No se pudo consultar la base remota de clientes.");
                 return;
             }
 
             const client = data as ClienteBasico | null;
             if (!client) {
-                setDniLookupMsg("No existe ese DNI en base de datos. Puedes seguir manual.");
+                setDniLookupMsg("No existe ese DNI ni en local ni en la nube. Puedes seguir manual.");
                 return;
             }
 
@@ -1320,7 +1336,7 @@ export function CalculadoraTermica() {
             if (client.dni_address) setClienteDireccionDni(client.dni_address);
 
             const fullName = [client.first_name, client.middle_name, client.last_name_1, client.last_name_2].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-            setDniLookupMsg(`Cliente cargado desde BD: ${fullName || client.dni}`);
+            setDniLookupMsg(`☁️ Cliente cargado desde la nube: ${fullName || client.dni}`);
         } catch {
             setDniLookupMsg("Fallo inesperado al buscar DNI.");
         } finally {
@@ -1349,23 +1365,26 @@ export function CalculadoraTermica() {
                 dniBlobFront = await response.blob();
             }
 
-            // Guardado Local First
-            const clienteId = await db.clientes.add({
+            let dniBlobBack: Blob | undefined;
+            if (capturas.dni_cliente_back) {
+                const response = await fetch(capturas.dni_cliente_back.dataUrl);
+                dniBlobBack = await response.blob();
+            }
+
+            // ── Upsert Local-First (crea o actualiza por NIF, sin duplicados) ──
+            const clienteId = await db.upsertCliente({
                 nif: dni,
                 nombre,
                 apellidos,
                 fuenteOrigen: 'calculadora',
-                dniBlobFront,
-                createdAt: Date.now(),
-                updatedAt: Date.now()
+                ...(dniBlobFront ? { dniBlobFront } : {}),
+                ...(dniBlobBack ? { dniBlobBack } : {}),
             });
 
-            if (clienteId !== undefined) {
-                await clientSyncService.enqueueClienteUpsert(clienteId as number, 'user_action');
-                setDniLookupMsg(`✅ Cliente ${first_name} ${last_name_1} guardado en local y encolado para sync.`);
-            } else {
-                setDniLookupMsg('No se pudo guardar el cliente localmente.');
-            }
+            await clientSyncService.enqueueClienteUpsert(clienteId, 'user_action');
+            const existing = await db.clientes.where('nif').equals(dni).count();
+            const verb = existing > 0 ? 'actualizado' : 'guardado';
+            setDniLookupMsg(`✅ Cliente ${first_name} ${last_name_1} ${verb} en local y encolado para sync.`);
 
         } catch (err: any) {
             console.error("Fallo inesperado al guardar cliente:", err);
@@ -2062,6 +2081,7 @@ export function CalculadoraTermica() {
         { key: "ficha_tecnica", label: "Ficha tecnica" },
     ];
     const dniPreview = capturas.dni_cliente;
+    const dniBackPreview = capturas.dni_cliente_back;
 
     const openCapturaPreview = (key: keyof CapturasState, label: string) => {
         const data = capturas[key];
@@ -4723,33 +4743,67 @@ export function CalculadoraTermica() {
                     </div>
 
                     <div className="rounded-md border border-indigo-500/20 bg-indigo-500/5 p-3">
-                        <div className="flex items-center justify-between mb-2">
-                            <p className="text-[10px] uppercase font-bold text-indigo-300">Vista previa DNI cliente</p>
-                            <button
-                                onClick={() => openCapturaPreview("dni_cliente", "DNI cliente")}
-                                disabled={!dniPreview}
-                                className="h-7 px-2 rounded-md bg-indigo-900/30 border border-indigo-700/40 text-indigo-300 hover:bg-indigo-800/40 disabled:opacity-40 text-[11px] inline-flex items-center gap-1"
-                            >
-                                <ZoomIn className="h-3.5 w-3.5" />
-                                Ver grande
-                            </button>
-                        </div>
-
-                        {dniPreview ? (
-                            <HoverZoomImage
-                                src={dniPreview.dataUrl}
-                                alt="DNI cliente"
-                                onClick={() => openCapturaPreview("dni_cliente", "DNI cliente")}
-                                imageClassName="w-full h-44 md:h-56 object-contain rounded border border-indigo-700/30 bg-slate-950/40"
-                                panelTitle="Zoom DNI"
-                                zoomPanelClassName="w-[420px] h-[280px]"
-                                zoom={3}
-                            />
-                        ) : (
-                            <div className="w-full h-24 rounded border border-dashed border-indigo-700/30 flex items-center justify-center text-[11px] text-slate-500">
-                                Sin captura de DNI (cárgala en el panel de capturas inferior)
+                        <p className="text-[10px] uppercase font-bold text-indigo-300 mb-2">Vista previa DNI cliente</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {/* Anverso */}
+                            <div>
+                                <div className="flex items-center justify-between mb-1">
+                                    <span className="text-[9px] uppercase font-bold text-slate-400">Anverso</span>
+                                    <button
+                                        onClick={() => openCapturaPreview("dni_cliente", "DNI Anverso")}
+                                        disabled={!dniPreview}
+                                        className="h-6 px-2 rounded bg-indigo-900/30 border border-indigo-700/40 text-indigo-300 hover:bg-indigo-800/40 disabled:opacity-40 text-[10px] inline-flex items-center gap-1"
+                                    >
+                                        <ZoomIn className="h-3 w-3" />
+                                        Zoom
+                                    </button>
+                                </div>
+                                {dniPreview ? (
+                                    <HoverZoomImage
+                                        src={dniPreview.dataUrl}
+                                        alt="DNI Anverso"
+                                        onClick={() => openCapturaPreview("dni_cliente", "DNI Anverso")}
+                                        imageClassName="w-full h-36 md:h-44 object-contain rounded border border-indigo-700/30 bg-slate-950/40"
+                                        panelTitle="Zoom DNI Anverso"
+                                        zoomPanelClassName="w-[420px] h-[280px]"
+                                        zoom={3}
+                                    />
+                                ) : (
+                                    <div className="w-full h-20 rounded border border-dashed border-indigo-700/30 flex items-center justify-center text-[10px] text-slate-500">
+                                        Sin captura (panel inferior)
+                                    </div>
+                                )}
                             </div>
-                        )}
+                            {/* Reverso */}
+                            <div>
+                                <div className="flex items-center justify-between mb-1">
+                                    <span className="text-[9px] uppercase font-bold text-slate-400">Reverso</span>
+                                    <button
+                                        onClick={() => openCapturaPreview("dni_cliente_back", "DNI Reverso")}
+                                        disabled={!dniBackPreview}
+                                        className="h-6 px-2 rounded bg-indigo-900/30 border border-indigo-700/40 text-indigo-300 hover:bg-indigo-800/40 disabled:opacity-40 text-[10px] inline-flex items-center gap-1"
+                                    >
+                                        <ZoomIn className="h-3 w-3" />
+                                        Zoom
+                                    </button>
+                                </div>
+                                {dniBackPreview ? (
+                                    <HoverZoomImage
+                                        src={dniBackPreview.dataUrl}
+                                        alt="DNI Reverso"
+                                        onClick={() => openCapturaPreview("dni_cliente_back", "DNI Reverso")}
+                                        imageClassName="w-full h-36 md:h-44 object-contain rounded border border-indigo-700/30 bg-slate-950/40"
+                                        panelTitle="Zoom DNI Reverso"
+                                        zoomPanelClassName="w-[420px] h-[280px]"
+                                        zoom={3}
+                                    />
+                                ) : (
+                                    <div className="w-full h-20 rounded border border-dashed border-indigo-700/30 flex items-center justify-center text-[10px] text-slate-500">
+                                        Sin captura (panel inferior)
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
 
                     {dniLookupMsg && (

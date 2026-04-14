@@ -9,7 +9,8 @@ export type SlotKey =
     | "materiales_despues"
     | "cee_inicial"
     | "ficha_tecnica"
-    | "dni_cliente";
+    | "dni_cliente"
+    | "dni_cliente_back";
 
 interface SlotConfig {
     key: SlotKey;
@@ -32,7 +33,8 @@ export const SLOT_CONFIG: SlotConfig[] = [
     { key: "materiales_despues", label: "MATERIALES DESPUES", hint: "Listado de materiales finales" },
     { key: "cee_inicial", label: "CEE INICIAL", hint: "Captura del certificado inicial" },
     { key: "ficha_tecnica", label: "FICHA TECNICA", hint: "Imagen de ficha del fabricante" },
-    { key: "dni_cliente", label: "DNI CLIENTE", hint: "Foto del DNI para transcripcion segura" },
+    { key: "dni_cliente", label: "DNI ANVERSO", hint: "Foto frontal del DNI del cliente" },
+    { key: "dni_cliente_back", label: "DNI REVERSO", hint: "Foto trasera del DNI del cliente" },
 ];
 
 const HIGH_DETAIL_PREVIEW_SLOTS: SlotKey[] = [
@@ -65,6 +67,7 @@ export function createEmptyCapturasState(): CapturasState {
         cee_inicial: null,
         ficha_tecnica: null,
         dni_cliente: null,
+        dni_cliente_back: null,
     };
 }
 
