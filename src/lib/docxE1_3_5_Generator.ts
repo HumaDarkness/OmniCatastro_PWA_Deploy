@@ -6,21 +6,34 @@ import ImageModule from "open-docxtemplater-image-module";
 import { saveAs } from "file-saver";
 import { VALORES_G } from "./thermalCalculator";
 
-// We import the payload interface, but since we just need the structure, any is fine or we explicitly define it.
-// Assuming CertificateDraftPayload is passed directly.
+// Transparent 1x1 PNG to prevent docxtemplater "reading 'part'" crash on empty loops/tags
+const TRANSPARENT_1X1_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+function getTransparentPixel(): ArrayBuffer {
+    const binary = atob(TRANSPARENT_1X1_PNG_B64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+}
 
 function dataURLToArrayBuffer(dataUrl: string): ArrayBuffer {
+    if (!dataUrl) return getTransparentPixel();
+
     const match = dataUrl.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?(;base64)?,(.*)$/i);
-    if (!match) throw new Error("Invalid dataUrl");
+    if (!match) return getTransparentPixel(); // Fallback
     
     const isBase64 = Boolean(match[2]);
     const payload = match[3] || "";
     
     let binary: string;
-    if (isBase64) {
-        binary = atob(payload);
-    } else {
-        binary = decodeURIComponent(payload);
+    try {
+        if (isBase64) {
+            binary = atob(payload);
+        } else {
+            binary = decodeURIComponent(payload);
+        }
+    } catch {
+        return getTransparentPixel();
     }
     
     const bytes = new Uint8Array(binary.length);
@@ -28,6 +41,10 @@ function dataURLToArrayBuffer(dataUrl: string): ArrayBuffer {
         bytes[i] = binary.charCodeAt(i);
     }
     return bytes.buffer;
+}
+
+function formatES(value: number, decimals: number): string {
+    return (value || 0).toFixed(decimals).replace(".", ",");
 }
 
 export async function generarCertificadoE1_3_5_DOCX(payload: any) {
@@ -45,17 +62,25 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
     // 2. Setup Pizzip and ImageModule
     const zip = new PizZip(arrayBuffer);
     
+    const IMG_SIZES: Record<string, [number, number]> = {
+        imgCerramientosEnvolvente: [470, 394],
+        imgLibreriaAntes:          [316, 249],
+        imgLibreriaDespues:        [405, 319],
+        imgFichaTecnica:           [480, 679],
+        imgCEEAntes:               [362, 297],
+        imgCEEDespues:             [389, 319],
+    };
+
     const imageOptions = {
         centered: false,
-        getImage: (tagValue: string, _tagName: string) => {
-            if (!tagValue) return new ArrayBuffer(0);
-            return dataURLToArrayBuffer(tagValue);
+        getImage: (tagValue: any, _tagName: string) => {
+            if (!tagValue) return getTransparentPixel();
+            if (tagValue instanceof ArrayBuffer) return tagValue;
+            if (typeof tagValue === 'string') return dataURLToArrayBuffer(tagValue);
+            return getTransparentPixel();
         },
-        getSize: (_img: any, _tagValue: string, _tagName: string) => {
-            // Static size for now (approx 16cm wide = ~600px width). 
-            // Better to constrain width and let height be proportional, but setting fixed width helps layout
-            // Format: [width, height] in pixels
-            return [600, 350]; 
+        getSize: (_img: any, _tagValue: string, tagName: string) => {
+            return IMG_SIZES[tagName] || [400, 280]; 
         }
     };
 
@@ -69,20 +94,20 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
 
     // 3. Prepare data map
     const r = payload.resultado;
+    const c = payload.capturas || {};
     
     // Find applied material
-    let espesorMM = "0";
-    let materialNombre = "Aislamiento";
-    let RtMaterial = "0.000";
-    const nuevaCapa = payload.capas?.find((c: any) => c.esNueva) || payload.capas?.find((c: any) => c.es_nueva);
-    if (nuevaCapa && nuevaCapa.material) {
-        espesorMM = (nuevaCapa.espesorMetros * 1000).toFixed(0);
-        materialNombre = nuevaCapa.material.nombre;
-        RtMaterial = nuevaCapa.resistencia.toFixed(3);
-    } else if (nuevaCapa) {
-        espesorMM = (Number(nuevaCapa.espesor) * 1000).toFixed(0);
-        materialNombre = nuevaCapa.nombre;
-        RtMaterial = (Number(nuevaCapa.r_valor) || (Number(nuevaCapa.espesor) / Number(nuevaCapa.lambda_val))).toFixed(3);
+    let espesorMM = 0;
+    let materialNombre = "N/A";
+    const nuevaCapa = payload.capas?.find((capa: any) => capa.esNueva) || payload.capas?.find((capa: any) => capa.es_nueva);
+    if (nuevaCapa) {
+        if (nuevaCapa.material) {
+            espesorMM = nuevaCapa.espesorMetros * 1000;
+            materialNombre = nuevaCapa.material.nombre;
+        } else {
+            espesorMM = Number(nuevaCapa.espesor) * 1000;
+            materialNombre = nuevaCapa.nombre;
+        }
     }
 
     // Prepare address string
@@ -94,55 +119,77 @@ export async function generarCertificadoE1_3_5_DOCX(payload: any) {
     ].filter(Boolean);
     const direccionFull = dirArr.length > 0 ? dirArr.join(", ") : "Dirección no especificada";
 
-    // Mapear capturas al tag esperado en el docx
-    // "ce3x_antes", "ce3x_despues", "materiales_antes", "materiales_despues", "cee_inicial", "ficha_tecnica"
-    const c = payload.capturas || {};
-    
     const factorGNum = VALORES_G[payload.zonaKey] || 0;
 
-    const dataDocx = {
-        clienteNombre: payload.clienteNombre || "CLIENTE NO ESPECIFICADO",
-        direccionInmueble: direccionFull,
-        supEnvolvente: (payload.supEnvolvente || 0).toFixed(2),
-        supActuacion: (payload.supActuacion || 0).toFixed(2),
-        porcentajeAfectado: (r.pct_envolvente || 0).toFixed(2),
-        RtBaseVal: (r.rt_inicial || 0).toFixed(3),
-        RBase: (r.r_mat_inicial || 0).toFixed(2),
-        RtBase: (r.rt_inicial || 0).toFixed(3),
-        UpBase: (r.up_inicial || 0).toFixed(3),
-        areaNhe: (payload.areaNHE || 0).toFixed(2),
-        factorHnhNhe: (r.ratio || 0).toFixed(2),
-        bBase: (r.b_inicial || 0).toFixed(2),
-        UiBase: (r.ui_final || 0).toFixed(2), // ui_final in interface represents Ui after b
-        espesorMM: espesorMM,
-        materialNombre: materialNombre,
-        RtMaterial: RtMaterial,
-        RtFinal: (r.rt_final || 0).toFixed(3),
-        bFinal: (r.b_final || 0).toFixed(2),
-        UpFinal: (r.up_final || 0).toFixed(3),
-        UiFinal: (r.uf_final || 0).toFixed(2),
-        alturaMsnm: payload.alturaMsnm || 0,
-        zonaClimatica: payload.zonaKey || "E1",
-        factorG: factorGNum.toFixed(2),
-        ahorroKwh: Math.round(r.ahorro || payload.ahorroKwh || 0),
-        fechaFirma: new Date().toLocaleDateString("es-ES"),
+    const supEnvolvente = Number(payload.supEnvolvente) || 0;
+    const supActuacion = Number(payload.supActuacion) || 0;
+    const pctAfectado = supEnvolvente > 0 ? (supActuacion / supEnvolvente) * 100 : 0;
 
-        // Imágenes en base64 de las capturas (el DOCX recibe el string, y el ImageModule lo convierte)
-        capturaCE3X_1: c.ce3x_antes?.dataUrl || "",
-        capturaLibreriaAntes: c.materiales_antes?.dataUrl || "",
-        capturaSuperficiales: c.materiales_despues?.dataUrl || "", // Reutilizamos según el mapa
-        capturaLibreriaDespues: c.materiales_despues?.dataUrl || "",
-        capturaCE3X_2: c.ce3x_despues?.dataUrl || "",
+    const dataDocx = {
+        // Bloque 1
+        clienteNombre: (payload.clienteNombre || "").toUpperCase(),
+        direccionInmueble: direccionFull,
+        
+        // Bloque 2
+        supEnvolvente: formatES(supEnvolvente, 2),
+        tipoElemento: payload.tipoElemento || "partición",
+        supActuacion: formatES(supActuacion, 2),
+        porcentajeAfectado: formatES(pctAfectado, 2),
+
+        // Bloque 3
+        rCapasIniciales: formatES(r.r_capas_iniciales || 0, 3),
+        RTi: formatES(r.rt_inicial || 0, 3),
+        Upi: formatES(r.up_inicial || 0, 3),
+
+        // Bloque 4
+        areaNHE: formatES(payload.areaNHE || 0, 2),
+        ratioB: formatES(r.ratio_b || 0, 2),
+        bInicial: formatES(r.b_inicial || 0, 2),
+        Ui: formatES(r.ui || 0, 2),
+
+        // Bloque 5
+        espesorMM: String(Math.round(espesorMM)),
+        materialNombre: materialNombre,
+
+        // Bloque 6
+        rCapasFinales: formatES(r.r_capas_finales || 0, 3),
+        RTf: formatES(r.rt_final || 0, 3),
+        Upf: formatES(r.up_final || 0, 3),
+        bFinal: formatES(r.b_final || 0, 2),
+        Uf: formatES(r.uf || 0, 2),
+
+        // Bloque 7
+        alturaMsnm: String(payload.alturaMsnm || 0),
+        zonaClimatica: payload.zonaKey || "-",
+        factorG: formatES(factorGNum, 2),
+        formulaAE: `1 × (${formatES(r.ui || 0, 2)} − ${formatES(r.uf || 0, 2)}) × ${formatES(supActuacion, 2)} × ${formatES(factorGNum, 2)}`,
+        ahorroKwh: String(Math.round(r.ahorro_kwh || 0)),
+
+        // Bloque 8
+        ciudadFirma: payload.ciudadFirma || "Madrid",
+        fechaFirma: new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }),
+
+        // Capturas
+        imgCerramientosEnvolvente: c.ce3x_antes?.dataUrl || "",
+        imgLibreriaAntes:          c.materiales_antes?.dataUrl || "",
+        imgLibreriaDespues:        c.materiales_despues?.dataUrl || "",
+        imgFichaTecnica:           c.ficha_tecnica?.dataUrl || "",
+        imgCEEAntes:               c.cee_inicial?.dataUrl || "",
+        imgCEEDespues:             c.ce3x_despues?.dataUrl || "" 
     };
 
-    doc.renderAsync ? await doc.renderAsync(dataDocx) : doc.render(dataDocx);
+    try {
+        doc.render(dataDocx);
+    } catch (error: any) {
+        console.error("Error al renderizar DOCX:", error);
+        throw new Error("No se pudo estructurar el documento Word. Revisa que todos los campos y capturas estén completos.");
+    }
 
-    // 4. Output DOCX
-    const out = doc.getZip().generate({
+    const outputObj = doc.getZip().generate({
         type: "blob",
         mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     });
 
-    const filename = `CERTIFICADO_E1_3_5_${payload.clienteNombre || "CLIENTE"}.docx`;
-    saveAs(out, filename);
+    const safeFilename = (payload.clienteNombre || "Certificado").trim().toUpperCase().replace(/\s+/g, "_");
+    saveAs(outputObj, `CERTIFICADO_E1-3-5_${safeFilename}.docx`);
 }
