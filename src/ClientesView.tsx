@@ -24,6 +24,55 @@ function pickFirstString(row: Record<string, unknown>, keys: string[]): string |
     return undefined;
 }
 
+function normalizeNifKey(value: string): string {
+    return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function normalizeStoragePath(rawPath?: string | null): string | undefined {
+    if (!rawPath) return undefined;
+
+    let value = rawPath.trim();
+    if (!value) return undefined;
+
+    value = value.replace(/\\/g, "/");
+
+    try {
+        if (/^https?:\/\//i.test(value)) {
+            value = decodeURIComponent(new URL(value).pathname);
+        }
+    } catch {
+        // Ignore URL parsing errors and use original value.
+    }
+
+    value = value.split("?")[0].split("#")[0];
+
+    const markers = [
+        "/storage/v1/object/public/documents/",
+        "/storage/v1/object/sign/documents/",
+        "/object/public/documents/",
+        "/object/sign/documents/",
+        "/public/documents/",
+        "/documents/",
+        "documents/",
+    ];
+
+    const lower = value.toLowerCase();
+    for (const marker of markers) {
+        const markerLower = marker.toLowerCase();
+        const idx = lower.indexOf(markerLower);
+        if (idx >= 0) {
+            value = value.slice(idx + marker.length);
+            break;
+        }
+    }
+
+    while (value.startsWith("/")) {
+        value = value.slice(1);
+    }
+
+    return value || undefined;
+}
+
 export function ClientesView() {
     const clients = useLiveQuery(async () => {
         try {
@@ -47,10 +96,26 @@ export function ClientesView() {
     const backInputRef = useRef<HTMLInputElement>(null);
 
     async function downloadClientBlob(path?: string | null): Promise<Blob | undefined> {
-        if (!path || !supabase) return undefined;
-        const { data, error } = await supabase.storage.from("documents").download(path);
+        if (!supabase) return undefined;
+        const normalizedPath = normalizeStoragePath(path);
+        if (!normalizedPath) return undefined;
+
+        const { data, error } = await supabase.storage.from("documents").download(normalizedPath);
         if (error || !data) return undefined;
         return data;
+    }
+
+    async function downloadFirstAvailableBlob(paths: Array<string | undefined>): Promise<Blob | undefined> {
+        const seen = new Set<string>();
+        for (const path of paths) {
+            const normalizedPath = normalizeStoragePath(path);
+            if (!normalizedPath || seen.has(normalizedPath)) continue;
+            seen.add(normalizedPath);
+
+            const blob = await downloadClientBlob(normalizedPath);
+            if (blob) return blob;
+        }
+        return undefined;
     }
 
     async function syncCloudClientsToLocal(options?: { silent?: boolean }) {
@@ -106,12 +171,45 @@ export function ClientesView() {
                 return;
             }
 
+            const dniPathIndex = new Map<string, { front?: string; back?: string }>();
+            let indexedDniFiles = 0;
+            const listed = await supabase.storage.from("documents").list(`${organizationId}/clients`, {
+                limit: 1000,
+                offset: 0,
+                sortBy: { column: "name", order: "asc" },
+            });
+
+            if (!listed.error) {
+                for (const file of listed.data ?? []) {
+                    if (!file?.name) continue;
+
+                    const baseName = file.name.replace(/\.[^.]+$/, "");
+                    let side: "front" | "back" | null = null;
+                    if (/_front$/i.test(baseName) || /_anverso$/i.test(baseName)) side = "front";
+                    if (/_back$/i.test(baseName) || /_reverso$/i.test(baseName)) side = "back";
+                    if (!side) continue;
+
+                    const nifPart = baseName
+                        .replace(/(_front|_back)$/i, "")
+                        .replace(/(_anverso|_reverso)$/i, "");
+
+                    const nifKey = normalizeNifKey(nifPart);
+                    if (!nifKey) continue;
+
+                    const current = dniPathIndex.get(nifKey) || {};
+                    current[side] = `${organizationId}/clients/${file.name}`;
+                    dniPathIndex.set(nifKey, current);
+                    indexedDniFiles += 1;
+                }
+            }
+
             let importedCount = 0;
             let withDniImages = 0;
 
             for (const cloudClient of cloudClients) {
                 const nif = pickFirstString(cloudClient, ["dni", "nif", "document_id", "documento"])?.toUpperCase() || "";
                 if (!nif) continue;
+                const nifKey = normalizeNifKey(nif);
 
                 const nombre = [
                     pickFirstString(cloudClient, ["first_name", "nombre"]),
@@ -133,11 +231,44 @@ export function ClientesView() {
 
                 const email = pickFirstString(cloudClient, ["email", "email_address", "correo", "mail"]);
                 const telefono = pickFirstString(cloudClient, ["phone", "telefono", "phone_number", "mobile"]);
-                const dniFrontPath = pickFirstString(cloudClient, ["dni_front_path", "dni_anverso_path", "dni_front"]);
-                const dniBackPath = pickFirstString(cloudClient, ["dni_back_path", "dni_reverso_path", "dni_back"]);
+                const indexedPaths = dniPathIndex.get(nifKey);
 
-                const dniBlobFront = await downloadClientBlob(dniFrontPath);
-                const dniBlobBack = await downloadClientBlob(dniBackPath);
+                const dniFrontPath = pickFirstString(cloudClient, [
+                    "dni_front_path",
+                    "dni_anverso_path",
+                    "dni_front",
+                    "dni_front_url",
+                    "dni_anverso_url",
+                ]);
+                const dniBackPath = pickFirstString(cloudClient, [
+                    "dni_back_path",
+                    "dni_reverso_path",
+                    "dni_back",
+                    "dni_back_url",
+                    "dni_reverso_url",
+                ]);
+
+                const nifLower = nif.toLowerCase();
+                const dniBlobFront = await downloadFirstAvailableBlob([
+                    dniFrontPath,
+                    indexedPaths?.front,
+                    `${organizationId}/clients/${nif}_front.jpg`,
+                    `${organizationId}/clients/${nif}_front.jpeg`,
+                    `${organizationId}/clients/${nif}_front.png`,
+                    `${organizationId}/clients/${nif}_anverso.jpg`,
+                    `${organizationId}/clients/${nifLower}_front.jpg`,
+                    `${organizationId}/clients/${nifLower}_anverso.jpg`,
+                ]);
+                const dniBlobBack = await downloadFirstAvailableBlob([
+                    dniBackPath,
+                    indexedPaths?.back,
+                    `${organizationId}/clients/${nif}_back.jpg`,
+                    `${organizationId}/clients/${nif}_back.jpeg`,
+                    `${organizationId}/clients/${nif}_back.png`,
+                    `${organizationId}/clients/${nif}_reverso.jpg`,
+                    `${organizationId}/clients/${nifLower}_back.jpg`,
+                    `${organizationId}/clients/${nifLower}_reverso.jpg`,
+                ]);
 
                 await db.upsertCliente({
                     nif,
@@ -157,7 +288,10 @@ export function ClientesView() {
                 }
             }
 
-            setSyncMsg(`Clientes importados desde nube: ${importedCount}. Con imágenes DNI: ${withDniImages}.`);
+            const imageHint = withDniImages === 0 && indexedDniFiles === 0
+                ? " No se detectaron archivos DNI en documents/{org}/clients."
+                : "";
+            setSyncMsg(`Clientes importados desde nube: ${importedCount}. Con imágenes DNI: ${withDniImages}.${imageHint}`);
         } catch (error: any) {
             setSyncMsg(`No se pudo sincronizar clientes desde la nube: ${error?.message ?? "Error desconocido"}.`);
         } finally {
@@ -455,6 +589,9 @@ export function ClientesView() {
                                 <span className={`flex items-center gap-1 ${!client.syncedAt ? 'text-amber-500' : 'text-emerald-500'}`}>
                                     <div className={`w-2 h-2 rounded-full ${!client.syncedAt ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
                                     {!client.syncedAt ? 'Pendiente Sync' : 'Sincronizado'}
+                                </span>
+                                <span className="text-slate-500">
+                                    DNI {(client.dniBlobFront ? 1 : 0) + (client.dniBlobBack ? 1 : 0)}/2
                                 </span>
                             </div>
                         </div>
