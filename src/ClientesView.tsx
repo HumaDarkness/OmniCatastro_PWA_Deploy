@@ -515,9 +515,21 @@ export function ClientesView() {
             let withDniImages = 0;
             let unchangedCount = 0;
             const shouldUseHeuristicPaths = indexedDniFiles > 0;
-            const draftDniMap = (!shouldUseHeuristicPaths && targetNifKeys.size > 0)
-                ? await loadDniBlobsFromDrafts(organizationId, targetNifKeys, options)
-                : new Map<string, { front?: Blob; back?: Blob }>();
+            let draftDniMap = new Map<string, { front?: Blob; back?: Blob }>();
+            let draftDniMapLoaded = false;
+
+            const ensureDraftDniMap = async (): Promise<Map<string, { front?: Blob; back?: Blob }>> => {
+                if (draftDniMapLoaded) return draftDniMap;
+                if (targetNifKeys.size > 0) {
+                    draftDniMap = await loadDniBlobsFromDrafts(organizationId, targetNifKeys, options);
+                }
+                draftDniMapLoaded = true;
+                return draftDniMap;
+            };
+
+            if (!shouldUseHeuristicPaths && targetNifKeys.size > 0) {
+                await ensureDraftDniMap();
+            }
 
             for (const cloudClient of cloudClients) {
                 const nif = pickFirstString(cloudClient, ["dni", "nif", "document_id", "documento"])?.toUpperCase() || "";
@@ -617,7 +629,11 @@ export function ClientesView() {
                         : downloadFirstAvailableBlob(backCandidates, { maxAttempts: shouldUseHeuristicPaths ? 3 : 1 }),
                 ]);
 
-                const draftFallback = draftDniMap.get(nifKey);
+                let draftFallback = draftDniMapLoaded ? draftDniMap.get(nifKey) : undefined;
+                if ((!dniBlobFront || !dniBlobBack) && !draftFallback && targetNifKeys.has(nifKey)) {
+                    const loadedDraftMap = await ensureDraftDniMap();
+                    draftFallback = loadedDraftMap.get(nifKey);
+                }
                 const finalDniBlobFront = dniBlobFront ?? draftFallback?.front;
                 const finalDniBlobBack = dniBlobBack ?? draftFallback?.back;
 
