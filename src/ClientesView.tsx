@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect } from "react";
 import { Users, Plus, UploadCloud, Save, ChevronLeft, Image as ImageIcon, Search, Trash2, CloudDownload, Loader2 } from "lucide-react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type ClienteLocal } from "./infra/db/OmniCatastroDB";
+import { clientAggregateV1Repository } from "./infra/clients";
 import { clientSyncService } from "./lib/clientSyncService";
 import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 
@@ -30,6 +31,23 @@ function normalizeNifKey(value: string): string {
 
 function normalizeRcKey(value: string): string {
     return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function splitNameFromFullName(fullName: string): { nombre: string; apellidos: string } {
+    const normalized = fullName.replace(/\s+/g, " ").trim();
+    if (!normalized) {
+        return { nombre: "", apellidos: "" };
+    }
+
+    const parts = normalized.split(" ");
+    if (parts.length <= 1) {
+        return { nombre: normalized, apellidos: "" };
+    }
+
+    return {
+        nombre: parts[0],
+        apellidos: parts.slice(1).join(" "),
+    };
 }
 
 function normalizeStoragePath(rawPath?: string | null): string | undefined {
@@ -335,7 +353,35 @@ export function ClientesView() {
                 throw error;
             }
 
-            const cloudClients = (data ?? []) as Array<Record<string, unknown>>;
+            let cloudClients = (data ?? []) as Array<Record<string, unknown>>;
+
+            // Fallback de lectura canónica v1 para escenarios de cutover o tablas legacy vacías.
+            if (cloudClients.length === 0) {
+                try {
+                    const v1Items = await clientAggregateV1Repository.search({
+                        limit: 500,
+                        includeDeleted: false,
+                    });
+
+                    if (v1Items.length > 0) {
+                        cloudClients = v1Items.map((item) => {
+                            const parsedName = splitNameFromFullName(item.fullName);
+                            return {
+                                dni: item.dniNumber,
+                                first_name: parsedName.nombre,
+                                last_name_1: parsedName.apellidos,
+                            } as Record<string, unknown>;
+                        });
+
+                        if (!options?.silent) {
+                            setSyncMsg(`Sincronizando clientes desde origen canónico v1 (${v1Items.length})...`);
+                        }
+                    }
+                } catch {
+                    // Si v1 aún no está desplegado para este tenant, se mantiene el flujo legacy sin bloquear.
+                }
+            }
+
             if (cloudClients.length === 0) {
                 if (!options?.silent) {
                     setSyncMsg("No hay clientes en la nube para importar.");

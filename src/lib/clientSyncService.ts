@@ -1,6 +1,8 @@
-import { db, type OmniCatastroDB } from '../infra/db/OmniCatastroDB';
+import { db, type ClienteLocal, type OmniCatastroDB } from '../infra/db/OmniCatastroDB';
 import { supabase } from './supabase';
 import { getCurrentOrganizationId } from './supabase';
+import { clientAggregateV1Repository } from '../infra/clients';
+import type { ClientDocumentKindV1 } from '../domain/clients';
 import type { 
   ClientSyncService, 
   EnqueueSyncJobInput, 
@@ -30,6 +32,20 @@ export function computeNextRunAfter(attemptCount: number, now = Date.now()): num
   return now + exp + jitter;
 }
 
+function normalizeDniKey(value?: string | null): string {
+  return (value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function buildClientFullName(client: Pick<ClienteLocal, 'nombre' | 'apellidos' | 'nif'>): string {
+  const fullName = [client.nombre, client.apellidos]
+    .filter((part) => typeof part === 'string' && part.trim().length > 0)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return fullName || normalizeDniKey(client.nif) || 'CLIENTE SIN NOMBRE';
+}
+
 // ── CLASS DEV IMPLEMENTATION ────────────────────────────────────────────────
 
 class OmniClientSyncService implements ClientSyncService {
@@ -37,6 +53,109 @@ class OmniClientSyncService implements ClientSyncService {
 
   constructor(database: OmniCatastroDB) {
     this.db = database;
+  }
+
+  private async findClientIdV1ByDni(dni: string): Promise<string | null> {
+    const dniNormalized = normalizeDniKey(dni);
+    if (!dniNormalized) return null;
+
+    const candidates = await clientAggregateV1Repository.search({
+      query: dniNormalized,
+      limit: 10,
+      includeDeleted: true,
+    });
+
+    const match = candidates.find((item) => normalizeDniKey(item.dniNumber) === dniNormalized);
+    return match?.clientId ?? null;
+  }
+
+  private async syncClientDocumentShadowV1(input: {
+    clientId: string;
+    docKind: ClientDocumentKindV1;
+    blob: Blob;
+    idempotencySeed: string;
+  }): Promise<void> {
+    const mimeType = input.blob.type || 'application/octet-stream';
+    const prepare = await clientAggregateV1Repository.prepareDocumentUpload({
+      clientId: input.clientId,
+      docKind: input.docKind,
+      mimeType,
+      sizeBytes: input.blob.size,
+      idempotencyKey: `${input.idempotencySeed}:prepare`,
+    });
+
+    const { error: uploadError } = await supabase.storage
+      .from(prepare.bucket)
+      .upload(prepare.storagePath, input.blob, {
+        upsert: true,
+        contentType: mimeType,
+      });
+
+    if (uploadError) {
+      throw new Error(`Shadow upload ${input.docKind} failed: ${uploadError.message}`);
+    }
+
+    await clientAggregateV1Repository.commitDocumentUpload({
+      documentId: prepare.documentId,
+      documentVersionId: prepare.documentVersionId,
+      sizeBytes: input.blob.size,
+      idempotencyKey: `${input.idempotencySeed}:commit`,
+    });
+  }
+
+  private async mirrorClientToAggregateV1Shadow(liveClient: ClienteLocal, idempotencySeed: string): Promise<void> {
+    const fullName = buildClientFullName(liveClient);
+    const dniNumber = normalizeDniKey(liveClient.nif) || null;
+
+    let clientId = dniNumber ? await this.findClientIdV1ByDni(dniNumber) : null;
+
+    try {
+      const upsertResult = await clientAggregateV1Repository.upsert({
+        clientId,
+        fullName,
+        dniNumber,
+        idempotencyKey: `${idempotencySeed}:client`,
+      });
+      clientId = upsertResult.clientId;
+    } catch (error: any) {
+      const errorMessage = String(error?.message ?? '');
+      const maybeUniqueDniConflict = /duplicate key value|clients_v1_org_dni_uq|unique constraint/i.test(errorMessage);
+
+      if (!maybeUniqueDniConflict || !dniNumber) {
+        throw error;
+      }
+
+      const existingClientId = await this.findClientIdV1ByDni(dniNumber);
+      if (!existingClientId) throw error;
+
+      const retryResult = await clientAggregateV1Repository.upsert({
+        clientId: existingClientId,
+        fullName,
+        dniNumber,
+        idempotencyKey: `${idempotencySeed}:client-retry`,
+      });
+      clientId = retryResult.clientId;
+    }
+
+    if (!clientId) return;
+
+    if (liveClient.dniBlobFront) {
+      await this.syncClientDocumentShadowV1({
+        clientId,
+        docKind: 'dni_front',
+        blob: liveClient.dniBlobFront,
+        idempotencySeed: `${idempotencySeed}:dni_front`,
+      });
+    }
+
+    if (liveClient.dniBlobBack) {
+      await this.syncClientDocumentShadowV1({
+        clientId,
+        docKind: 'dni_back',
+        blob: liveClient.dniBlobBack,
+        idempotencySeed: `${idempotencySeed}:dni_back`,
+      });
+    }
   }
 
   async enqueue(input: EnqueueSyncJobInput): Promise<number> {
@@ -176,7 +295,11 @@ class OmniClientSyncService implements ClientSyncService {
   }
 
   async executeJob(job: SyncJobRecord): Promise<JobExecutionResult> {
-    const orgId = getCurrentOrganizationId();
+    if (!supabase) {
+      return { ok: false, retryable: true, errorCode: 'NO_SUPABASE', errorMessage: 'Supabase no configurado' };
+    }
+
+    const orgId = await getCurrentOrganizationId();
     if (!orgId) {
       return { ok: false, retryable: true, errorCode: 'NO_ORG_ID', errorMessage: 'Organización no disponible' };
     }
@@ -240,6 +363,14 @@ class OmniClientSyncService implements ClientSyncService {
 
         // Actualizamos que ya fue sincronizado para el local
         await this.db.clientes.update(liveClient.id!, { syncedAt: Date.now() });
+
+        try {
+          const idempotencySeed = String(job.payload?.idempotencyKey ?? `${job.id}_${liveClient.updatedAt}`);
+          await this.mirrorClientToAggregateV1Shadow(liveClient, idempotencySeed);
+        } catch (shadowError: any) {
+          // Shadow mode nunca debe bloquear la ruta legacy estable.
+          console.warn(`SyncJob ${job.id} shadow-v1 warning:`, shadowError?.message ?? shadowError);
+        }
 
         return { ok: true, retryable: false };
 
