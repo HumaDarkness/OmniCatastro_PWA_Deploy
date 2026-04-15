@@ -212,18 +212,27 @@ class OmniClientSyncService implements ClientSyncService {
           updatedDniBackPath = path;
         }
 
-        // Upsert de Metadato Cliente
-        const { error: dbError } = await supabase.from('clients').upsert({
+        // Upsert de Metadato Cliente (compatibilidad con esquemas que no incluyen email/phone)
+        const basePayload = {
           organization_id: orgId,
           dni: liveClient.nif,
           first_name: liveClient.nombre,
           last_name_1: liveClient.apellidos,
-          email: liveClient.email || null,
-          phone: liveClient.telefono || null,
           dni_front_path: updatedDniFrontPath,
           dni_back_path: updatedDniBackPath,
           updated_at: new Date(liveClient.updatedAt).toISOString()
+        };
+
+        let { error: dbError } = await supabase.from('clients').upsert({
+          ...basePayload,
+          email: liveClient.email || null,
+          phone: liveClient.telefono || null,
         }, { onConflict: 'organization_id, dni' });
+
+        if (dbError && /column\s+clients\.(email|phone)\s+does not exist/i.test(dbError.message || '')) {
+          const retry = await supabase.from('clients').upsert(basePayload, { onConflict: 'organization_id, dni' });
+          dbError = retry.error;
+        }
 
         if (dbError) {
           throw new Error(`Database upsert failed: ${dbError.message}`);

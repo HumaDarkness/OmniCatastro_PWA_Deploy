@@ -13,6 +13,17 @@ function normalizeClientSearch(value: string): string {
         .replace(/[^a-z0-9]/g, "");
 }
 
+function pickFirstString(row: Record<string, unknown>, keys: string[]): string | undefined {
+    for (const key of keys) {
+        const value = row[key];
+        if (typeof value === "string") {
+            const normalized = value.trim();
+            if (normalized.length > 0) return normalized;
+        }
+    }
+    return undefined;
+}
+
 export function ClientesView() {
     const clients = useLiveQuery(async () => {
         try {
@@ -62,17 +73,32 @@ export function ClientesView() {
                 return;
             }
 
-            const { data, error } = await supabase
+            let query = supabase
                 .from("clients")
-                .select("dni, first_name, middle_name, last_name_1, last_name_2, email, phone, dni_front_path, dni_back_path")
-                .eq("organization_id", organizationId)
+                .select("*")
                 .limit(500);
+
+            if (organizationId) {
+                query = query.eq("organization_id", organizationId);
+            }
+
+            let { data, error } = await query;
+
+            // Compatibilidad con esquemas legacy sin organization_id en clients.
+            if (error && /organization_id/i.test(error.message || "")) {
+                const retry = await supabase
+                    .from("clients")
+                    .select("*")
+                    .limit(500);
+                data = retry.data;
+                error = retry.error;
+            }
 
             if (error) {
                 throw error;
             }
 
-            const cloudClients = data ?? [];
+            const cloudClients = (data ?? []) as Array<Record<string, unknown>>;
             if (cloudClients.length === 0) {
                 if (!options?.silent) {
                     setSyncMsg("No hay clientes en la nube para importar.");
@@ -84,30 +110,41 @@ export function ClientesView() {
             let withDniImages = 0;
 
             for (const cloudClient of cloudClients) {
-                const nif = String(cloudClient.dni ?? "").trim().toUpperCase();
+                const nif = pickFirstString(cloudClient, ["dni", "nif", "document_id", "documento"])?.toUpperCase() || "";
                 if (!nif) continue;
 
-                const nombre = [cloudClient.first_name, cloudClient.middle_name]
+                const nombre = [
+                    pickFirstString(cloudClient, ["first_name", "nombre"]),
+                    pickFirstString(cloudClient, ["middle_name", "second_name", "nombre_2"]),
+                ]
                     .filter(Boolean)
                     .join(" ")
                     .replace(/\s+/g, " ")
                     .trim();
 
-                const apellidos = [cloudClient.last_name_1, cloudClient.last_name_2]
+                const apellidos = [
+                    pickFirstString(cloudClient, ["last_name_1", "apellido_1", "surname"]),
+                    pickFirstString(cloudClient, ["last_name_2", "apellido_2"]),
+                ]
                     .filter(Boolean)
                     .join(" ")
                     .replace(/\s+/g, " ")
                     .trim();
 
-                const dniBlobFront = await downloadClientBlob(cloudClient.dni_front_path);
-                const dniBlobBack = await downloadClientBlob(cloudClient.dni_back_path);
+                const email = pickFirstString(cloudClient, ["email", "email_address", "correo", "mail"]);
+                const telefono = pickFirstString(cloudClient, ["phone", "telefono", "phone_number", "mobile"]);
+                const dniFrontPath = pickFirstString(cloudClient, ["dni_front_path", "dni_anverso_path", "dni_front"]);
+                const dniBackPath = pickFirstString(cloudClient, ["dni_back_path", "dni_reverso_path", "dni_back"]);
+
+                const dniBlobFront = await downloadClientBlob(dniFrontPath);
+                const dniBlobBack = await downloadClientBlob(dniBackPath);
 
                 await db.upsertCliente({
                     nif,
                     nombre: nombre || nif,
                     apellidos,
-                    email: cloudClient.email || undefined,
-                    telefono: cloudClient.phone || undefined,
+                    email: email || undefined,
+                    telefono: telefono || undefined,
                     fuenteOrigen: "crm",
                     syncedAt: Date.now(),
                     ...(dniBlobFront ? { dniBlobFront } : {}),
