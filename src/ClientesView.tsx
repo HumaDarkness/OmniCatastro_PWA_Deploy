@@ -1,8 +1,9 @@
 import { useState, useRef, useMemo, useEffect } from "react";
-import { Users, Plus, UploadCloud, Save, ChevronLeft, Image as ImageIcon, Search, Trash2 } from "lucide-react";
+import { Users, Plus, UploadCloud, Save, ChevronLeft, Image as ImageIcon, Search, Trash2, CloudDownload, Loader2 } from "lucide-react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type ClienteLocal } from "./infra/db/OmniCatastroDB";
 import { clientSyncService } from "./lib/clientSyncService";
+import { getCurrentOrganizationId, supabase } from "./lib/supabase";
 
 function normalizeClientSearch(value: string): string {
     return value
@@ -24,12 +25,108 @@ export function ClientesView() {
     
     const [editingClient, setEditingClient] = useState<Partial<ClienteLocal> | null>(null);
     const [clientSearch, setClientSearch] = useState("");
+    const [syncingCloud, setSyncingCloud] = useState(false);
+    const [syncMsg, setSyncMsg] = useState<string | null>(null);
+    const autoCloudSyncRef = useRef(false);
 
     const [localFrontPreview, setLocalFrontPreview] = useState<string | null>(null);
     const [localBackPreview, setLocalBackPreview] = useState<string | null>(null);
 
     const frontInputRef = useRef<HTMLInputElement>(null);
     const backInputRef = useRef<HTMLInputElement>(null);
+
+    async function downloadClientBlob(path?: string | null): Promise<Blob | undefined> {
+        if (!path || !supabase) return undefined;
+        const { data, error } = await supabase.storage.from("documents").download(path);
+        if (error || !data) return undefined;
+        return data;
+    }
+
+    async function syncCloudClientsToLocal(options?: { silent?: boolean }) {
+        if (syncingCloud) return;
+
+        setSyncingCloud(true);
+        if (!options?.silent) {
+            setSyncMsg("Sincronizando clientes desde la nube...");
+        }
+
+        try {
+            if (!supabase) {
+                setSyncMsg("Supabase no está configurado en esta sesión.");
+                return;
+            }
+
+            const organizationId = await getCurrentOrganizationId();
+            if (!organizationId) {
+                setSyncMsg("No se encontró organización activa para sincronizar clientes.");
+                return;
+            }
+
+            const { data, error } = await supabase
+                .from("clients")
+                .select("dni, first_name, middle_name, last_name_1, last_name_2, email, phone, dni_front_path, dni_back_path")
+                .eq("organization_id", organizationId)
+                .limit(500);
+
+            if (error) {
+                throw error;
+            }
+
+            const cloudClients = data ?? [];
+            if (cloudClients.length === 0) {
+                if (!options?.silent) {
+                    setSyncMsg("No hay clientes en la nube para importar.");
+                }
+                return;
+            }
+
+            let importedCount = 0;
+            let withDniImages = 0;
+
+            for (const cloudClient of cloudClients) {
+                const nif = String(cloudClient.dni ?? "").trim().toUpperCase();
+                if (!nif) continue;
+
+                const nombre = [cloudClient.first_name, cloudClient.middle_name]
+                    .filter(Boolean)
+                    .join(" ")
+                    .replace(/\s+/g, " ")
+                    .trim();
+
+                const apellidos = [cloudClient.last_name_1, cloudClient.last_name_2]
+                    .filter(Boolean)
+                    .join(" ")
+                    .replace(/\s+/g, " ")
+                    .trim();
+
+                const dniBlobFront = await downloadClientBlob(cloudClient.dni_front_path);
+                const dniBlobBack = await downloadClientBlob(cloudClient.dni_back_path);
+
+                await db.upsertCliente({
+                    nif,
+                    nombre: nombre || nif,
+                    apellidos,
+                    email: cloudClient.email || undefined,
+                    telefono: cloudClient.phone || undefined,
+                    fuenteOrigen: "crm",
+                    syncedAt: Date.now(),
+                    ...(dniBlobFront ? { dniBlobFront } : {}),
+                    ...(dniBlobBack ? { dniBlobBack } : {}),
+                });
+
+                importedCount += 1;
+                if (dniBlobFront || dniBlobBack) {
+                    withDniImages += 1;
+                }
+            }
+
+            setSyncMsg(`Clientes importados desde nube: ${importedCount}. Con imágenes DNI: ${withDniImages}.`);
+        } catch (error: any) {
+            setSyncMsg(`No se pudo sincronizar clientes desde la nube: ${error?.message ?? "Error desconocido"}.`);
+        } finally {
+            setSyncingCloud(false);
+        }
+    }
 
     const filteredClients = useMemo(() => {
         const query = normalizeClientSearch(clientSearch.trim());
@@ -70,6 +167,14 @@ export function ClientesView() {
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [editingClient?.id, editingClient?.dniBlobFront, editingClient?.dniBlobBack]);
+
+    useEffect(() => {
+        if (clients.length > 0) return;
+        if (autoCloudSyncRef.current) return;
+        autoCloudSyncRef.current = true;
+        void syncCloudClientsToLocal({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [clients.length]);
 
     function handleEditClient(client: ClienteLocal) {
         setEditingClient(client);
@@ -112,13 +217,7 @@ export function ClientesView() {
             syncedAt: undefined
         };
 
-        let savedId = editingClient.id;
-
-        if (editingClient.id) {
-            await db.clientes.update(editingClient.id, { ...payload, updatedAt: Date.now() });
-        } else {
-            savedId = await db.clientes.add({ ...payload, createdAt: Date.now(), updatedAt: Date.now() });
-        }
+        const savedId = await db.upsertCliente(payload);
 
         if (savedId !== undefined) {
              clientSyncService.enqueueClienteUpsert(savedId as number, 'user_action').catch(console.error);
@@ -264,14 +363,30 @@ export function ClientesView() {
                         <p className="text-sm text-slate-400 mt-1">Directorio offline en IndexedDB</p>
                     </div>
                 </div>
-                <button
-                    onClick={handleNewClient}
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white font-medium rounded-lg"
-                >
-                    <Plus className="w-5 h-5" />
-                    <span>Nuevo Cliente</span>
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => void syncCloudClientsToLocal()}
+                        disabled={syncingCloud}
+                        className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 font-medium rounded-lg"
+                    >
+                        {syncingCloud ? <Loader2 className="w-5 h-5 animate-spin" /> : <CloudDownload className="w-5 h-5" />}
+                        <span>{syncingCloud ? "Sincronizando..." : "Traer de la nube"}</span>
+                    </button>
+                    <button
+                        onClick={handleNewClient}
+                        className="flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white font-medium rounded-lg"
+                    >
+                        <Plus className="w-5 h-5" />
+                        <span>Nuevo Cliente</span>
+                    </button>
+                </div>
             </div>
+
+            {syncMsg && (
+                <div className="px-6 md:px-8 py-2 border-b border-indigo-500/10 bg-[#0a0a1a] text-sm text-slate-300">
+                    {syncMsg}
+                </div>
+            )}
 
             <div className="px-6 md:px-8 py-3 border-b border-indigo-500/10 bg-[#0a0a1a]">
                  <div className="relative max-w-xl">
@@ -317,7 +432,7 @@ export function ClientesView() {
                         <p className="text-sm text-slate-500 max-w-md">
                             {clientSearch
                                 ? `No se encontraron clientes que coincidan con "${clientSearch}".`
-                                : "Los clientes que guardes desde la Calculadora Térmica o con el botón \"Nuevo Cliente\" aparecerán aquí. Los clientes de la nube se muestran en el contador superior."}
+                                : "Los clientes que guardes desde la Calculadora Térmica o con \"Nuevo Cliente\" aparecerán aquí. También puedes usar \"Traer de la nube\" para cargar el directorio cloud con sus DNIs en local."}
                         </p>
                     </div>
                 )}

@@ -4,7 +4,7 @@ import PizZip from "pizzip";
 // @ts-ignore
 import ImageModule from "docxtemplater-image-module-free";
 import { saveAs } from "file-saver";
-import { VALORES_G, type ResultadoTermico, type CapaMaterial } from "./thermalCalculator";
+import { VALORES_G, type ResultadoTermico, type CapaMaterial, type Caso } from "./thermalCalculator";
 import type { CapturasState } from "../components/CertificadoCapturasPanel";
 
 // ---------------------------------------------------------------------------
@@ -27,6 +27,8 @@ export interface DocxE135Payload {
     areaNHE?: number;
     tipoElemento?: string;
     ciudadFirma?: string;
+    case_i?: Caso;
+    case_f?: Caso;
     capas?: CapaMaterial[];
     capturas?: CapturasState;
     // Campos ignorados pero presentes del payload general
@@ -165,6 +167,30 @@ function calculateAspectRatioFit(srcWidth: number, srcHeight: number, maxWidth: 
     if (!srcWidth || !srcHeight) return [maxWidth, maxHeight];
     const ratio = Math.min(maxWidth / srcWidth, maxHeight / srcHeight);
     return [Math.round(srcWidth * ratio), Math.round(srcHeight * ratio)];
+}
+
+function resolveDocxVentilationCase(caso?: Caso): { casoNumero: "1" | "2"; columna: "izquierda" | "derecha" } {
+    return caso === "ventilado"
+        ? { casoNumero: "2", columna: "derecha" }
+        : { casoNumero: "1", columna: "izquierda" };
+}
+
+function patchVentilationNarrativeInDocx(doc: Docxtemplater, caso?: Caso): void {
+    const xmlFile = doc.getZip().file("word/document.xml");
+    if (!xmlFile) return;
+
+    const originalXml = xmlFile.asText();
+    const ventilation = resolveDocxVentilationCase(caso);
+
+    const columnPattern = /(<w:t xml:space="preserve">a la columna <\/w:t>[\s\S]*?<w:t>)(izquierda|derecha)(<\/w:t>[\s\S]*?<w:t xml:space="preserve"> de la imagen 4\. <\/w:t>)/;
+    const casePattern = /(<w:t xml:space="preserve">CASO <\/w:t>[\s\S]*?<w:t xml:space="preserve">)(1|2)(\s<\/w:t>)/;
+
+    let patchedXml = originalXml.replace(columnPattern, `$1${ventilation.columna}$3`);
+    patchedXml = patchedXml.replace(casePattern, `$1${ventilation.casoNumero}$3`);
+
+    if (patchedXml !== originalXml) {
+        doc.getZip().file("word/document.xml", patchedXml);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +371,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
     // 4. Render and save
     try {
         doc.render(dataDocx);
+        patchVentilationNarrativeInDocx(doc, payload.case_i ?? payload.case_f);
     } catch (error: unknown) {
         console.error("Error al renderizar DOCX:", error);
         if (error instanceof Error) {

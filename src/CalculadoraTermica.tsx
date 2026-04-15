@@ -2027,6 +2027,8 @@ export function CalculadoraTermica() {
                 zonaKey,
                 alturaMsnm: alturaMsnm ? Number(alturaMsnm) : undefined,
                 areaNHE,
+                case_i: caseI,
+                case_f: caseF,
                 capas,
                 resultado: resultadoActual,
                 capturas
