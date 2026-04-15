@@ -105,12 +105,21 @@ export function ClientesView() {
         return data;
     }
 
-    async function downloadFirstAvailableBlob(paths: Array<string | undefined>): Promise<Blob | undefined> {
+    async function downloadFirstAvailableBlob(
+        paths: Array<string | undefined>,
+        options?: { maxAttempts?: number },
+    ): Promise<Blob | undefined> {
         const seen = new Set<string>();
+        const maxAttempts = options?.maxAttempts ?? Number.POSITIVE_INFINITY;
+        let attempts = 0;
+
         for (const path of paths) {
             const normalizedPath = normalizeStoragePath(path);
             if (!normalizedPath || seen.has(normalizedPath)) continue;
             seen.add(normalizedPath);
+
+            attempts += 1;
+            if (attempts > maxAttempts) break;
 
             const blob = await downloadClientBlob(normalizedPath);
             if (blob) return blob;
@@ -178,6 +187,7 @@ export function ClientesView() {
                 offset: 0,
                 sortBy: { column: "name", order: "asc" },
             });
+            const hasIndexedBucket = !listed.error;
 
             if (!listed.error) {
                 for (const file of listed.data ?? []) {
@@ -205,6 +215,7 @@ export function ClientesView() {
 
             let importedCount = 0;
             let withDniImages = 0;
+            const shouldUseHeuristicPaths = hasIndexedBucket && indexedDniFiles > 0;
 
             for (const cloudClient of cloudClients) {
                 const nif = pickFirstString(cloudClient, ["dni", "nif", "document_id", "documento"])?.toUpperCase() || "";
@@ -249,25 +260,35 @@ export function ClientesView() {
                 ]);
 
                 const nifLower = nif.toLowerCase();
-                const dniBlobFront = await downloadFirstAvailableBlob([
+
+                const frontCandidates: Array<string | undefined> = [
                     dniFrontPath,
                     indexedPaths?.front,
-                    `${organizationId}/clients/${nif}_front.jpg`,
-                    `${organizationId}/clients/${nif}_front.jpeg`,
-                    `${organizationId}/clients/${nif}_front.png`,
-                    `${organizationId}/clients/${nif}_anverso.jpg`,
-                    `${organizationId}/clients/${nifLower}_front.jpg`,
-                    `${organizationId}/clients/${nifLower}_anverso.jpg`,
-                ]);
-                const dniBlobBack = await downloadFirstAvailableBlob([
+                ];
+                const backCandidates: Array<string | undefined> = [
                     dniBackPath,
                     indexedPaths?.back,
-                    `${organizationId}/clients/${nif}_back.jpg`,
-                    `${organizationId}/clients/${nif}_back.jpeg`,
-                    `${organizationId}/clients/${nif}_back.png`,
-                    `${organizationId}/clients/${nif}_reverso.jpg`,
-                    `${organizationId}/clients/${nifLower}_back.jpg`,
-                    `${organizationId}/clients/${nifLower}_reverso.jpg`,
+                ];
+
+                // Evita "bucles" de cientos de descargas cuando no hay indexación de archivos DNI.
+                if (shouldUseHeuristicPaths) {
+                    frontCandidates.push(
+                        `${organizationId}/clients/${nif}_front.jpg`,
+                        `${organizationId}/clients/${nif}_front.png`,
+                        `${organizationId}/clients/${nif}_anverso.jpg`,
+                        `${organizationId}/clients/${nifLower}_front.jpg`,
+                    );
+                    backCandidates.push(
+                        `${organizationId}/clients/${nif}_back.jpg`,
+                        `${organizationId}/clients/${nif}_back.png`,
+                        `${organizationId}/clients/${nif}_reverso.jpg`,
+                        `${organizationId}/clients/${nifLower}_back.jpg`,
+                    );
+                }
+
+                const [dniBlobFront, dniBlobBack] = await Promise.all([
+                    downloadFirstAvailableBlob(frontCandidates, { maxAttempts: shouldUseHeuristicPaths ? 4 : 2 }),
+                    downloadFirstAvailableBlob(backCandidates, { maxAttempts: shouldUseHeuristicPaths ? 4 : 2 }),
                 ]);
 
                 await db.upsertCliente({
@@ -285,6 +306,10 @@ export function ClientesView() {
                 importedCount += 1;
                 if (dniBlobFront || dniBlobBack) {
                     withDniImages += 1;
+                }
+
+                if (!options?.silent && importedCount % 12 === 0) {
+                    setSyncMsg(`Sincronizando clientes... ${importedCount}/${cloudClients.length}.`);
                 }
             }
 
