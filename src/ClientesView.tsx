@@ -28,6 +28,10 @@ function normalizeNifKey(value: string): string {
     return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
+function normalizeRcKey(value: string): string {
+    return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
 function normalizeStoragePath(rawPath?: string | null): string | undefined {
     if (!rawPath) return undefined;
 
@@ -127,6 +131,165 @@ export function ClientesView() {
         return undefined;
     }
 
+    async function dataUrlToBlob(dataUrl?: string): Promise<Blob | undefined> {
+        if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return undefined;
+        try {
+            const response = await fetch(dataUrl);
+            if (!response.ok) return undefined;
+            return await response.blob();
+        } catch {
+            return undefined;
+        }
+    }
+
+    async function readWorkPhotosTextByCandidates(candidates: string[]): Promise<string | null> {
+        if (!supabase) return null;
+        for (const candidate of candidates) {
+            const { data, error } = await supabase.storage.from("work_photos").download(candidate);
+            if (!error && data) {
+                try {
+                    return await data.text();
+                } catch {
+                    // Continue to next candidate.
+                }
+            }
+        }
+        return null;
+    }
+
+    async function listDraftRcCandidates(folderPath: string): Promise<string[]> {
+        if (!supabase) return [];
+
+        const candidates = new Set<string>();
+        const pageSize = 200;
+        let offset = 0;
+
+        while (true) {
+            const { data, error } = await supabase.storage.from("work_photos").list(folderPath, {
+                limit: pageSize,
+                offset,
+                sortBy: { column: "name", order: "asc" },
+            });
+
+            if (error || !data || data.length === 0) break;
+
+            for (const entry of data) {
+                const rawName = typeof entry?.name === "string" ? entry.name : "";
+                if (!rawName || !rawName.endsWith(".json")) continue;
+                if (rawName === "_index.json" || rawName === "_archived_index.json" || rawName === "_import_audit.json") {
+                    continue;
+                }
+
+                const stem = rawName.slice(0, -5);
+                const rcCandidate = stem.startsWith("cert_") ? stem.slice(5) : stem;
+                const normalizedRc = normalizeRcKey(rcCandidate);
+                if (normalizedRc) candidates.add(normalizedRc);
+            }
+
+            if (data.length < pageSize) break;
+            offset += pageSize;
+        }
+
+        return Array.from(candidates.values());
+    }
+
+    async function loadDniBlobsFromDrafts(
+        organizationId: string,
+        targetNifKeys: Set<string>,
+        options?: { silent?: boolean },
+    ): Promise<Map<string, { front?: Blob; back?: Blob }>> {
+        const result = new Map<string, { front?: Blob; back?: Blob }>();
+        if (!supabase || targetNifKeys.size === 0) return result;
+
+        const rcSet = new Set<string>();
+
+        const indexText = await readWorkPhotosTextByCandidates([
+            `${organizationId}/certificados/_index.json`,
+            `certificados/${organizationId}/_index.json`,
+        ]);
+
+        if (indexText) {
+            try {
+                const parsed = JSON.parse(indexText) as Array<Record<string, unknown>>;
+                if (Array.isArray(parsed)) {
+                    for (const item of parsed) {
+                        const dniKey = normalizeNifKey(String(item?.clienteDni ?? ""));
+                        if (!dniKey || !targetNifKeys.has(dniKey)) continue;
+                        const rc = normalizeRcKey(String(item?.rc ?? ""));
+                        if (rc) rcSet.add(rc);
+                    }
+                }
+            } catch {
+                // Continue with folder listing fallback.
+            }
+        }
+
+        if (rcSet.size === 0) {
+            const folderCandidates = [`${organizationId}/certificados`, `certificados/${organizationId}`];
+            for (const folder of folderCandidates) {
+                const rcCandidates = await listDraftRcCandidates(folder);
+                for (const rc of rcCandidates) {
+                    rcSet.add(rc);
+                }
+            }
+        }
+
+        if (!options?.silent) {
+            setSyncMsg(`Sin DNI en documents. Revisando borradores cloud (${rcSet.size})...`);
+        }
+
+        const rcCandidates = Array.from(rcSet.values());
+        for (let i = 0; i < rcCandidates.length; i += 1) {
+            const rc = rcCandidates[i];
+
+            const draftText = await readWorkPhotosTextByCandidates([
+                `${organizationId}/certificados/${rc}.json`,
+                `${organizationId}/certificados/cert_${rc}.json`,
+                `certificados/${organizationId}/${rc}.json`,
+                `certificados/${organizationId}/cert_${rc}.json`,
+            ]);
+
+            if (!draftText) continue;
+
+            let parsed: Record<string, unknown> | null = null;
+            try {
+                parsed = JSON.parse(draftText) as Record<string, unknown>;
+            } catch {
+                parsed = null;
+            }
+            if (!parsed) continue;
+
+            const dniKey = normalizeNifKey(String(parsed.clienteDni ?? ""));
+            if (!dniKey || !targetNifKeys.has(dniKey)) continue;
+
+            const current = result.get(dniKey) || {};
+            const captures = (parsed.capturas as Record<string, unknown> | undefined) || undefined;
+            const frontDataUrl = typeof (captures?.dni_cliente as Record<string, unknown> | undefined)?.dataUrl === "string"
+                ? String((captures?.dni_cliente as Record<string, unknown>).dataUrl)
+                : undefined;
+            const backDataUrl = typeof (captures?.dni_cliente_back as Record<string, unknown> | undefined)?.dataUrl === "string"
+                ? String((captures?.dni_cliente_back as Record<string, unknown>).dataUrl)
+                : undefined;
+
+            if (!current.front && frontDataUrl) {
+                current.front = await dataUrlToBlob(frontDataUrl);
+            }
+            if (!current.back && backDataUrl) {
+                current.back = await dataUrlToBlob(backDataUrl);
+            }
+
+            if (current.front || current.back) {
+                result.set(dniKey, current);
+            }
+
+            if (!options?.silent && i > 0 && i % 20 === 0) {
+                setSyncMsg(`Revisando borradores cloud... ${i}/${rcCandidates.length}`);
+            }
+        }
+
+        return result;
+    }
+
     async function syncCloudClientsToLocal(options?: { silent?: boolean }) {
         if (syncingCloud) return;
 
@@ -180,6 +343,13 @@ export function ClientesView() {
                 return;
             }
 
+            const targetNifKeys = new Set<string>();
+            for (const cloudClient of cloudClients) {
+                const nif = pickFirstString(cloudClient, ["dni", "nif", "document_id", "documento"]) || "";
+                const nifKey = normalizeNifKey(nif);
+                if (nifKey) targetNifKeys.add(nifKey);
+            }
+
             const dniPathIndex = new Map<string, { front?: string; back?: string }>();
             let indexedDniFiles = 0;
             const listed = await supabase.storage.from("documents").list(`${organizationId}/clients`, {
@@ -216,6 +386,9 @@ export function ClientesView() {
             let importedCount = 0;
             let withDniImages = 0;
             const shouldUseHeuristicPaths = hasIndexedBucket && indexedDniFiles > 0;
+            const draftDniMap = (!shouldUseHeuristicPaths && targetNifKeys.size > 0)
+                ? await loadDniBlobsFromDrafts(organizationId, targetNifKeys, options)
+                : new Map<string, { front?: Blob; back?: Blob }>();
 
             for (const cloudClient of cloudClients) {
                 const nif = pickFirstString(cloudClient, ["dni", "nif", "document_id", "documento"])?.toUpperCase() || "";
@@ -291,6 +464,10 @@ export function ClientesView() {
                     downloadFirstAvailableBlob(backCandidates, { maxAttempts: shouldUseHeuristicPaths ? 4 : 2 }),
                 ]);
 
+                const draftFallback = draftDniMap.get(nifKey);
+                const finalDniBlobFront = dniBlobFront ?? draftFallback?.front;
+                const finalDniBlobBack = dniBlobBack ?? draftFallback?.back;
+
                 await db.upsertCliente({
                     nif,
                     nombre: nombre || nif,
@@ -299,12 +476,12 @@ export function ClientesView() {
                     telefono: telefono || undefined,
                     fuenteOrigen: "crm",
                     syncedAt: Date.now(),
-                    ...(dniBlobFront ? { dniBlobFront } : {}),
-                    ...(dniBlobBack ? { dniBlobBack } : {}),
+                    ...(finalDniBlobFront ? { dniBlobFront: finalDniBlobFront } : {}),
+                    ...(finalDniBlobBack ? { dniBlobBack: finalDniBlobBack } : {}),
                 });
 
                 importedCount += 1;
-                if (dniBlobFront || dniBlobBack) {
+                if (finalDniBlobFront || finalDniBlobBack) {
                     withDniImages += 1;
                 }
 
