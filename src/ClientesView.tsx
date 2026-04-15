@@ -98,9 +98,9 @@ function normalizeStoragePath(rawPath?: string | null): string | undefined {
 export function ClientesView() {
     const clients = useLiveQuery(async () => {
         try {
-            return await db.clientes.orderBy('updatedAt').reverse().toArray();
+            return await db.clientes.orderBy('nombre').toArray();
         } catch {
-            // Fallback si el índice updatedAt no existe en registros antiguos
+            // Fallback si el índice nombre no existe en registros antiguos
             return await db.clientes.toArray();
         }
     }) || [];
@@ -389,23 +389,50 @@ export function ClientesView() {
                 return;
             }
 
+            const localClientsSnapshot = await db.clientes.toArray();
+            const localByNifKey = new Map<string, ClienteLocal>();
+            for (const localClient of localClientsSnapshot) {
+                const key = normalizeNifKey(localClient.nif || "");
+                if (!key) continue;
+                localByNifKey.set(key, localClient);
+            }
+
             const targetNifKeys = new Set<string>();
             for (const cloudClient of cloudClients) {
                 const nif = pickFirstString(cloudClient, ["dni", "nif", "document_id", "documento"]) || "";
                 const nifKey = normalizeNifKey(nif);
-                if (nifKey) targetNifKeys.add(nifKey);
+                if (!nifKey) continue;
+                const localClient = localByNifKey.get(nifKey);
+                const needsDniRecovery = !localClient?.dniBlobFront || !localClient?.dniBlobBack;
+                if (needsDniRecovery) {
+                    targetNifKeys.add(nifKey);
+                }
             }
 
             const dniPathIndex = new Map<string, { front?: string; back?: string }>();
             let indexedDniFiles = 0;
-            const listed = await supabase.storage.from("documents").list(`${organizationId}/clients`, {
-                limit: 1000,
-                offset: 0,
-                sortBy: { column: "name", order: "asc" },
-            });
-            const hasIndexedBucket = !listed.error;
+            const indexPrefixes = [
+                `${organizationId}/clients`,
+                "[object Promise]/clients",
+                "clients",
+            ];
+            const listErrors: string[] = [];
+            let listedPrefixCount = 0;
 
-            if (!listed.error) {
+            for (const prefix of indexPrefixes) {
+                const listed = await supabase.storage.from("documents").list(prefix, {
+                    limit: 1000,
+                    offset: 0,
+                    sortBy: { column: "name", order: "asc" },
+                });
+
+                if (listed.error) {
+                    listErrors.push(`${prefix}: ${listed.error.message}`);
+                    continue;
+                }
+
+                listedPrefixCount += 1;
+
                 for (const file of listed.data ?? []) {
                     if (!file?.name) continue;
 
@@ -422,16 +449,25 @@ export function ClientesView() {
                     const nifKey = normalizeNifKey(nifPart);
                     if (!nifKey) continue;
 
+                    const fullPath = `${prefix}/${file.name}`
+                        .replace(/\\/g, "/")
+                        .replace(/^\/+/, "")
+                        .replace(/\/{2,}/g, "/");
+
                     const current = dniPathIndex.get(nifKey) || {};
-                    current[side] = `${organizationId}/clients/${file.name}`;
+                    if (!current[side]) {
+                        current[side] = fullPath;
+                    }
                     dniPathIndex.set(nifKey, current);
                     indexedDniFiles += 1;
                 }
             }
 
+            let processedCount = 0;
             let importedCount = 0;
             let withDniImages = 0;
-            const shouldUseHeuristicPaths = hasIndexedBucket && indexedDniFiles > 0;
+            let unchangedCount = 0;
+            const shouldUseHeuristicPaths = indexedDniFiles > 0;
             const draftDniMap = (!shouldUseHeuristicPaths && targetNifKeys.size > 0)
                 ? await loadDniBlobsFromDrafts(organizationId, targetNifKeys, options)
                 : new Map<string, { front?: Blob; back?: Blob }>();
@@ -440,6 +476,9 @@ export function ClientesView() {
                 const nif = pickFirstString(cloudClient, ["dni", "nif", "document_id", "documento"])?.toUpperCase() || "";
                 if (!nif) continue;
                 const nifKey = normalizeNifKey(nif);
+                const localClient = localByNifKey.get(nifKey);
+
+                processedCount += 1;
 
                 const nombre = [
                     pickFirstString(cloudClient, ["first_name", "nombre"]),
@@ -496,50 +535,87 @@ export function ClientesView() {
                         `${organizationId}/clients/${nif}_front.png`,
                         `${organizationId}/clients/${nif}_anverso.jpg`,
                         `${organizationId}/clients/${nifLower}_front.jpg`,
+                        `[object Promise]/clients/${nif}_front.jpg`,
+                        `[object Promise]/clients/${nif}_front.png`,
+                        `clients/${nif}_front.jpg`,
                     );
                     backCandidates.push(
                         `${organizationId}/clients/${nif}_back.jpg`,
                         `${organizationId}/clients/${nif}_back.png`,
                         `${organizationId}/clients/${nif}_reverso.jpg`,
                         `${organizationId}/clients/${nifLower}_back.jpg`,
+                        `[object Promise]/clients/${nif}_back.jpg`,
+                        `[object Promise]/clients/${nif}_back.png`,
+                        `clients/${nif}_back.jpg`,
                     );
                 }
 
+                const existingFront = localClient?.dniBlobFront;
+                const existingBack = localClient?.dniBlobBack;
+
                 const [dniBlobFront, dniBlobBack] = await Promise.all([
-                    downloadFirstAvailableBlob(frontCandidates, { maxAttempts: shouldUseHeuristicPaths ? 4 : 2 }),
-                    downloadFirstAvailableBlob(backCandidates, { maxAttempts: shouldUseHeuristicPaths ? 4 : 2 }),
+                    existingFront
+                        ? Promise.resolve(existingFront)
+                        : downloadFirstAvailableBlob(frontCandidates, { maxAttempts: shouldUseHeuristicPaths ? 3 : 1 }),
+                    existingBack
+                        ? Promise.resolve(existingBack)
+                        : downloadFirstAvailableBlob(backCandidates, { maxAttempts: shouldUseHeuristicPaths ? 3 : 1 }),
                 ]);
 
                 const draftFallback = draftDniMap.get(nifKey);
                 const finalDniBlobFront = dniBlobFront ?? draftFallback?.front;
                 const finalDniBlobBack = dniBlobBack ?? draftFallback?.back;
 
-                await db.upsertCliente({
-                    nif,
-                    nombre: nombre || nif,
-                    apellidos,
-                    email: email || undefined,
-                    telefono: telefono || undefined,
-                    fuenteOrigen: "crm",
-                    syncedAt: Date.now(),
-                    ...(finalDniBlobFront ? { dniBlobFront: finalDniBlobFront } : {}),
-                    ...(finalDniBlobBack ? { dniBlobBack: finalDniBlobBack } : {}),
-                });
+                const normalizedNombre = nombre || nif;
+                const normalizedEmail = email || undefined;
+                const normalizedTelefono = telefono || undefined;
 
-                importedCount += 1;
+                const hasNewFront = !!finalDniBlobFront && !existingFront;
+                const hasNewBack = !!finalDniBlobBack && !existingBack;
+                const metadataChanged = !localClient
+                    || localClient.nombre !== normalizedNombre
+                    || localClient.apellidos !== apellidos
+                    || localClient.email !== normalizedEmail
+                    || localClient.telefono !== normalizedTelefono
+                    || localClient.fuenteOrigen !== "crm";
+
+                const shouldPersist = metadataChanged || hasNewFront || hasNewBack || !localClient?.syncedAt;
+
+                if (shouldPersist) {
+                    await db.upsertCliente({
+                        nif,
+                        nombre: normalizedNombre,
+                        apellidos,
+                        email: normalizedEmail,
+                        telefono: normalizedTelefono,
+                        fuenteOrigen: "crm",
+                        syncedAt: Date.now(),
+                        ...(finalDniBlobFront ? { dniBlobFront: finalDniBlobFront } : {}),
+                        ...(finalDniBlobBack ? { dniBlobBack: finalDniBlobBack } : {}),
+                    });
+                    importedCount += 1;
+                } else {
+                    unchangedCount += 1;
+                }
+
                 if (finalDniBlobFront || finalDniBlobBack) {
                     withDniImages += 1;
                 }
 
-                if (!options?.silent && importedCount % 12 === 0) {
-                    setSyncMsg(`Sincronizando clientes... ${importedCount}/${cloudClients.length}.`);
+                if (!options?.silent && processedCount % 50 === 0) {
+                    setSyncMsg(`Sincronizando clientes... ${processedCount}/${cloudClients.length} (actualizados: ${importedCount}).`);
                 }
             }
 
-            const imageHint = withDniImages === 0 && indexedDniFiles === 0
-                ? " No se detectaron archivos DNI en documents/{org}/clients."
+            const imageHint = withDniImages === 0
+                ? listErrors.length > 0
+                    ? ` No se pudo listar documents en algunos prefijos (${listErrors[0]}).`
+                    : indexedDniFiles === 0
+                        ? " No se detectaron archivos DNI en documents/{org}/clients."
+                        : ""
                 : "";
-            setSyncMsg(`Clientes importados desde nube: ${importedCount}. Con imágenes DNI: ${withDniImages}.${imageHint}`);
+            const listedHint = listedPrefixCount > 0 ? ` Prefijos indexados: ${listedPrefixCount}.` : "";
+            setSyncMsg(`Clientes revisados: ${processedCount}. Actualizados local: ${importedCount}. Sin cambios: ${unchangedCount}. Con imágenes DNI: ${withDniImages}.${imageHint}${listedHint}`);
         } catch (error: any) {
             setSyncMsg(`No se pudo sincronizar clientes desde la nube: ${error?.message ?? "Error desconocido"}.`);
         } finally {
