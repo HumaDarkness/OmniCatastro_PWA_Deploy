@@ -809,6 +809,52 @@ interface ExpedienteMvpSyncMeta {
     versionToken: string;
 }
 
+interface CalcFingerprintInput {
+    capas: CapaMaterial[];
+    areaHNH: number;
+    areaNHE: number;
+    supActuacion: number;
+    supEnvolvente: number;
+    zonaKey: string;
+    scenarioI: Scenario;
+    scenarioF: Scenario;
+    caseI: Caso;
+    caseF: Caso;
+    modoCE3X: boolean;
+    overrideUi: string;
+    overrideUf: string;
+}
+
+function normalizeCalcFingerprintNumber(value: number | string | undefined | null): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 0;
+    return roundTo(parsed, 6);
+}
+
+function buildCalcFingerprint(input: CalcFingerprintInput): string {
+    return JSON.stringify({
+        capas: input.capas.map((capa) => ({
+            nombre: (capa.nombre || "").trim(),
+            espesor: normalizeCalcFingerprintNumber(capa.espesor),
+            lambda_val: normalizeCalcFingerprintNumber(capa.lambda_val),
+            r_valor: normalizeCalcFingerprintNumber(capa.r_valor),
+            es_nueva: !!capa.es_nueva,
+        })),
+        areaHNH: normalizeCalcFingerprintNumber(input.areaHNH),
+        areaNHE: normalizeCalcFingerprintNumber(input.areaNHE),
+        supActuacion: normalizeCalcFingerprintNumber(input.supActuacion),
+        supEnvolvente: normalizeCalcFingerprintNumber(input.supEnvolvente),
+        zonaKey: input.zonaKey,
+        scenarioI: input.scenarioI,
+        scenarioF: input.scenarioF,
+        caseI: input.caseI,
+        caseF: input.caseF,
+        modoCE3X: !!input.modoCE3X,
+        overrideUi: input.overrideUi.trim(),
+        overrideUf: input.overrideUf.trim(),
+    });
+}
+
 export function CalculadoraTermica() {
     const { isExperto } = useModoExperto();
     const [isLotesSheetOpen, setIsLotesSheetOpen] = useState(false);
@@ -829,6 +875,7 @@ export function CalculadoraTermica() {
     const [zonaKey, setZonaKey] = useState("D3");
     const [alturaMsnm, setAlturaMsnm] = useState<string>(""); // Added
     const [resultado, setResultado] = useState<ResultadoTermico | null>(null);
+    const [lastCalculatedFingerprint, setLastCalculatedFingerprint] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
     const [intelliaTemplateCopied, setIntelliaTemplateCopied] = useState(false);
     const [cloudReportText, setCloudReportText] = useState<string | null>(null);
@@ -896,6 +943,42 @@ export function CalculadoraTermica() {
     const latestResultadoRef = useRef<ResultadoTermico | null>(null);
     const cancelBatchRef = useRef(false);
     const expedienteMvpMetaRef = useRef<Record<string, ExpedienteMvpSyncMeta>>({});
+
+    const currentCalcFingerprint = useMemo(() => buildCalcFingerprint({
+        capas,
+        areaHNH,
+        areaNHE,
+        supActuacion,
+        supEnvolvente,
+        zonaKey,
+        scenarioI,
+        scenarioF,
+        caseI,
+        caseF,
+        modoCE3X,
+        overrideUi,
+        overrideUf,
+    }), [
+        capas,
+        areaHNH,
+        areaNHE,
+        supActuacion,
+        supEnvolvente,
+        zonaKey,
+        scenarioI,
+        scenarioF,
+        caseI,
+        caseF,
+        modoCE3X,
+        overrideUi,
+        overrideUf,
+    ]);
+
+    const resultadoDesactualizado = Boolean(resultado) && currentCalcFingerprint !== lastCalculatedFingerprint;
+    const outputActionsDisabled = isCalculating || resultadoDesactualizado;
+    const outputActionDisabledTitle = resultadoDesactualizado
+        ? "Resultado desactualizado: vuelve a calcular antes de generar o copiar salidas."
+        : "Calculando... espera a que finalice el proceso.";
 
     useEffect(() => {
         latestResultadoRef.current = resultado;
@@ -1191,6 +1274,7 @@ export function CalculadoraTermica() {
         setSoloFavoritosPorCapa({});
         setShowAdvancedByLayer({});
         setResultado(null);
+        setLastCalculatedFingerprint(null);
     };
 
     const applyCommonLayerSet = (setId: CommonLayerSetId) => {
@@ -1685,6 +1769,7 @@ export function CalculadoraTermica() {
         setCloudReportText(null);
         setCloudReportCopied(false);
         try {
+            const calculationFingerprint = currentCalcFingerprint;
             const gValue = VALORES_G[zonaKey] ?? 61;
             const applyOverrides = (base: ResultadoTermico): ResultadoTermico => {
                 const parsedUi = Number.parseFloat(overrideUi);
@@ -1718,6 +1803,7 @@ export function CalculadoraTermica() {
                 const nextResultado = applyOverrides(localRes);
                 latestResultadoRef.current = nextResultado;
                 setResultado(nextResultado);
+                setLastCalculatedFingerprint(calculationFingerprint);
             };
 
             if (isCloudCalculation) {
@@ -1745,6 +1831,7 @@ export function CalculadoraTermica() {
                     const nextResultado = applyOverrides(resTermico);
                     latestResultadoRef.current = nextResultado;
                     setResultado(nextResultado);
+                    setLastCalculatedFingerprint(calculationFingerprint);
                     return;
                 } catch (error) {
                     const rawMessage = error instanceof Error ? error.message : "sin detalle";
@@ -1770,12 +1857,24 @@ export function CalculadoraTermica() {
 
     const getResultadoActual = () => latestResultadoRef.current ?? resultado;
 
-    const copiarInforme = async () => {
+    const getResultadoActualizado = (actionLabel: string): ResultadoTermico | null => {
         const resultadoActual = getResultadoActual();
         if (!resultadoActual) {
-            setDraftError("Primero calcula el expediente antes de copiar el informe.");
-            return;
+            setDraftError(`Primero calcula el expediente antes de ${actionLabel}.`);
+            return null;
         }
+
+        if (resultadoDesactualizado) {
+            setDraftError(`Has modificado datos tras el último cálculo. Pulsa "Calcular Ahorro Energético" antes de ${actionLabel}.`);
+            return null;
+        }
+
+        return resultadoActual;
+    };
+
+    const copiarInforme = async () => {
+        const resultadoActual = getResultadoActualizado("copiar el informe");
+        if (!resultadoActual) return;
 
         const gValue = VALORES_G[zonaKey] ?? 61;
         let texto = generarInformeTexto({
@@ -1841,6 +1940,10 @@ export function CalculadoraTermica() {
     };
 
     const copiarInformeCloud = async () => {
+        if (!getResultadoActualizado("copiar el informe cloud")) {
+            return;
+        }
+
         if (!cloudReportText) {
             setDraftError("No hay informe cloud disponible todavía. Ejecuta un cálculo en modo On-Cloud.");
             return;
@@ -1907,11 +2010,8 @@ export function CalculadoraTermica() {
     };
 
     const copiarPlantillaIntellia = async () => {
-        const resultadoActual = getResultadoActual();
-        if (!resultadoActual) {
-            setDraftError("Primero calcula el expediente para generar la plantilla INTELLIA.");
-            return;
-        }
+        const resultadoActual = getResultadoActualizado("generar la plantilla INTELLIA");
+        if (!resultadoActual) return;
 
         const plantilla = buildIntelliaCertificateText(buildIntelliaTemplateInput(resultadoActual));
 
@@ -1980,11 +2080,8 @@ export function CalculadoraTermica() {
     };
 
     const generarCertificadoIntelliaPDF = async () => {
-        const resultadoActual = getResultadoActual();
-        if (!resultadoActual) {
-            setDraftError("Primero calcula el expediente para generar el PDF INTELLIA.");
-            return;
-        }
+        const resultadoActual = getResultadoActualizado("generar el PDF INTELLIA");
+        if (!resultadoActual) return;
 
         try {
             const input = buildIntelliaTemplateInput(resultadoActual);
@@ -2003,11 +2100,8 @@ export function CalculadoraTermica() {
     };
 
     const generarDocumentoWord = async () => {
-        const resultadoActual = getResultadoActual();
-        if (!resultadoActual) {
-            setDraftError("Primero calcula el expediente para generar el Word.");
-            return;
-        }
+        const resultadoActual = getResultadoActualizado("generar el Word");
+        if (!resultadoActual) return;
 
         try {
             setDraftMsg("Generando documento Word... (esto puede tardar unos segundos si hay imágenes grandes)");
@@ -2043,11 +2137,8 @@ export function CalculadoraTermica() {
     };
 
     const generarAnexoE1PDF = async () => {
-        const resultadoActual = getResultadoActual();
-        if (!resultadoActual) {
-            setDraftError("Primero calcula el expediente para generar el Anexo E.1.");
-            return;
-        }
+        const resultadoActual = getResultadoActualizado("generar el Anexo E.1");
+        if (!resultadoActual) return;
 
         try {
             const rcForName = normalizeRc(expedienteRc) || "SIN_RC";
@@ -3617,6 +3708,25 @@ export function CalculadoraTermica() {
         setSoloFavoritosPorCapa(payload.soloFavoritosPorCapa || {});
         setCapturas(payload.capturas || createEmptyCapturasState());
         setResultado(payload.resultado ?? null);
+        setLastCalculatedFingerprint(
+            payload.resultado
+                ? buildCalcFingerprint({
+                    capas: Array.isArray(payload.capas) && payload.capas.length > 0 ? payload.capas : cloneInitialCapas(),
+                    areaHNH: payload.areaHNH ?? 25,
+                    areaNHE: payload.areaNHE ?? 25,
+                    supActuacion: payload.supActuacion ?? 25,
+                    supEnvolvente: payload.supEnvolvente ?? 120,
+                    zonaKey: payload.zonaKey || "D3",
+                    scenarioI: payload.scenarioI || "nada_aislado",
+                    scenarioF: payload.scenarioF || "particion_aislada",
+                    caseI: payload.caseI || "estanco",
+                    caseF: payload.caseF || "estanco",
+                    modoCE3X: !!payload.modoCE3X,
+                    overrideUi: payload.overrideUi || "",
+                    overrideUf: payload.overrideUf || "",
+                })
+                : null,
+        );
         setSupOpacos(payload.supOpacos ?? 0);
         setSupHuecos(payload.supHuecos ?? 0);
         setElementosOpacosList(payload.elementosOpacosList || []);
@@ -3923,6 +4033,7 @@ export function CalculadoraTermica() {
         setClienteDireccionDni("");
         setCapturas(createEmptyCapturasState());
         setResultado(null);
+        setLastCalculatedFingerprint(null);
         setXmlFileName("");
         setXmlImportMsg("Nuevo expediente preparado. Define RC y comienza el siguiente certificado.");
         setDraftMsg(null);
@@ -5606,34 +5717,57 @@ export function CalculadoraTermica() {
                                 </CardContent>
                             </Card>
 
+                            {resultadoDesactualizado && (
+                                <Card className="bg-amber-950/40 border-amber-500/40">
+                                    <CardContent className="p-3 text-xs text-amber-200 flex items-center gap-2">
+                                        <Info className="h-4 w-4 text-amber-300 shrink-0" />
+                                        <span>
+                                            Resultado desactualizado: has cambiado datos después del último cálculo. Pulsa "Calcular Ahorro Energético" antes de copiar o generar documentos.
+                                        </span>
+                                    </CardContent>
+                                </Card>
+                            )}
+
                             {/* Botones de acción */}
                             <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-2">
                                 <button
                                     onClick={() => void copiarInforme()}
-                                    className="h-11 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all flex items-center justify-center gap-2 ring-1 ring-slate-700"
+                                    disabled={outputActionsDisabled}
+                                    className="h-11 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all flex items-center justify-center gap-2 ring-1 ring-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={outputActionsDisabled ? outputActionDisabledTitle : "Copiar informe textual local"}
                                 >
                                     {copied ? <Check className="h-5 w-5 text-emerald-400" /> : <Copy className="h-5 w-5" />}
                                     {copied ? "¡Copiado!" : "Copiar informe"}
                                 </button>
                                 <button
                                     onClick={() => void copiarInformeCloud()}
-                                    disabled={!cloudReportText}
-                                    className="h-11 rounded-md bg-cyan-700/20 hover:bg-cyan-700/40 text-cyan-300 hover:text-cyan-200 transition-all flex items-center justify-center gap-2 ring-1 ring-cyan-500/40 disabled:opacity-40"
-                                    title={cloudReportText ? "Copia informe textual generado por backend cloud" : "Disponible tras calcular en modo On-Cloud"}
+                                    disabled={outputActionsDisabled || !cloudReportText}
+                                    className="h-11 rounded-md bg-cyan-700/20 hover:bg-cyan-700/40 text-cyan-300 hover:text-cyan-200 transition-all flex items-center justify-center gap-2 ring-1 ring-cyan-500/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={
+                                        outputActionsDisabled
+                                            ? outputActionDisabledTitle
+                                            : cloudReportText
+                                                ? "Copia informe textual generado por backend cloud"
+                                                : "Disponible tras calcular en modo On-Cloud"
+                                    }
                                 >
                                     {cloudReportCopied ? <Check className="h-5 w-5 text-emerald-400" /> : <UploadCloud className="h-5 w-5" />}
                                     {cloudReportCopied ? "Cloud copiado" : "Informe Cloud"}
                                 </button>
                                 <button
                                     onClick={copiarPlantillaIntellia}
-                                    className="h-11 rounded-md bg-violet-600/20 hover:bg-violet-600/40 text-violet-300 hover:text-violet-200 transition-all flex items-center justify-center gap-2 ring-1 ring-violet-500/50"
+                                    disabled={outputActionsDisabled}
+                                    className="h-11 rounded-md bg-violet-600/20 hover:bg-violet-600/40 text-violet-300 hover:text-violet-200 transition-all flex items-center justify-center gap-2 ring-1 ring-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={outputActionsDisabled ? outputActionDisabledTitle : "Copiar plantilla INTELLIA"}
                                 >
                                     {intelliaTemplateCopied ? <Check className="h-5 w-5 text-emerald-400" /> : <FileCode className="h-5 w-5" />}
                                     {intelliaTemplateCopied ? "Plantilla copiada" : "Plantilla INTELLIA"}
                                 </button>
                                 <button
                                     onClick={() => void generarCertificadoIntelliaPDF()}
-                                    className="h-11 rounded-md bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 hover:text-emerald-200 transition-all flex items-center justify-center gap-2 ring-1 ring-emerald-500/50"
+                                    disabled={outputActionsDisabled}
+                                    className="h-11 rounded-md bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 hover:text-emerald-200 transition-all flex items-center justify-center gap-2 ring-1 ring-emerald-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={outputActionsDisabled ? outputActionDisabledTitle : "Generar certificado PDF INTELLIA"}
                                 >
                                     <FileDown className="h-5 w-5" />
                                     Generar PDF INTELLIA
@@ -5647,13 +5781,17 @@ export function CalculadoraTermica() {
                                 </button>
                                 <button
                                     onClick={() => void generarAnexoE1PDF()}
-                                    className="h-11 rounded-md bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 hover:text-blue-300 transition-all flex items-center justify-center gap-2 ring-1 ring-blue-500/50"
+                                    disabled={outputActionsDisabled}
+                                    className="h-11 rounded-md bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 hover:text-blue-300 transition-all flex items-center justify-center gap-2 ring-1 ring-blue-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={outputActionsDisabled ? outputActionDisabledTitle : "Generar Anexo E.1 en PDF"}
                                 >
                                     Generar Anexo E.1
                                 </button>
                                 <button
                                     onClick={() => void generarDocumentoWord()}
-                                    className="h-11 rounded-md bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 hover:text-indigo-300 transition-all flex items-center justify-center gap-2 ring-1 ring-indigo-500/50"
+                                    disabled={outputActionsDisabled}
+                                    className="h-11 rounded-md bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 hover:text-indigo-300 transition-all flex items-center justify-center gap-2 ring-1 ring-indigo-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={outputActionsDisabled ? outputActionDisabledTitle : "Generar certificado en Word (DOCX)"}
                                 >
                                     Generar Word DOCX
                                 </button>
