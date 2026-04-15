@@ -33,6 +33,44 @@ function normalizeRcKey(value: string): string {
     return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
+function extractDraftDniKey(row: Record<string, unknown>): string {
+    return normalizeNifKey(
+        pickFirstString(row, [
+            "clienteDni",
+            "clienteNif",
+            "cliente_dni",
+            "cliente_nif",
+            "dni",
+            "nif",
+            "documento",
+            "document_id",
+        ]) || "",
+    );
+}
+
+function extractCaptureDataUrl(
+    captures: Record<string, unknown> | undefined,
+    keys: string[],
+): string | undefined {
+    if (!captures) return undefined;
+
+    for (const key of keys) {
+        const value = captures[key];
+        if (typeof value === "string" && value.startsWith("data:")) {
+            return value;
+        }
+
+        if (value && typeof value === "object") {
+            const dataUrl = (value as Record<string, unknown>).dataUrl;
+            if (typeof dataUrl === "string" && dataUrl.startsWith("data:")) {
+                return dataUrl;
+            }
+        }
+    }
+
+    return undefined;
+}
+
 function splitNameFromFullName(fullName: string): { nombre: string; apellidos: string } {
     const normalized = fullName.replace(/\s+/g, " ").trim();
     if (!normalized) {
@@ -263,6 +301,8 @@ export function ClientesView() {
         const result = new Map<string, { front?: Blob; back?: Blob }>();
         if (!supabase || targetNifKeys.size === 0) return result;
 
+        const folderCandidates = [`${organizationId}/certificados`, `certificados/${organizationId}`];
+
         const rcSet = new Set<string>();
 
         const indexText = await readWorkPhotosTextByCandidates([
@@ -275,9 +315,11 @@ export function ClientesView() {
                 const parsed = JSON.parse(indexText) as Array<Record<string, unknown>>;
                 if (Array.isArray(parsed)) {
                     for (const item of parsed) {
-                        const dniKey = normalizeNifKey(String(item?.clienteDni ?? ""));
+                        const dniKey = extractDraftDniKey(item);
                         if (!dniKey || !targetNifKeys.has(dniKey)) continue;
-                        const rc = normalizeRcKey(String(item?.rc ?? ""));
+                        const rc = normalizeRcKey(
+                            pickFirstString(item, ["rc", "referenciaCatastral", "referencia_catastral"]) || "",
+                        );
                         if (rc) rcSet.add(rc);
                     }
                 }
@@ -287,7 +329,6 @@ export function ClientesView() {
         }
 
         if (rcSet.size === 0) {
-            const folderCandidates = [`${organizationId}/certificados`, `certificados/${organizationId}`];
             for (const folder of folderCandidates) {
                 const rcCandidates = await listDraftRcCandidates(folder);
                 for (const rc of rcCandidates) {
@@ -300,53 +341,94 @@ export function ClientesView() {
             setSyncMsg(`Sin DNI en documents. Revisando borradores cloud (${rcSet.size})...`);
         }
 
-        const rcCandidates = Array.from(rcSet.values());
-        for (let i = 0; i < rcCandidates.length; i += 1) {
-            const rc = rcCandidates[i];
+        const processedRc = new Set<string>();
 
-            const draftText = await readWorkPhotosTextByCandidates([
-                `${organizationId}/certificados/${rc}.json`,
-                `${organizationId}/certificados/cert_${rc}.json`,
-                `certificados/${organizationId}/${rc}.json`,
-                `certificados/${organizationId}/cert_${rc}.json`,
-            ]);
+        const processRcCandidates = async (rcCandidates: string[]) => {
+            for (let i = 0; i < rcCandidates.length; i += 1) {
+                if (result.size >= targetNifKeys.size) break;
 
-            if (!draftText) continue;
+                const rc = normalizeRcKey(rcCandidates[i]);
+                if (!rc || processedRc.has(rc)) continue;
+                processedRc.add(rc);
 
-            let parsed: Record<string, unknown> | null = null;
-            try {
-                parsed = JSON.parse(draftText) as Record<string, unknown>;
-            } catch {
-                parsed = null;
+                const draftText = await readWorkPhotosTextByCandidates([
+                    `${organizationId}/certificados/${rc}.json`,
+                    `${organizationId}/certificados/cert_${rc}.json`,
+                    `certificados/${organizationId}/${rc}.json`,
+                    `certificados/${organizationId}/cert_${rc}.json`,
+                ]);
+
+                if (!draftText) continue;
+
+                let parsed: Record<string, unknown> | null = null;
+                try {
+                    parsed = JSON.parse(draftText) as Record<string, unknown>;
+                } catch {
+                    parsed = null;
+                }
+                if (!parsed) continue;
+
+                const dniKey = extractDraftDniKey(parsed);
+                if (!dniKey || !targetNifKeys.has(dniKey)) continue;
+
+                const current = result.get(dniKey) || {};
+                const captures = (parsed.capturas && typeof parsed.capturas === "object"
+                    ? (parsed.capturas as Record<string, unknown>)
+                    : undefined)
+                    || (parsed.captures && typeof parsed.captures === "object"
+                        ? (parsed.captures as Record<string, unknown>)
+                        : undefined);
+
+                const frontDataUrl = extractCaptureDataUrl(captures, [
+                    "dni_cliente",
+                    "dni_front",
+                    "dni_anverso",
+                    "dniCliente",
+                    "dniFront",
+                ]);
+                const backDataUrl = extractCaptureDataUrl(captures, [
+                    "dni_cliente_back",
+                    "dni_back",
+                    "dni_reverso",
+                    "dniClienteBack",
+                    "dniBack",
+                ]);
+
+                if (!current.front && frontDataUrl) {
+                    current.front = await dataUrlToBlob(frontDataUrl);
+                }
+                if (!current.back && backDataUrl) {
+                    current.back = await dataUrlToBlob(backDataUrl);
+                }
+
+                if (current.front || current.back) {
+                    result.set(dniKey, current);
+                }
+
+                if (!options?.silent && i > 0 && i % 20 === 0) {
+                    setSyncMsg(`Revisando borradores cloud... ${i}/${rcCandidates.length}`);
+                }
             }
-            if (!parsed) continue;
+        };
 
-            const dniKey = normalizeNifKey(String(parsed.clienteDni ?? ""));
-            if (!dniKey || !targetNifKeys.has(dniKey)) continue;
+        await processRcCandidates(Array.from(rcSet.values()));
 
-            const current = result.get(dniKey) || {};
-            const captures = (parsed.capturas as Record<string, unknown> | undefined) || undefined;
-            const frontDataUrl = typeof (captures?.dni_cliente as Record<string, unknown> | undefined)?.dataUrl === "string"
-                ? String((captures?.dni_cliente as Record<string, unknown>).dataUrl)
-                : undefined;
-            const backDataUrl = typeof (captures?.dni_cliente_back as Record<string, unknown> | undefined)?.dataUrl === "string"
-                ? String((captures?.dni_cliente_back as Record<string, unknown>).dataUrl)
-                : undefined;
-
-            if (!current.front && frontDataUrl) {
-                current.front = await dataUrlToBlob(frontDataUrl);
-            }
-            if (!current.back && backDataUrl) {
-                current.back = await dataUrlToBlob(backDataUrl);
+        if (result.size < targetNifKeys.size) {
+            const fallbackRcSet = new Set<string>();
+            for (const folder of folderCandidates) {
+                const rcCandidates = await listDraftRcCandidates(folder);
+                for (const rc of rcCandidates) {
+                    fallbackRcSet.add(rc);
+                }
             }
 
-            if (current.front || current.back) {
-                result.set(dniKey, current);
+            if (!options?.silent) {
+                setSyncMsg(
+                    `Revisando borradores adicionales (${fallbackRcSet.size}) para DNIs puntuales faltantes...`,
+                );
             }
 
-            if (!options?.silent && i > 0 && i % 20 === 0) {
-                setSyncMsg(`Revisando borradores cloud... ${i}/${rcCandidates.length}`);
-            }
+            await processRcCandidates(Array.from(fallbackRcSet.values()));
         }
 
         return result;
