@@ -193,6 +193,21 @@ function patchVentilationNarrativeInDocx(doc: Docxtemplater, caso?: Caso): void 
     }
 }
 
+function patchInitialUiFormulaInDocx(doc: Docxtemplater, resultado: ResultadoTermico): void {
+    const xmlFile = doc.getZip().file("word/document.xml");
+    if (!xmlFile) return;
+
+    const originalXml = xmlFile.asText();
+    const bInicial = formatES(resultado.b_inicial, 2);
+
+    const initialUiPattern = /(<w:t[^>]*>= Up \* b = [^<]*\*)\s*0[\.,]7(\s*=\s*[^<]*W\/m²K<\/w:t>)/;
+    const patchedXml = originalXml.replace(initialUiPattern, `$1 ${bInicial}$2`);
+
+    if (patchedXml !== originalXml) {
+        doc.getZip().file("word/document.xml", patchedXml);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Main generator
 // ---------------------------------------------------------------------------
@@ -347,7 +362,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
 
         // ─── LEGACY VARIABLES (for current Word template) ──────────────
         RBase: formatES(r.r_mat_inicial, 3),
-        RtBaseVal: formatES(r.rt_inicial, 3),
+        RtBaseVal: formatES(r.r_mat_inicial, 3),
         RtBase: formatES(r.rt_inicial, 3),
         UpBase: formatES(r.up_inicial, 3),
         areaNhe: formatES(payload.areaNHE, 2),
@@ -372,6 +387,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
     try {
         doc.render(dataDocx);
         patchVentilationNarrativeInDocx(doc, payload.case_i ?? payload.case_f);
+        patchInitialUiFormulaInDocx(doc, r);
     } catch (error: unknown) {
         console.error("Error al renderizar DOCX:", error);
         if (error instanceof Error) {
