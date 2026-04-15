@@ -207,6 +207,7 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
             if (document.visibilityState !== 'visible') return;
             syncRunningRef.current = true;
             try {
+                await clientSyncService.enqueueUnsyncedClientes(100);
                 await clientSyncService.recoverStaleLocks();
                 await clientSyncService.processBatch({
                     lockToken: crypto.randomUUID(),

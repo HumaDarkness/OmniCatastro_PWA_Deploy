@@ -147,6 +147,7 @@ export interface ClientSyncService {
   enqueue(input: EnqueueSyncJobInput): Promise<number>;
   enqueueClienteUpsert(clienteId: number, trigger?: SyncTrigger): Promise<number>;
   enqueueIngenieroUpsert(ingenieroId: number, trigger?: SyncTrigger): Promise<number>;
+  enqueueUnsyncedClientes(limit?: number): Promise<number>;
 
   claimBatch(options: SyncBatchOptions): Promise<SyncJobRecord[]>;
   processBatch(options: SyncBatchOptions, ctx?: SyncExecutionContext): Promise<{

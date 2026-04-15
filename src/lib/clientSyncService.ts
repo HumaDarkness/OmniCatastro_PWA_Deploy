@@ -164,8 +164,21 @@ class OmniClientSyncService implements ClientSyncService {
 
     const existing = await this.db.sync_jobs.where('dedupeKey').equals(dedupeKey).first();
 
-    if (existing && (existing.status === 'pending' || existing.status === 'retry')) {
+    // Reusar la misma fila evita colisiones por índice único &dedupeKey en re-guardados.
+    if (existing?.id) {
       await this.db.sync_jobs.update(existing.id!, {
+        queue: input.queue ?? existing.queue,
+        status: 'pending',
+        attemptCount: 0,
+        lockedAt: undefined,
+        lockToken: undefined,
+        leaseMs: undefined,
+        errorCode: undefined,
+        errorMessage: undefined,
+        lastHttpStatus: undefined,
+        finishedAt: undefined,
+        idempotencyKey: input.payload.idempotencyKey,
+        trigger: input.trigger ?? 'user_action',
         payload: input.payload,
         priority: Math.min(existing.priority, input.priority ?? 50),
         updatedAt: now,
@@ -191,6 +204,26 @@ class OmniClientSyncService implements ClientSyncService {
       createdAt: now,
       updatedAt: now,
     });
+  }
+
+  async enqueueUnsyncedClientes(limit = 100): Promise<number> {
+    const candidates = await this.db.clientes
+      .toCollection()
+      .filter((client) => !client.syncedAt && typeof client.id === 'number')
+      .limit(limit)
+      .toArray();
+
+    let enqueued = 0;
+    for (const client of candidates) {
+      try {
+        await this.enqueueClienteUpsert(client.id!, 'startup_recovery');
+        enqueued += 1;
+      } catch (error: any) {
+        console.warn(`[SyncOutbox] no se pudo re-encolar cliente ${client.id}:`, error?.message ?? error);
+      }
+    }
+
+    return enqueued;
   }
 
   async enqueueClienteUpsert(clienteId: number, trigger: 'user_action' | 'background' | 'startup_recovery' | 'manual_retry' = 'user_action'): Promise<number> {
