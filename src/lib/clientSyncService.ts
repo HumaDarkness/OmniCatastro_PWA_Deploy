@@ -46,6 +46,47 @@ function buildClientFullName(client: Pick<ClienteLocal, 'nombre' | 'apellidos' |
   return fullName || normalizeDniKey(client.nif) || 'CLIENTE SIN NOMBRE';
 }
 
+function resolveImageExtension(contentType?: string): string {
+  const type = (contentType ?? '').toLowerCase();
+  if (type.includes('png')) return 'png';
+  if (type.includes('webp')) return 'webp';
+  if (type.includes('jpeg') || type.includes('jpg')) return 'jpg';
+  return 'jpg';
+}
+
+async function uploadClientDniWithFallback(params: {
+  orgId: string;
+  nif: string;
+  side: 'front' | 'back';
+  blob: Blob;
+}): Promise<string> {
+  const normalizedNif = normalizeDniKey(params.nif) || params.nif.toUpperCase();
+  const extension = resolveImageExtension(params.blob.type);
+  const path = `${params.orgId}/clients/${normalizedNif}_${params.side}.${extension}`;
+  const contentType = params.blob.type || 'application/octet-stream';
+
+  const targets: Array<{ bucket: 'documents' | 'work_photos'; path: string }> = [
+    { bucket: 'documents', path },
+    { bucket: 'work_photos', path },
+  ];
+
+  const errors: string[] = [];
+  for (const target of targets) {
+    const { error } = await supabase.storage.from(target.bucket).upload(target.path, params.blob, {
+      upsert: true,
+      contentType,
+    });
+
+    if (!error) {
+      return `${target.bucket}:${target.path}`;
+    }
+
+    errors.push(`${target.bucket}: ${error.message}`);
+  }
+
+  throw new Error(`DNI ${params.side} upload failed (${errors.join(' | ')})`);
+}
+
 // ── CLASS DEV IMPLEMENTATION ────────────────────────────────────────────────
 
 class OmniClientSyncService implements ClientSyncService {
@@ -349,23 +390,21 @@ class OmniClientSyncService implements ClientSyncService {
         let updatedDniBackPath: string | undefined = undefined;
 
         if (liveClient.dniBlobFront) {
-          const path = `${orgId}/clients/${liveClient.nif}_front.jpg`;
-          const { error } = await supabase.storage.from('documents').upload(path, liveClient.dniBlobFront, {
-            upsert: true,
-            contentType: liveClient.dniBlobFront.type
+          updatedDniFrontPath = await uploadClientDniWithFallback({
+            orgId,
+            nif: liveClient.nif,
+            side: 'front',
+            blob: liveClient.dniBlobFront,
           });
-          if (error) throw new Error(`DNI Front upload failed: ${error.message}`);
-          updatedDniFrontPath = path;
         }
 
         if (liveClient.dniBlobBack) {
-          const path = `${orgId}/clients/${liveClient.nif}_back.jpg`;
-          const { error } = await supabase.storage.from('documents').upload(path, liveClient.dniBlobBack, {
-            upsert: true,
-            contentType: liveClient.dniBlobBack.type
+          updatedDniBackPath = await uploadClientDniWithFallback({
+            orgId,
+            nif: liveClient.nif,
+            side: 'back',
+            blob: liveClient.dniBlobBack,
           });
-          if (error) throw new Error(`DNI Back upload failed: ${error.message}`);
-          updatedDniBackPath = path;
         }
 
         // Upsert de Metadato Cliente (compatibilidad con esquemas que no incluyen email/phone)

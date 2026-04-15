@@ -50,7 +50,12 @@ function splitNameFromFullName(fullName: string): { nombre: string; apellidos: s
     };
 }
 
-function normalizeStoragePath(rawPath?: string | null): string | undefined {
+interface StorageLocator {
+    bucket: string;
+    path: string;
+}
+
+function parseStorageLocator(rawPath?: string | null): StorageLocator | undefined {
     if (!rawPath) return undefined;
 
     let value = rawPath.trim();
@@ -58,41 +63,66 @@ function normalizeStoragePath(rawPath?: string | null): string | undefined {
 
     value = value.replace(/\\/g, "/");
 
+    const isHttpUrl = /^https?:\/\//i.test(value);
     try {
-        if (/^https?:\/\//i.test(value)) {
+        if (isHttpUrl) {
             value = decodeURIComponent(new URL(value).pathname);
         }
     } catch {
-        // Ignore URL parsing errors and use original value.
+        // Ignore URL parsing errors and keep original value.
     }
 
     value = value.split("?")[0].split("#")[0];
 
-    const markers = [
-        "/storage/v1/object/public/documents/",
-        "/storage/v1/object/sign/documents/",
-        "/object/public/documents/",
-        "/object/sign/documents/",
-        "/public/documents/",
-        "/documents/",
-        "documents/",
-    ];
-
-    const lower = value.toLowerCase();
-    for (const marker of markers) {
-        const markerLower = marker.toLowerCase();
-        const idx = lower.indexOf(markerLower);
-        if (idx >= 0) {
-            value = value.slice(idx + marker.length);
-            break;
+    const prefixed = value.match(/^([a-z0-9_-]+):(.*)$/i);
+    if (prefixed) {
+        const bucket = prefixed[1].toLowerCase();
+        const path = prefixed[2].replace(/^\/+/, "");
+        if (path && (bucket === "documents" || bucket === "work_photos")) {
+            return { bucket, path };
         }
     }
 
-    while (value.startsWith("/")) {
-        value = value.slice(1);
+    const markers: Array<{ bucket: string; marker: string }> = [
+        { bucket: "documents", marker: "/storage/v1/object/public/documents/" },
+        { bucket: "documents", marker: "/storage/v1/object/sign/documents/" },
+        { bucket: "documents", marker: "/object/public/documents/" },
+        { bucket: "documents", marker: "/object/sign/documents/" },
+        { bucket: "documents", marker: "/public/documents/" },
+        { bucket: "documents", marker: "/documents/" },
+        { bucket: "documents", marker: "documents/" },
+        { bucket: "work_photos", marker: "/storage/v1/object/public/work_photos/" },
+        { bucket: "work_photos", marker: "/storage/v1/object/sign/work_photos/" },
+        { bucket: "work_photos", marker: "/object/public/work_photos/" },
+        { bucket: "work_photos", marker: "/object/sign/work_photos/" },
+        { bucket: "work_photos", marker: "/public/work_photos/" },
+        { bucket: "work_photos", marker: "/work_photos/" },
+        { bucket: "work_photos", marker: "work_photos/" },
+    ];
+
+    const lower = value.toLowerCase();
+    for (const { bucket, marker } of markers) {
+        const markerLower = marker.toLowerCase();
+        const idx = lower.indexOf(markerLower);
+        if (idx >= 0) {
+            const path = value.slice(idx + marker.length).replace(/^\/+/, "");
+            if (path) return { bucket, path };
+        }
     }
 
-    return value || undefined;
+    const trimmed = value.replace(/^\/+/, "");
+    if (!trimmed) return undefined;
+
+    const slashIdx = trimmed.indexOf("/");
+    if (slashIdx > 0) {
+        const firstSegment = trimmed.slice(0, slashIdx).toLowerCase();
+        const rest = trimmed.slice(slashIdx + 1).replace(/^\/+/, "");
+        if ((firstSegment === "documents" || firstSegment === "work_photos") && rest) {
+            return { bucket: firstSegment, path: rest };
+        }
+    }
+
+    return { bucket: "documents", path: trimmed };
 }
 
 export function ClientesView() {
@@ -119,12 +149,23 @@ export function ClientesView() {
 
     async function downloadClientBlob(path?: string | null): Promise<Blob | undefined> {
         if (!supabase) return undefined;
-        const normalizedPath = normalizeStoragePath(path);
-        if (!normalizedPath) return undefined;
+        const locator = parseStorageLocator(path);
+        if (!locator) return undefined;
 
-        const { data, error } = await supabase.storage.from("documents").download(normalizedPath);
-        if (error || !data) return undefined;
-        return data;
+        const primary = await supabase.storage.from(locator.bucket).download(locator.path);
+        if (!primary.error && primary.data) {
+            return primary.data;
+        }
+
+        if (locator.bucket === "documents") {
+            const fallback = await supabase.storage.from("work_photos").download(locator.path);
+            if (!fallback.error && fallback.data) return fallback.data;
+        } else if (locator.bucket === "work_photos") {
+            const fallback = await supabase.storage.from("documents").download(locator.path);
+            if (!fallback.error && fallback.data) return fallback.data;
+        }
+
+        return undefined;
     }
 
     async function downloadFirstAvailableBlob(
@@ -136,14 +177,17 @@ export function ClientesView() {
         let attempts = 0;
 
         for (const path of paths) {
-            const normalizedPath = normalizeStoragePath(path);
-            if (!normalizedPath || seen.has(normalizedPath)) continue;
-            seen.add(normalizedPath);
+            const locator = parseStorageLocator(path);
+            if (!locator) continue;
+
+            const key = `${locator.bucket}:${locator.path}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
 
             attempts += 1;
             if (attempts > maxAttempts) break;
 
-            const blob = await downloadClientBlob(normalizedPath);
+            const blob = await downloadClientBlob(`${locator.bucket}:${locator.path}`);
             if (blob) return blob;
         }
         return undefined;
@@ -411,23 +455,26 @@ export function ClientesView() {
 
             const dniPathIndex = new Map<string, { front?: string; back?: string }>();
             let indexedDniFiles = 0;
-            const indexPrefixes = [
-                `${organizationId}/clients`,
-                "[object Promise]/clients",
-                "clients",
+            const indexTargets: Array<{ bucket: "documents" | "work_photos"; prefix: string }> = [
+                { bucket: "documents", prefix: `${organizationId}/clients` },
+                { bucket: "documents", prefix: "[object Promise]/clients" },
+                { bucket: "documents", prefix: "clients" },
+                { bucket: "work_photos", prefix: `${organizationId}/clients` },
+                { bucket: "work_photos", prefix: "[object Promise]/clients" },
+                { bucket: "work_photos", prefix: "clients" },
             ];
             const listErrors: string[] = [];
             let listedPrefixCount = 0;
 
-            for (const prefix of indexPrefixes) {
-                const listed = await supabase.storage.from("documents").list(prefix, {
+            for (const target of indexTargets) {
+                const listed = await supabase.storage.from(target.bucket).list(target.prefix, {
                     limit: 1000,
                     offset: 0,
                     sortBy: { column: "name", order: "asc" },
                 });
 
                 if (listed.error) {
-                    listErrors.push(`${prefix}: ${listed.error.message}`);
+                    listErrors.push(`${target.bucket}/${target.prefix}: ${listed.error.message}`);
                     continue;
                 }
 
@@ -449,14 +496,14 @@ export function ClientesView() {
                     const nifKey = normalizeNifKey(nifPart);
                     if (!nifKey) continue;
 
-                    const fullPath = `${prefix}/${file.name}`
+                    const fullPath = `${target.prefix}/${file.name}`
                         .replace(/\\/g, "/")
                         .replace(/^\/+/, "")
                         .replace(/\/{2,}/g, "/");
 
                     const current = dniPathIndex.get(nifKey) || {};
                     if (!current[side]) {
-                        current[side] = fullPath;
+                        current[side] = `${target.bucket}:${fullPath}`;
                     }
                     dniPathIndex.set(nifKey, current);
                     indexedDniFiles += 1;
@@ -531,19 +578,27 @@ export function ClientesView() {
                 // Evita "bucles" de cientos de descargas cuando no hay indexación de archivos DNI.
                 if (shouldUseHeuristicPaths) {
                     frontCandidates.push(
+                        `documents:${organizationId}/clients/${nif}_front.jpg`,
+                        `work_photos:${organizationId}/clients/${nif}_front.jpg`,
                         `${organizationId}/clients/${nif}_front.jpg`,
                         `${organizationId}/clients/${nif}_front.png`,
                         `${organizationId}/clients/${nif}_anverso.jpg`,
                         `${organizationId}/clients/${nifLower}_front.jpg`,
+                        `work_photos:[object Promise]/clients/${nif}_front.jpg`,
+                        `work_photos:clients/${nif}_front.jpg`,
                         `[object Promise]/clients/${nif}_front.jpg`,
                         `[object Promise]/clients/${nif}_front.png`,
                         `clients/${nif}_front.jpg`,
                     );
                     backCandidates.push(
+                        `documents:${organizationId}/clients/${nif}_back.jpg`,
+                        `work_photos:${organizationId}/clients/${nif}_back.jpg`,
                         `${organizationId}/clients/${nif}_back.jpg`,
                         `${organizationId}/clients/${nif}_back.png`,
                         `${organizationId}/clients/${nif}_reverso.jpg`,
                         `${organizationId}/clients/${nifLower}_back.jpg`,
+                        `work_photos:[object Promise]/clients/${nif}_back.jpg`,
+                        `work_photos:clients/${nif}_back.jpg`,
                         `[object Promise]/clients/${nif}_back.jpg`,
                         `[object Promise]/clients/${nif}_back.png`,
                         `clients/${nif}_back.jpg`,
@@ -609,9 +664,9 @@ export function ClientesView() {
 
             const imageHint = withDniImages === 0
                 ? listErrors.length > 0
-                    ? ` No se pudo listar documents en algunos prefijos (${listErrors[0]}).`
+                    ? ` No se pudo listar Storage en algunos prefijos (${listErrors[0]}).`
                     : indexedDniFiles === 0
-                        ? " No se detectaron archivos DNI en documents/{org}/clients."
+                        ? " No se detectaron archivos DNI en documents/work_photos ({org}/clients)."
                         : ""
                 : "";
             const listedHint = listedPrefixCount > 0 ? ` Prefijos indexados: ${listedPrefixCount}.` : "";
