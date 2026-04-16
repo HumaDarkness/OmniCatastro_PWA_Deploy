@@ -934,6 +934,7 @@ export function CalculadoraTermica() {
     const [draftSaving, setDraftSaving] = useState(false);
     const [draftMsg, setDraftMsg] = useState<string | null>(null);
     const [draftError, setDraftError] = useState<string | null>(null);
+    const [draftStorageOrgId, setDraftStorageOrgId] = useState<string | null>(null);
     const [mvpSyncStatus, setMvpSyncStatus] = useState<MvpSyncUiStatus>("idle");
     const [mvpSyncPendingCount, setMvpSyncPendingCount] = useState(0);
     const [pendingConflictResolution, setPendingConflictResolution] = useState<ExpedienteNeedsResolutionDetail | null>(null);
@@ -2393,12 +2394,94 @@ export function CalculadoraTermica() {
         );
     };
 
-    const resolveOrganizationOrThrow = async (): Promise<string> => {
-        const organizationId = await getCurrentOrganizationId();
-        if (!organizationId) {
-            throw new Error("No se pudo resolver la empresa activa para guardar/cargar certificados.");
+    const normalizeOrganizationCandidate = (value: unknown): string | null => {
+        if (typeof value !== "string") return null;
+        const normalized = value.trim();
+        return normalized || null;
+    };
+
+    const resolvePrimaryOrganizationOrThrow = async (): Promise<string> => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            const organizationId = await getCurrentOrganizationId();
+            const normalized = normalizeOrganizationCandidate(organizationId);
+            if (normalized) {
+                return normalized;
+            }
+
+            if (attempt < 2) {
+                await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 250));
+            }
         }
-        return organizationId;
+
+        throw new Error("No se pudo resolver la empresa activa para guardar/cargar certificados.");
+    };
+
+    const collectDraftOrganizationCandidates = async (primaryOrgId: string): Promise<string[]> => {
+        const candidateSet = new Set<string>();
+        candidateSet.add(primaryOrgId);
+        const cachedOrgId = normalizeOrganizationCandidate(draftStorageOrgId);
+        if (cachedOrgId) {
+            candidateSet.add(cachedOrgId);
+        }
+
+        const addRows = (rows: Array<{ organization_id?: unknown }> | null | undefined) => {
+            if (!Array.isArray(rows)) return;
+            rows.forEach((row) => {
+                const candidate = normalizeOrganizationCandidate(row.organization_id);
+                if (candidate) {
+                    candidateSet.add(candidate);
+                }
+            });
+        };
+
+        if (!supabase) {
+            return Array.from(candidateSet.values());
+        }
+
+        const { data: userCtx } = await supabase.auth.getUser();
+        const userId = userCtx.user?.id ?? "";
+        const userEmail = userCtx.user?.email?.trim().toLowerCase() ?? "";
+
+        if (userId) {
+            const { data: licensesByUser } = await supabase
+                .from("licenses")
+                .select("organization_id")
+                .eq("user_id", userId)
+                .eq("status", "active")
+                .order("created_at", { ascending: false })
+                .limit(25);
+            addRows(licensesByUser as Array<{ organization_id?: unknown }> | null);
+
+            const { data: projectsByUser } = await supabase
+                .from("projects")
+                .select("organization_id")
+                .eq("created_by", userId)
+                .order("created_at", { ascending: false })
+                .limit(25);
+            addRows(projectsByUser as Array<{ organization_id?: unknown }> | null);
+        }
+
+        if (userEmail) {
+            const { data: licensesByEmail } = await supabase
+                .from("licenses")
+                .select("organization_id")
+                .eq("user_email", userEmail)
+                .eq("status", "active")
+                .order("created_at", { ascending: false })
+                .limit(25);
+            addRows(licensesByEmail as Array<{ organization_id?: unknown }> | null);
+        }
+
+        return Array.from(candidateSet.values());
+    };
+
+    const resolveOrganizationOrThrow = async (): Promise<string> => {
+        const cachedOrgId = normalizeOrganizationCandidate(draftStorageOrgId);
+        if (cachedOrgId) {
+            return cachedOrgId;
+        }
+
+        return resolvePrimaryOrganizationOrThrow();
     };
 
     const mapDraftStatusToExpedienteStatus = (status: CertDraftStatus): ExpedienteStatus => {
@@ -2517,21 +2600,6 @@ export function CalculadoraTermica() {
             contentType: "application/json",
         });
         if (error) throw error;
-    };
-
-    const refreshIssuedCertificatesCount = async () => {
-        if (!supabase) {
-            setIssuedCertificatesCount(0);
-            return;
-        }
-
-        try {
-            const organizationId = await resolveOrganizationOrThrow();
-            const issued = await loadIssuedCertificatesIndex(organizationId);
-            setIssuedCertificatesCount(issued.length);
-        } catch {
-            setIssuedCertificatesCount(0);
-        }
     };
 
     const loadDraftIndex = async (organizationId: string): Promise<CertificateDraftIndexItem[]> => {
@@ -3621,39 +3689,86 @@ export function CalculadoraTermica() {
         setDraftLoading(true);
         setDraftError(null);
         try {
-            const organizationId = await resolveOrganizationOrThrow();
-            const [indexItemsRaw, archivedItemsRaw] = await Promise.all([
-                loadDraftIndex(organizationId),
-                loadArchivedDraftIndex(organizationId),
-            ]);
+            const primaryOrganizationId = await resolvePrimaryOrganizationOrThrow();
+            const organizationCandidates = await collectDraftOrganizationCandidates(primaryOrganizationId);
 
-            let { active, archived } = reconcileQueueIndexes(indexItemsRaw, archivedItemsRaw);
+            const loadQueueForOrganization = async (organizationId: string) => {
+                const [indexItemsRaw, archivedItemsRaw] = await Promise.all([
+                    loadDraftIndex(organizationId),
+                    loadArchivedDraftIndex(organizationId),
+                ]);
 
-            if (active.length === 0 && archived.length === 0) {
-                const recovered = await recoverIndexesFromStoredDrafts(organizationId);
-                if (recovered.recoveredCount > 0) {
-                    active = recovered.active;
-                    archived = recovered.archived;
-                    setDraftMsg(
-                        `Se recuperaron ${recovered.recoveredCount} expediente(s) desde nube. `
-                        + "Completados quedaron en Archivados y pendientes en cola activa.",
-                    );
+                let { active, archived } = reconcileQueueIndexes(indexItemsRaw, archivedItemsRaw);
+                let recoveredCount = 0;
+
+                if (active.length === 0 && archived.length === 0) {
+                    const recovered = await recoverIndexesFromStoredDrafts(organizationId);
+                    if (recovered.recoveredCount > 0) {
+                        active = recovered.active;
+                        archived = recovered.archived;
+                        recoveredCount = recovered.recoveredCount;
+                    }
+                }
+
+                return {
+                    organizationId,
+                    indexItemsRaw,
+                    archivedItemsRaw,
+                    active,
+                    archived,
+                    recoveredCount,
+                };
+            };
+
+            let selectedQueue = await loadQueueForOrganization(primaryOrganizationId);
+            let selectedScore = selectedQueue.active.length + selectedQueue.archived.length;
+
+            if (selectedScore === 0) {
+                for (const candidateOrgId of organizationCandidates) {
+                    if (candidateOrgId === primaryOrganizationId) continue;
+
+                    const candidateQueue = await loadQueueForOrganization(candidateOrgId);
+                    const candidateScore = candidateQueue.active.length + candidateQueue.archived.length;
+                    if (candidateScore > selectedScore) {
+                        selectedQueue = candidateQueue;
+                        selectedScore = candidateScore;
+                    }
+
+                    if (candidateScore > 0) {
+                        break;
+                    }
                 }
             }
 
             const persistTasks: Promise<unknown>[] = [];
-            if (!indexesAreEqual(indexItemsRaw, active)) {
-                persistTasks.push(saveDraftIndex(organizationId, active));
+            if (!indexesAreEqual(selectedQueue.indexItemsRaw, selectedQueue.active)) {
+                persistTasks.push(saveDraftIndex(selectedQueue.organizationId, selectedQueue.active));
             }
-            if (!indexesAreEqual(archivedItemsRaw, archived)) {
-                persistTasks.push(saveArchivedDraftIndex(organizationId, archived));
+            if (!indexesAreEqual(selectedQueue.archivedItemsRaw, selectedQueue.archived)) {
+                persistTasks.push(saveArchivedDraftIndex(selectedQueue.organizationId, selectedQueue.archived));
             }
             if (persistTasks.length > 0) {
                 await Promise.all(persistTasks);
             }
 
-            setDraftQueue(active);
-            setArchivedQueue(archived);
+            const switchedOrganization = selectedQueue.organizationId !== primaryOrganizationId;
+            if (switchedOrganization && selectedScore > 0) {
+                setDraftMsg(
+                    `Se detectaron ${selectedScore} expediente(s) en otra organización activa de tu sesión y se cargaron automáticamente.`,
+                );
+            } else if (selectedQueue.recoveredCount > 0) {
+                setDraftMsg(
+                    `Se recuperaron ${selectedQueue.recoveredCount} expediente(s) desde nube. `
+                    + "Completados quedaron en Archivados y pendientes en cola activa.",
+                );
+            }
+
+            setDraftStorageOrgId(selectedQueue.organizationId);
+            setDraftQueue(selectedQueue.active);
+            setArchivedQueue(selectedQueue.archived);
+
+            const issued = await loadIssuedCertificatesIndex(selectedQueue.organizationId);
+            setIssuedCertificatesCount(issued.length);
         } catch (error: any) {
             setDraftError(error?.message ?? "No se pudo cargar la cola de certificados.");
         } finally {
@@ -3663,7 +3778,6 @@ export function CalculadoraTermica() {
 
     useEffect(() => {
         void refreshDraftQueue();
-        void refreshIssuedCertificatesCount();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
