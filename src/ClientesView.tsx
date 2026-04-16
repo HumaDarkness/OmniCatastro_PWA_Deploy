@@ -234,11 +234,25 @@ export function ClientesView() {
     async function dataUrlToBlob(dataUrl?: string): Promise<Blob | undefined> {
         if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return undefined;
         try {
-            const response = await fetch(dataUrl);
-            if (!response.ok) return undefined;
-            return await response.blob();
+            const arr = dataUrl.split(',');
+            const mimeMatch = arr[0].match(/:(.*?);/);
+            const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+            const bstr = atob(arr[1] || "");
+            let n = bstr.length;
+            const u8arr = new Uint8Array(n);
+            while (n--) {
+                u8arr[n] = bstr.charCodeAt(n);
+            }
+            return new Blob([u8arr], { type: mime });
         } catch {
-            return undefined;
+            try {
+                // Fallback por si era un data URI anómalo o grande
+                const response = await fetch(dataUrl);
+                if (!response.ok) return undefined;
+                return await response.blob();
+            } catch {
+                return undefined;
+            }
         }
     }
 

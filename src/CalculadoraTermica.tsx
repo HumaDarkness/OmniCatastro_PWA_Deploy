@@ -1444,16 +1444,38 @@ export function CalculadoraTermica() {
             const apellidos = [last_name_1, last_name_2].filter(Boolean).join(" ");
             const nombre = [first_name, middle_name].filter(Boolean).join(" ");
 
+            const parseDataUrlToBlob = async (dataUrl: string): Promise<Blob | undefined> => {
+                try {
+                    if (dataUrl.startsWith('data:')) {
+                        const arr = dataUrl.split(',');
+                        const mimeMatch = arr[0].match(/:(.*?);/);
+                        const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+                        const bstr = atob(arr[1]);
+                        let n = bstr.length;
+                        const u8arr = new Uint8Array(n);
+                        while (n--) {
+                            u8arr[n] = bstr.charCodeAt(n);
+                        }
+                        return new Blob([u8arr], { type: mime });
+                    }
+                    const response = await fetch(dataUrl);
+                    if (response.ok) {
+                        return await response.blob();
+                    }
+                } catch (e) {
+                    console.warn('Fallo al recuperar Blob de dataUrl', e);
+                }
+                return undefined;
+            };
+
             let dniBlobFront: Blob | undefined;
-            if (capturas.dni_cliente) {
-                const response = await fetch(capturas.dni_cliente.dataUrl);
-                dniBlobFront = await response.blob();
+            if (capturas.dni_cliente?.dataUrl) {
+                dniBlobFront = await parseDataUrlToBlob(capturas.dni_cliente.dataUrl);
             }
 
             let dniBlobBack: Blob | undefined;
-            if (capturas.dni_cliente_back) {
-                const response = await fetch(capturas.dni_cliente_back.dataUrl);
-                dniBlobBack = await response.blob();
+            if (capturas.dni_cliente_back?.dataUrl) {
+                dniBlobBack = await parseDataUrlToBlob(capturas.dni_cliente_back.dataUrl);
             }
 
             // ── Upsert Local-First (crea o actualiza por NIF, sin duplicados) ──
