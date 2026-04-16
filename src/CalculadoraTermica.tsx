@@ -1867,9 +1867,17 @@ export function CalculadoraTermica() {
                     return;
                 } catch (error) {
                     const rawMessage = error instanceof Error ? error.message : "sin detalle";
-                    const message = /(network error|failed to fetch|timeout|timed out|load failed)/i.test(rawMessage)
-                        ? "latencia/red o API en arranque"
-                        : rawMessage;
+                    const normalizedMessage = rawMessage.toLowerCase();
+                    const message =
+                        normalizedMessage.includes("401")
+                            ? "sesion vencida o token invalido (vuelve a iniciar sesion)"
+                            : normalizedMessage.includes("402")
+                            ? "licencia cloud no activa"
+                            : normalizedMessage.includes("403") || normalizedMessage.includes("origin")
+                            ? "bloqueo de origen/cors"
+                            : /(network error|failed to fetch|timeout|timed out|load failed)/i.test(rawMessage)
+                            ? "latencia/red o API en arranque"
+                            : rawMessage;
                     console.error("Cloud calculation failed, fallback to local:", error);
                     setIsCloudCalculation(false);
                     setCloudReportText(null);

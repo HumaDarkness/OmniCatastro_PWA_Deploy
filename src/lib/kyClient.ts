@@ -19,19 +19,39 @@ const DEFAULT_API_PREFIX = import.meta.env.DEV ? 'http://localhost:8000' : CLOUD
 const ENV_API_PREFIX = normalizePrefix(import.meta.env.VITE_API_URL || '');
 const API_PREFIX = ENV_API_PREFIX || DEFAULT_API_PREFIX;
 const API_FALLBACK_PREFIX = normalizePrefix(CLOUD_API_FALLBACK);
+const TOKEN_REFRESH_SKEW_MS = 45_000;
+
+async function resolveAccessTokenForRequest(): Promise<string | null> {
+  const { data: { session } } = await supabase.auth.getSession();
+
+  const token = session?.access_token ?? null;
+  const expiresAtMs = typeof session?.expires_at === 'number'
+    ? session.expires_at * 1000
+    : null;
+
+  // Refresh defensively when token is missing or very close to expiry.
+  if (!token || (expiresAtMs !== null && expiresAtMs - Date.now() <= TOKEN_REFRESH_SKEW_MS)) {
+    const { data: { session: refreshed } } = await supabase.auth.refreshSession();
+    return refreshed?.access_token ?? token;
+  }
+
+  return token;
+}
 
 const injectAuth: BeforeRequestHook = async ({ request }) => {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.access_token) {
-    request.headers.set('Authorization', `Bearer ${session.access_token}`);
+  const accessToken = await resolveAccessTokenForRequest();
+  if (accessToken) {
+    request.headers.set('Authorization', `Bearer ${accessToken}`);
   }
 };
 
 const refreshOn401: AfterResponseHook = async ({ request, response }) => {
-  if (response.status === 401) {
+  // Retry at most once per request to avoid infinite loops.
+  if (response.status === 401 && request.headers.get('x-oc-auth-retry') !== '1') {
     const { data: { session } } = await supabase.auth.refreshSession();
     if (session?.access_token) {
       request.headers.set('Authorization', `Bearer ${session.access_token}`);
+      request.headers.set('x-oc-auth-retry', '1');
       return ky(request);
     }
   }
