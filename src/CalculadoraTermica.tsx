@@ -1445,25 +1445,34 @@ export function CalculadoraTermica() {
             const nombre = [first_name, middle_name].filter(Boolean).join(" ");
 
             const parseDataUrlToBlob = async (dataUrl: string): Promise<Blob | undefined> => {
+                if (!dataUrl) return undefined;
                 try {
                     if (dataUrl.startsWith('data:')) {
                         const arr = dataUrl.split(',');
-                        const mimeMatch = arr[0].match(/:(.*?);/);
-                        const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-                        const bstr = atob(arr[1]);
-                        let n = bstr.length;
-                        const u8arr = new Uint8Array(n);
-                        while (n--) {
-                            u8arr[n] = bstr.charCodeAt(n);
+                        if (arr.length >= 2) {
+                            try {
+                                const mimeMatch = arr[0].match(/:(.*?);/);
+                                const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+                                // Eliminar espacios, newlines u otros carácteres no válidos en base64
+                                const cleanB64 = arr[1].replace(/[^A-Za-z0-9+/=]/g, '');
+                                const bstr = atob(cleanB64);
+                                let n = bstr.length;
+                                const u8arr = new Uint8Array(n);
+                                while (n--) {
+                                    u8arr[n] = bstr.charCodeAt(n);
+                                }
+                                return new Blob([u8arr], { type: mime });
+                            } catch (atobErr) {
+                                console.warn('Falló decodificación manual, intentando fetch...', atobErr);
+                            }
                         }
-                        return new Blob([u8arr], { type: mime });
                     }
                     const response = await fetch(dataUrl);
                     if (response.ok) {
                         return await response.blob();
                     }
                 } catch (e) {
-                    console.warn('Fallo al recuperar Blob de dataUrl', e);
+                    console.warn('Fallo al recuperar Blob de dataUrl (ambos métodos)', e);
                 }
                 return undefined;
             };

@@ -231,28 +231,33 @@ export function ClientesView() {
         return undefined;
     }
 
-    async function dataUrlToBlob(dataUrl?: string): Promise<Blob | undefined> {
+    async function dataUrlToBlob(dataUrl: string): Promise<Blob | undefined> {
         if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return undefined;
         try {
             const arr = dataUrl.split(',');
-            const mimeMatch = arr[0].match(/:(.*?);/);
-            const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-            const bstr = atob(arr[1] || "");
-            let n = bstr.length;
-            const u8arr = new Uint8Array(n);
-            while (n--) {
-                u8arr[n] = bstr.charCodeAt(n);
+            if (arr.length >= 2) {
+                try {
+                    const mimeMatch = arr[0].match(/:(.*?);/);
+                    const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+                    const cleanB64 = arr[1].replace(/[^A-Za-z0-9+/=]/g, '');
+                    const bstr = atob(cleanB64);
+                    let n = bstr.length;
+                    const u8arr = new Uint8Array(n);
+                    while (n--) {
+                        u8arr[n] = bstr.charCodeAt(n);
+                    }
+                    return new Blob([u8arr], { type: mime });
+                } catch (atobErr) {
+                    console.warn('Falló decodificación manual, intentando fallback...', atobErr);
+                }
             }
-            return new Blob([u8arr], { type: mime });
+            
+            // Fallback
+            const response = await fetch(dataUrl);
+            if (!response.ok) return undefined;
+            return await response.blob();
         } catch {
-            try {
-                // Fallback por si era un data URI anómalo o grande
-                const response = await fetch(dataUrl);
-                if (!response.ok) return undefined;
-                return await response.blob();
-            } catch {
-                return undefined;
-            }
+            return undefined;
         }
     }
 
