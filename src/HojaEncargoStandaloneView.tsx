@@ -34,6 +34,7 @@ export function HojaEncargoStandaloneView() {
     const [inmueble, setInmueble] = useState({
         tipoVia: "CALLE", nombreVia: "", numero: "", bloque: "", 
         escalera: "", planta: "", puerta: "", municipio: "", provincia: "", cp: "", uso: "RESIDENCIAL",
+        zonaClimatica: "", altitud: ""
     });
 
     // Cliente
@@ -92,6 +93,8 @@ export function HojaEncargoStandaloneView() {
                 provincia: data.provincia || prev.provincia,
                 cp: data.codigoPostal || prev.cp,
                 uso: data.uso || prev.uso,
+                zonaClimatica: data.zona_climatica || prev.zonaClimatica,
+                altitud: data.altitud !== undefined ? String(data.altitud) : prev.altitud
             }));
             if (data.municipio && !lugarFirma) {
                 setLugarFirma(data.municipio);
@@ -216,24 +219,10 @@ export function HojaEncargoStandaloneView() {
                 propietarioBlob = await processSignature(blob) || undefined;
             }
 
-            const inmueblePayload: HojaEncargoPayload["inmueble"] = {
-                tipoVia: inmueble.tipoVia,
-                nombreVia: inmueble.nombreVia,
-                numero: inmueble.numero,
-                bloque: inmueble.bloque,
-                escalera: inmueble.escalera,
-                planta: inmueble.planta,
-                puerta: inmueble.puerta,
-                municipio: inmueble.municipio,
-                provincia: inmueble.provincia,
-                cp: inmueble.cp,
-                uso: inmueble.uso,
-            };
-
             const payload: HojaEncargoPayload = {
                 tecnico,
                 propietario: propietarioPayload,
-                inmueble: inmueblePayload,
+                inmueble,
                 lugarFirma: lugarFirma || inmueble.municipio || "MADRID",
                 fechaFirma,
                 tipoCliente: representante,
@@ -354,6 +343,14 @@ export function HojaEncargoStandaloneView() {
                                 <div className="md:col-span-4">
                                     <label className="block text-xs font-semibold text-slate-500 mb-1">Provincia</label>
                                     <input type="text" value={inmueble.provincia} onChange={e => setInmueble({...inmueble, provincia: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
+                                </div>
+                                <div className="md:col-span-6">
+                                    <label className="block text-xs font-semibold text-amber-500/80 mb-1">Zona Climática</label>
+                                    <input type="text" value={inmueble.zonaClimatica} onChange={e => setInmueble({...inmueble, zonaClimatica: e.target.value})} className="w-full bg-black/20 border border-amber-900/40 rounded-lg px-3 py-2 text-amber-200 focus:border-amber-500 outline-none text-sm font-mono placeholder:text-amber-900/40" placeholder="Ej: C3" />
+                                </div>
+                                <div className="md:col-span-6">
+                                    <label className="block text-xs font-semibold text-pink-500/80 mb-1">Altitud (m)</label>
+                                    <input type="text" value={inmueble.altitud} onChange={e => setInmueble({...inmueble, altitud: e.target.value})} className="w-full bg-black/20 border border-pink-900/40 rounded-lg px-3 py-2 text-pink-200 focus:border-pink-500 outline-none text-sm font-mono placeholder:text-pink-900/40" placeholder="Ej: 650" />
                                 </div>
                             </div>
                         </div>
