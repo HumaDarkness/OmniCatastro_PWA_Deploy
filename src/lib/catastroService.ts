@@ -50,6 +50,310 @@ export interface CatastroAvailabilitySnapshot {
     details: string | null;
 }
 
+const TIPO_VIA_MAP: Record<string, string> = {
+    CL: "CALLE",
+    C: "CALLE",
+    DS: "DISEMINADO",
+    AV: "AVENIDA",
+    AVDA: "AVENIDA",
+    PZ: "PLAZA",
+    PL: "PLAZA",
+    PS: "PASEO",
+    PSO: "PASEO",
+    CM: "CAMINO",
+    CR: "CARRETERA",
+    CTRA: "CARRETERA",
+    UR: "URBANIZACION",
+    URB: "URBANIZACION",
+    BRR: "BARRIO",
+    TR: "TRAVESIA",
+    GL: "GLORIETA",
+    RD: "RONDA",
+    LG: "LUGAR",
+    PQ: "PARQUE",
+    PR: "PARQUE",
+    BLD: "BULEVAR",
+    SND: "SENDA",
+    VIA: "VIA",
+    POL: "POLIGONO",
+    PJ: "PASAJE",
+    CJ: "CALLEJON",
+    PB: "POBLADO",
+    AL: "ALDEA",
+    AD: "ALAMEDA",
+    CS: "CUESTA",
+};
+
+const TIPO_VIA_ALIAS_MAP: Record<string, string> = {
+    CALLE: "CALLE",
+    DISEMINADO: "DISEMINADO",
+    AVENIDA: "AVENIDA",
+    PLAZA: "PLAZA",
+    PASEO: "PASEO",
+    CAMINO: "CAMINO",
+    CARRETERA: "CARRETERA",
+    URBANIZACION: "URBANIZACION",
+    BARRIO: "BARRIO",
+    TRAVESIA: "TRAVESIA",
+    GLORIETA: "GLORIETA",
+    RONDA: "RONDA",
+    LUGAR: "LUGAR",
+    PARQUE: "PARQUE",
+    BULEVAR: "BULEVAR",
+    SENDA: "SENDA",
+    VIA: "VIA",
+    POLIGONO: "POLIGONO",
+    PASAJE: "PASAJE",
+    CALLEJON: "CALLEJON",
+    POBLADO: "POBLADO",
+    ALDEA: "ALDEA",
+    ALAMEDA: "ALAMEDA",
+    CUESTA: "CUESTA",
+};
+
+const NUMERO_VIA_FINAL_REGEX = /\b(\d+[A-Z]?|S\/N|SN)\s*$/i;
+const RC_EMBEDDED_TOKEN_REGEX = /^(?=.*\d)[A-Z0-9]{14,20}$/;
+const TD_SANITIZED_MAX_LENGTH = 40;
+const TD_CONTROL_CHAR_REGEX = /[\x00-\x1F\x7F]/g;
+const TD_ALLOWED_CHARS_REGEX = /[^A-Z0-9/\- ]+/g;
+
+function cleanCatastroText(value: unknown): string {
+    if (value === null || value === undefined) return "";
+    return String(value).replace(/\s+/g, " ").trim();
+}
+
+function normalizarTipoVia(value: string): string {
+    const normalized = cleanCatastroText(value).toUpperCase().replace(/\.+$/g, "");
+    if (!normalized) return "";
+    return TIPO_VIA_MAP[normalized] ?? TIPO_VIA_ALIAS_MAP[normalized] ?? normalized;
+}
+
+function normalizarNumeroVia(value: string): string {
+    const normalized = cleanCatastroText(value).toUpperCase().replace(/\.+$/g, "");
+    if (!normalized) return "";
+    if (normalized === "SN") return "S/N";
+    return normalized;
+}
+
+function extraerNumeroAlFinal(value: string): { nombreVia: string; numero: string } {
+    const normalized = cleanCatastroText(value).toUpperCase();
+    if (!normalized) return { nombreVia: "", numero: "" };
+
+    const match = normalized.match(NUMERO_VIA_FINAL_REGEX);
+    if (!match) {
+        return { nombreVia: normalized, numero: "" };
+    }
+
+    const numero = normalizarNumeroVia(match[1] ?? "");
+    const nombreVia = cleanCatastroText(normalized.slice(0, match.index ?? normalized.length));
+    return { nombreVia, numero };
+}
+
+function limpiarNombreVia(nombreVia: string, tipoVia: string): string {
+    const normalized = cleanCatastroText(nombreVia).toUpperCase();
+    if (!normalized) return "";
+
+    const tokens = normalized
+        .split(/\s+/)
+        .filter(Boolean)
+        .filter((token) => !RC_EMBEDDED_TOKEN_REGEX.test(token));
+
+    let cleaned = tokens.join(" ");
+    if (!cleaned) return "";
+
+    if (tipoVia === "DISEMINADO") {
+        cleaned = cleaned.replace(/^DISEMINADO(?:\s+|$)/, "").trim();
+    }
+
+    return cleaned;
+}
+
+function sanitizarTokenRuralTd(value: string): string {
+    const normalized = cleanCatastroText(value).toUpperCase();
+    if (!normalized) return "";
+
+    const sanitizedRaw = normalized
+        .replace(TD_CONTROL_CHAR_REGEX, " ")
+        .replace(TD_ALLOWED_CHARS_REGEX, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (!sanitizedRaw) return "";
+
+    // td se espera como identificador/trozo codificado: conservamos solo tokens con al menos un dígito.
+    const sanitized = sanitizedRaw
+        .split(/\s+/)
+        .filter((token) => /\d/.test(token))
+        .join(" ")
+        .trim();
+
+    if (!sanitized) return "";
+    if (sanitized.length <= TD_SANITIZED_MAX_LENGTH) return sanitized;
+    return sanitized.slice(0, TD_SANITIZED_MAX_LENGTH).trim();
+}
+
+function construirDireccionHastaCp(direccionCruda: string, codigoPostal: string): string {
+    const raw = cleanCatastroText(direccionCruda).toUpperCase();
+    if (!raw) return "";
+
+    const cp = cleanCatastroText(codigoPostal);
+    if (cp) {
+        const idxCp = raw.indexOf(cp);
+        if (idxCp >= 0) {
+            const cut = raw.slice(0, idxCp + cp.length);
+            return cleanCatastroText(cut.replace(/[.,;:]+$/g, ""));
+        }
+    }
+
+    const cpMatch = raw.match(/\b\d{5}\b/);
+    if (cpMatch && cpMatch.index !== undefined) {
+        const cut = raw.slice(0, cpMatch.index + cpMatch[0].length);
+        return cleanCatastroText(cut.replace(/[.,;:]+$/g, ""));
+    }
+
+    return raw;
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function containsWordGroup(text: string, prefix: string, value: string): boolean {
+    if (!text || !value) return false;
+    const regex = new RegExp(`\\b${escapeRegExp(prefix)}\\s+${escapeRegExp(value)}\\b`, "i");
+    return regex.test(text);
+}
+
+function construirDireccionRuralHastaCp(params: {
+    tipoVia: string;
+    nombreVia: string;
+    numero: string;
+    dirTd: string;
+    paraje: string;
+    poligono: string;
+    parcela: string;
+    codigoPostal: string;
+}): string {
+    const tipoVia = cleanCatastroText(params.tipoVia).toUpperCase();
+    const nombreVia = cleanCatastroText(params.nombreVia).toUpperCase();
+    const numero = normalizarNumeroVia(params.numero);
+    const dirTd = sanitizarTokenRuralTd(params.dirTd);
+    const paraje = cleanCatastroText(params.paraje).toUpperCase();
+    const poligono = cleanCatastroText(params.poligono).toUpperCase();
+    const parcela = cleanCatastroText(params.parcela).toUpperCase();
+    const cp = cleanCatastroText(params.codigoPostal);
+
+    const base = [tipoVia, nombreVia, numero].filter(Boolean).join(" ").trim();
+    const chunks: string[] = [];
+
+    if (base) {
+        chunks.push(base);
+    }
+    if (poligono && !containsWordGroup(base, "POLIGONO", poligono)) {
+        chunks.push(`POLIGONO ${poligono}`);
+    }
+    if (parcela && !containsWordGroup(base, "PARCELA", parcela)) {
+        chunks.push(`PARCELA ${parcela}`);
+    }
+    if (dirTd && !base.includes(dirTd)) {
+        chunks.push(dirTd);
+    }
+    if (paraje && !base.includes(paraje)) {
+        chunks.push(paraje);
+    }
+    if (cp) {
+        chunks.push(cp);
+    }
+
+    return cleanCatastroText(chunks.join(" "));
+}
+
+function parseDireccionDictionaryFirst(direccionCruda: string): {
+    tipoVia: string;
+    nombreVia: string;
+    numero: string;
+} {
+    const normalized = cleanCatastroText(direccionCruda)
+        .toUpperCase()
+        .replace(/,/g, " ");
+
+    if (!normalized) {
+        return { tipoVia: "", nombreVia: "", numero: "" };
+    }
+
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    const firstToken = (tokens[0] ?? "").replace(/\.+$/g, "");
+    const dictionaryHit = TIPO_VIA_MAP[firstToken] || TIPO_VIA_ALIAS_MAP[firstToken];
+
+    if (dictionaryHit) {
+        const tail = tokens.slice(1).join(" ");
+        const { nombreVia, numero } = extraerNumeroAlFinal(tail);
+        return {
+            tipoVia: normalizarTipoVia(firstToken),
+            nombreVia,
+            numero,
+        };
+    }
+
+    const regexMatch = normalized.match(/^([A-Z.]+)\s+(.+)$/);
+    if (regexMatch) {
+        const tipoViaToken = regexMatch[1].replace(/\.+$/g, "");
+        const maybeTipoVia = normalizarTipoVia(tipoViaToken);
+        const { nombreVia, numero } = extraerNumeroAlFinal(regexMatch[2]);
+        if (TIPO_VIA_MAP[tipoViaToken] || TIPO_VIA_ALIAS_MAP[tipoViaToken]) {
+            return {
+                tipoVia: maybeTipoVia,
+                nombreVia,
+                numero,
+            };
+        }
+    }
+
+    const fallback = extraerNumeroAlFinal(normalized);
+    return {
+        tipoVia: "CALLE",
+        nombreVia: fallback.nombreVia,
+        numero: fallback.numero,
+    };
+}
+
+function resolveDireccionParts(params: {
+    tipoViaRaw: string;
+    nombreViaRaw: string;
+    numeroRaw: string;
+    direccionCruda: string;
+}): { tipoVia: string; nombreVia: string; numero: string } {
+    const tipoViaNormalizado = normalizarTipoVia(params.tipoViaRaw);
+    const nombreViaNormalizado = cleanCatastroText(params.nombreViaRaw).toUpperCase();
+    const numeroNormalizado = normalizarNumeroVia(params.numeroRaw);
+
+    if (tipoViaNormalizado && nombreViaNormalizado) {
+        const nombreViaLimpio = limpiarNombreVia(nombreViaNormalizado, tipoViaNormalizado);
+        return {
+            tipoVia: tipoViaNormalizado,
+            nombreVia: nombreViaLimpio,
+            numero: numeroNormalizado,
+        };
+    }
+
+    const parsed = parseDireccionDictionaryFirst(params.direccionCruda);
+    const tipoViaFinal = tipoViaNormalizado || parsed.tipoVia;
+    const nombreViaFinal = limpiarNombreVia(nombreViaNormalizado || parsed.nombreVia, tipoViaFinal);
+    return {
+        tipoVia: tipoViaFinal,
+        nombreVia: nombreViaFinal,
+        numero: numeroNormalizado || parsed.numero,
+    };
+}
+
+function esPlaceholderCatastro(tipo: "planta" | "puerta" | "escalera", value: string): boolean {
+    const normalized = cleanCatastroText(value).toUpperCase();
+    if (!normalized) return true;
+    if (tipo === "planta") return normalized === "00" || normalized === "01";
+    if (tipo === "puerta") return normalized === "00" || normalized === "01";
+    return normalized === "1" || normalized === "01";
+}
+
 // ─── Validación de RC ────────────────────────────────────────────────
 
 export function validarRC(rc: string): { valido: boolean; resultado: string } {
@@ -433,9 +737,9 @@ export function extraerDatosInmuebleUnico(datos: any): {
     escalera?: string;
     bloque?: string;
 } {
-    // Si la respuesta vino del backend con campos pre-extraidos y smart parsing:
+    // Si la respuesta vino del backend con campos pre-extraidos y smart parsing.
     const fromBackend = datos?.direccion_cruda !== undefined && datos?.raw_response !== undefined;
-    
+
     const raw = datos?.raw_response ?? datos;
     const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
     const bico = root?.bico ?? {};
@@ -443,71 +747,72 @@ export function extraerDatosInmuebleUnico(datos: any): {
     const debi = bi?.debi ?? {};
     const dt = bi?.dt ?? {};
 
-    // Dirección — dt.locs.lous.lourb.dir
     const locs = dt?.locs ?? {};
     const lous = locs?.lous ?? {};
-    const lourb = lous?.lourb ?? {};
-    const dir = lourb?.dir ?? {};
-    const tv = dir?.tv ?? "";
-    const nv = dir?.nv ?? "";
-    const num = dir?.pnp ?? "";
-    // Municipio/Provincia — directamente en dt.nm y dt.np
-    const municipio = dt?.nm ?? locs?.locm?.nm ?? "";
-    const provincia = dt?.np ?? "";
+    const lors = locs?.lors ?? {};
+    const lourb = lous?.lourb ?? lors?.lourb ?? {};
+    const lorus = lous?.lorus ?? lors?.lorus ?? {};
+    const locLegacy = dt?.locs?.ls?.loc ?? {};
+    const dir = lourb?.dir ?? locLegacy?.dtic ?? {};
+    const loint = lourb?.loint ?? dt?.loint ?? locLegacy?.loint ?? {};
 
-    const TIPO_VIA_MAP: Record<string, string> = {
-        CL: "CALLE", C: "CALLE",
-        AV: "AVENIDA", AVDA: "AVENIDA",
-        PZ: "PLAZA", PL: "PLAZA",
-        PS: "PASEO", CM: "CAMINO",
-        CR: "CARRETERA", CTRA: "CARRETERA",
-        UR: "URBANIZACION", URB: "URBANIZACION",
-        TR: "TRAVESIA", PB: "POBLADO",
-        GL: "GLORIETA", PJ: "PASAJE",
-        CJ: "CALLEJON", RD: "RONDA",
-        AL: "ALDEA", LG: "LUGAR",
-        PR: "PARQUE", POL: "POLIGONO",
-        AD: "ALAMEDA", CS: "CUESTA",
-    };
+    const rawTipoVia = fromBackend ? cleanCatastroText(datos?.tipo_via) : cleanCatastroText(dir?.tv);
+    const rawNombreVia = fromBackend ? cleanCatastroText(datos?.nombre_via) : cleanCatastroText(dir?.nv);
+    const rawNumero = fromBackend ? cleanCatastroText(datos?.numero) : cleanCatastroText(dir?.pnp);
+    const direccionCruda = cleanCatastroText(
+        fromBackend ? datos?.direccion_cruda : lourb?.ldt ?? locLegacy?.ldt ?? bi?.ldt ?? ""
+    );
 
-    const esPlaceholder = (val: string) => ["00", "01", "1"].includes(val.trim());
+    const direccionParts = resolveDireccionParts({
+        tipoViaRaw: rawTipoVia,
+        nombreViaRaw: rawNombreVia,
+        numeroRaw: rawNumero,
+        direccionCruda,
+    });
 
-    let direccion = "";
-    if (fromBackend) {
-        direccion = datos.direccion; // Usa la ya parseada por Python
-    } else {
-        const tvRaw = tv.toUpperCase();
-        const tipoVia = TIPO_VIA_MAP[tvRaw] || tvRaw || "CALLE";
-        const loint = lourb?.loint ?? dt?.loint ?? {};
-        
-        let d = `${tipoVia} ${nv} ${num}`.trim();
-        
-        const ptStr = (loint?.pt ?? "").trim();
-        const puStr = (loint?.pu ?? "").trim();
-        const esStr = (loint?.es ?? "").trim();
-        
-        const plantaRaw = ptStr && !esPlaceholder(ptStr) ? ptStr : "";
-        const puertaRaw = puStr && !esPlaceholder(puStr) ? puStr : "";
-        const escaleraRaw = esStr && !esPlaceholder(esStr) ? esStr : "";
+    const plantaRaw = fromBackend ? cleanCatastroText(datos?.planta) : cleanCatastroText(loint?.pt);
+    const puertaRaw = fromBackend ? cleanCatastroText(datos?.puerta) : cleanCatastroText(loint?.pu);
+    const escaleraRaw = fromBackend ? cleanCatastroText(datos?.escalera) : cleanCatastroText(loint?.es);
+    const bloqueRaw = fromBackend ? cleanCatastroText(datos?.bloque) : cleanCatastroText(loint?.bq);
 
-        const planta = plantaRaw ? ` Pl:${plantaRaw}` : "";
-        const puerta = puertaRaw ? ` Pt:${puertaRaw}` : "";
-        const escalera = escaleraRaw ? ` Es:${escaleraRaw}` : "";
-        
-        direccion = `${d}${escalera}${planta}${puerta}`.trim();
-        
-        datos._parsed = {
-            tipoVia: tipoVia,
-            nombreVia: nv,
-            numero: num,
-            planta: plantaRaw,
-            puerta: puertaRaw,
-            escalera: escaleraRaw
-        };
-    }
+    const planta = esPlaceholderCatastro("planta", plantaRaw) ? "" : plantaRaw;
+    const puerta = esPlaceholderCatastro("puerta", puertaRaw) ? "" : puertaRaw;
+    const escalera = esPlaceholderCatastro("escalera", escaleraRaw) ? "" : escaleraRaw;
+    const bloque = bloqueRaw || "";
 
-    // Código Postal — dt.locs.lous.lourb.dp
-    const codigoPostal = lourb?.dp ?? "";
+    const municipio = cleanCatastroText(fromBackend ? datos?.municipio : dt?.nm ?? locs?.locm?.nm ?? locLegacy?.nm);
+    const provincia = cleanCatastroText(fromBackend ? datos?.provincia : dt?.np ?? locLegacy?.np);
+    const codigoPostal = cleanCatastroText(
+        fromBackend ? datos?.codigo_postal : lourb?.dp ?? locLegacy?.cdpid?.cp
+    );
+
+    const direccionBase = [direccionParts.tipoVia, direccionParts.nombreVia, direccionParts.numero]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+    const direccionEstructurada = [
+        direccionBase,
+        escalera ? `Es:${escalera}` : "",
+        planta ? `Pl:${planta}` : "",
+        puerta ? `Pt:${puerta}` : "",
+    ]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+    const direccionRural = construirDireccionRuralHastaCp({
+        tipoVia: direccionParts.tipoVia || "",
+        nombreVia: direccionParts.nombreVia || "",
+        numero: direccionParts.numero || "",
+        dirTd: cleanCatastroText(dir?.td),
+        paraje: cleanCatastroText(lorus?.npa),
+        poligono: cleanCatastroText(lorus?.cpp?.cpo),
+        parcela: cleanCatastroText(lorus?.cpp?.cpa),
+        codigoPostal,
+    });
+
+    const direccion = construirDireccionHastaCp(direccionCruda, codigoPostal) || direccionRural || direccionEstructurada;
 
     // Finca info
     const finca = bico?.finca ?? {};
@@ -518,13 +823,20 @@ export function extraerDatosInmuebleUnico(datos: any): {
     // Construcciones (lcons) — array de unidades constructivas
     const construcciones = extraerConstrucciones(bico);
 
+    const altitudRaw = fromBackend ? datos?.altitud : undefined;
+    const altitud =
+        typeof altitudRaw === "number"
+            ? altitudRaw
+            : altitudRaw !== undefined && altitudRaw !== null && Number.isFinite(Number(altitudRaw))
+                ? Number(altitudRaw)
+                : undefined;
+
     return {
-        // En caso de provenir del Backend, los datos vienen pre-procesados en la raíz y son mucho más precisos:
-        direccion: fromBackend ? datos.direccion : direccion,
-        municipio: fromBackend ? datos.municipio : municipio,
-        provincia: fromBackend ? datos.provincia : provincia,
-        codigoPostal: fromBackend ? datos.codigo_postal : codigoPostal,
-        
+        direccion,
+        municipio,
+        provincia,
+        codigoPostal,
+
         uso: debi?.luso ?? "N/D",
         superficie: debi?.sfc ?? "N/D",
         anoConstruccion: debi?.ant ?? "N/D",
@@ -533,19 +845,19 @@ export function extraerDatosInmuebleUnico(datos: any): {
         superficieSuelo,
         construcciones,
         urlCartografia,
-        
-        // Atributos enriquecidos del backend
-        zona_climatica: fromBackend ? datos.zona_climatica : undefined,
-        altitud: fromBackend ? datos.altitud : undefined,
-        direccion_cruda: fromBackend ? datos.direccion_cruda : undefined,
 
-        tipoVia: fromBackend ? datos.tipo_via : datos._parsed?.tipoVia,
-        nombreVia: fromBackend ? datos.nombre_via : datos._parsed?.nombreVia,
-        numero: fromBackend ? datos.numero : datos._parsed?.numero,
-        planta: fromBackend ? datos.planta : datos._parsed?.planta,
-        puerta: fromBackend ? datos.puerta : datos._parsed?.puerta,
-        escalera: fromBackend ? datos.escalera : datos._parsed?.escalera,
-        bloque: fromBackend ? datos.bloque : undefined,
+        // Atributos enriquecidos del backend
+        zona_climatica: fromBackend ? cleanCatastroText(datos?.zona_climatica) || undefined : undefined,
+        altitud,
+        direccion_cruda: direccionCruda || undefined,
+
+        tipoVia: direccionParts.tipoVia || undefined,
+        nombreVia: direccionParts.nombreVia || undefined,
+        numero: direccionParts.numero || undefined,
+        planta: planta || undefined,
+        puerta: puerta || undefined,
+        escalera: escalera || undefined,
+        bloque: bloque || undefined,
     };
 }
 
