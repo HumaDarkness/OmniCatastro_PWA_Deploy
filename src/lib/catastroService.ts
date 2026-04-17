@@ -545,8 +545,6 @@ export function extraerDatosInmuebleUnico(datos: any): {
         AD: "ALAMEDA", CS: "CUESTA",
     };
 
-    const esPlaceholder = (val: string) => ["00", "01", "1"].includes(val.trim());
-
     let direccion = "";
     if (fromBackend) {
         direccion = datos.direccion; // Usa la ya parseada por Python
@@ -560,14 +558,10 @@ export function extraerDatosInmuebleUnico(datos: any): {
         const ptStr = (loint?.pt ?? "").trim();
         const puStr = (loint?.pu ?? "").trim();
         const esStr = (loint?.es ?? "").trim();
-        
-        const plantaRaw = ptStr && !esPlaceholder(ptStr) ? ptStr : "";
-        const puertaRaw = puStr && !esPlaceholder(puStr) ? puStr : "";
-        const escaleraRaw = esStr && !esPlaceholder(esStr) ? esStr : "";
 
-        const planta = plantaRaw ? ` Pl:${plantaRaw}` : "";
-        const puerta = puertaRaw ? ` Pt:${puertaRaw}` : "";
-        const escalera = escaleraRaw ? ` Es:${escaleraRaw}` : "";
+        const planta = ptStr ? ` Pl:${ptStr}` : "";
+        const puerta = puStr ? ` Pt:${puStr}` : "";
+        const escalera = esStr ? ` Es:${esStr}` : "";
         
         direccion = `${d}${escalera}${planta}${puerta}`.trim();
         
@@ -575,9 +569,9 @@ export function extraerDatosInmuebleUnico(datos: any): {
             tipoVia: tipoVia,
             nombreVia: nv,
             numero: num,
-            planta: plantaRaw,
-            puerta: puertaRaw,
-            escalera: escaleraRaw
+            planta: ptStr,
+            puerta: puStr,
+            escalera: esStr
         };
     }
 
