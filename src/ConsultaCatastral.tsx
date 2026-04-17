@@ -242,7 +242,7 @@ export function ConsultaCatastral() {
 
                     {/* Info Cards */}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                        <InfoCard icon={<MapPin />} label="Dirección" value={inmuebleUnico.direccion || "N/D"} color="cyan" />
+                        <InfoCard icon={<MapPin />} label="Dirección" value={inmuebleUnico.direccion_certificador || inmuebleUnico.direccion || "N/D"} color="cyan" wide />
                         <InfoCard icon={<Building2 />} label="Municipio" value={inmuebleUnico.municipio || "N/D"} color="blue" />
                         <InfoCard icon={<Landmark />} label="Provincia" value={inmuebleUnico.provincia || "N/D"} color="indigo" />
                         <InfoCard icon={<Mail />} label="Código Postal" value={inmuebleUnico.codigoPostal || "N/D"} color="violet" />
@@ -460,7 +460,7 @@ export function ConsultaCatastral() {
 
 // ─── Info Card Component ─────────────────────────────────────────────
 
-function InfoCard({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: string; color: string }) {
+function InfoCard({ icon, label, value, color, wide }: { icon: React.ReactNode; label: string; value: string; color: string; wide?: boolean }) {
     const colorMap: Record<string, string> = {
         cyan: "text-cyan-400 bg-cyan-500/10",
         blue: "text-blue-400 bg-blue-500/10",
@@ -475,12 +475,12 @@ function InfoCard({ icon, label, value, color }: { icon: React.ReactNode; label:
     const classes = colorMap[color] ?? colorMap.cyan;
 
     return (
-        <Card className="bg-slate-900/40 border-slate-800">
+        <Card className={`bg-slate-900/40 border-slate-800${wide ? " lg:col-span-2" : ""}`}>
             <CardContent className="p-4 flex items-start gap-3">
                 <div className={`p-2 rounded-lg ${classes} shrink-0 [&>svg]:h-5 [&>svg]:w-5`}>{icon}</div>
                 <div className="min-w-0">
                     <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5">{label}</p>
-                    <p className="text-sm font-medium text-slate-200 truncate" title={value}>{value}</p>
+                    <p className={`text-sm font-medium text-slate-200 ${wide ? "break-words" : "truncate"}`} title={value}>{value}</p>
                 </div>
             </CardContent>
         </Card>

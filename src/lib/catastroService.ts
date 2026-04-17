@@ -484,7 +484,7 @@ export function extraerListaInmuebles(datos: any): InmuebleData[] {
 
 export function extraerDatosInmuebleUnico(datos: any): {
     direccion: string;
-    // ... rest is similar, let's keep the signature ...
+    direccion_certificador: string;
     municipio: string;
     provincia: string;
     codigoPostal: string;
@@ -517,6 +517,9 @@ export function extraerDatosInmuebleUnico(datos: any): {
     const bi = bico?.bi ?? {};
     const debi = bi?.debi ?? {};
     const dt = bi?.dt ?? {};
+
+    // Localización literal completa (ldt) — "DS DISEMINADO 7 Polígono 2 Parcela 30014 ..."
+    const localizacionLiteral = (bi?.ldt ?? bico?.finca?.ldt ?? dt?.ldt ?? "").toString().trim();
 
     // Dirección — dt.locs.lous.lourb.dir
     const locs = dt?.locs ?? {};
@@ -619,7 +622,12 @@ export function extraerDatosInmuebleUnico(datos: any): {
     const construcciones = extraerConstrucciones(bico);
 
     return {
-        // En caso de provenir del Backend, los datos vienen pre-procesados en la raíz y son mucho más precisos:
+        // direccion_certificador = localización literal COMPLETA del Catastro (ldt)
+        // Dirección principal para certificación — NO recortada a tipo_via + nombre_via
+        direccion_certificador: fromBackend
+            ? (datos.direccion_certificador || datos.direccion || localizacionLiteral)
+            : (localizacionLiteral || direccion),
+        // direccion legacy (tipo_via + nombre_via + num) — para Hoja de Encargo y compat
         direccion: fromBackend ? datos.direccion : direccion,
         municipio: fromBackend ? datos.municipio : municipio,
         provincia: fromBackend ? datos.provincia : provincia,
