@@ -157,6 +157,33 @@ export async function isConflictV2Enabled(userId: string): Promise<boolean> {
     return false;
 }
 
+/**
+ * Gate 6 — Feature flag for the normalized Catastro endpoint.
+ * Controls whether the PWA calls /api/v1/catastro/normalizar/{rc}
+ * instead of the legacy /api/v1/catastro/consultar/{rc}.
+ *
+ * Supabase app_config keys:
+ *   - catastro_normalizar_canary_users  (comma-separated user IDs)
+ *   - catastro_normalizar_rollout_pct   (0-100)
+ *   - catastro_normalizar_enabled       (true/false)
+ */
+export async function isCatastroNormalizarEnabled(userId: string): Promise<boolean> {
+    const allowList = toStringArray(await getAppConfigValue("catastro_normalizar_canary_users"));
+    if (new Set(allowList).has(userId)) return true;
+
+    const rolloutPct = normalizeRolloutPct(await getAppConfigValue("catastro_normalizar_rollout_pct"));
+    if (rolloutPct !== null) {
+        return deterministicRolloutBucket(userId) < rolloutPct;
+    }
+
+    const globalEnabled = toBoolean(await getAppConfigValue("catastro_normalizar_enabled"));
+    if (globalEnabled !== null) {
+        return globalEnabled;
+    }
+
+    return false;
+}
+
 export function invalidateFeatureFlagCache(): void {
     cache.clear();
 }

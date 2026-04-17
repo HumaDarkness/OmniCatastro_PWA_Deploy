@@ -11,6 +11,7 @@
 
 import { supabase } from "./supabase";
 import { kyClient } from "./kyClient";
+import { isCatastroNormalizarEnabled } from "./featureFlags";
 
 // ─── Tipos ───────────────────────────────────────────────────────────
 
@@ -28,6 +29,34 @@ export interface CatastroResult {
     datos: any | null;
     error: string | null;
     fromCache: boolean;
+    fromNormalizar?: boolean;
+}
+
+/** Shape returned by /api/v1/catastro/normalizar/{rc} */
+export interface CatastroNormalizedApiResponse {
+    ref_catastral: string;
+    direccion_certificador: string;
+    codigo_postal: string;
+    municipio: string;
+    provincia: string;
+    comunidad_autonoma: string;
+    provincia_codigo: string | null;
+    comunidad_codigo: string | null;
+    coordenadas: { lat: number | null; lon: number | null; source: string };
+    altitud_msnm: number | null;
+    altitud_source: string | null;
+    zona_climatica: string | null;
+    tipo_via: string;
+    nombre_via: string;
+    numero: string;
+    bloque: string;
+    escalera: string;
+    planta: string;
+    puerta: string;
+    display: { full: string };
+    raw: { catastro: any; coordinates: any };
+    warnings: string[];
+    meta: { parser_version: string; catastro_source_format: string };
 }
 
 export interface ConstruccionData {
@@ -278,7 +307,6 @@ async function llamarAPICatastro(rc: string): Promise<any | null> {
             try {
                 return JSON.parse(textResponse);
             } catch (err) {
-                // Return root format directly since fromBackend logic relies on wrapper absence if raw
                 return null;
             }
         } catch (errDirect: any) {
@@ -288,13 +316,63 @@ async function llamarAPICatastro(rc: string): Promise<any | null> {
     }
 }
 
+/**
+ * Gate 6 — Calls the new /normalizar/ endpoint.
+ * Returns a CatastroNormalizedApiResponse or null on failure.
+ * Falls back to legacy /consultar/ on error.
+ */
+async function llamarAPINormalizar(rc: string): Promise<CatastroNormalizedApiResponse | null> {
+    try {
+        const res = await kyClient.get(`api/v1/catastro/normalizar/${encodeURIComponent(rc)}`);
+        return await res.json<CatastroNormalizedApiResponse>();
+    } catch (e: any) {
+        console.warn("[Catastro Normalizar] Error, will use legacy fallback:", e.message);
+        return null;
+    }
+}
+
 // ─── Función principal de consulta ──────────────────────────────────
 
-export async function consultarCatastro(referenciaCatastral: string): Promise<CatastroResult> {
+export async function consultarCatastro(referenciaCatastral: string, userId?: string): Promise<CatastroResult> {
     const { valido, resultado } = validarRC(referenciaCatastral);
     if (!valido) return { datos: null, error: resultado, fromCache: false };
 
     const rc = resultado;
+
+    // Gate 6 — Try normalized endpoint if feature flag is active
+    if (userId) {
+        try {
+            const useNormalizar = await isCatastroNormalizarEnabled(userId);
+            if (useNormalizar) {
+                const normalized = await llamarAPINormalizar(rc);
+                if (normalized) {
+                    // Wrap the response so downstream consumers can detect it
+                    const wrappedDatos = {
+                        ...normalized,
+                        _fromNormalizar: true,
+                        // Map to legacy-compatible fields for extraerDatosInmuebleUnico
+                        raw_response: normalized.raw?.catastro,
+                        direccion: normalized.direccion_certificador,
+                        direccion_cruda: normalized.display?.full || "",
+                        tipo_via: normalized.tipo_via,
+                        nombre_via: normalized.nombre_via,
+                        numero: normalized.numero,
+                        bloque: normalized.bloque,
+                        escalera: normalized.escalera,
+                        planta: normalized.planta,
+                        puerta: normalized.puerta,
+                        codigo_postal: normalized.codigo_postal,
+                        zona_climatica: normalized.zona_climatica,
+                        altitud: normalized.altitud_msnm,
+                    };
+                    return { datos: wrappedDatos, error: null, fromCache: false, fromNormalizar: true };
+                }
+                // If normalizar failed, fall through to legacy path
+            }
+        } catch {
+            // Feature flag check failed, fall through to legacy
+        }
+    }
 
     // 1. Buscar en cache Supabase
     const cached = await buscarEnCache(rc);
@@ -302,7 +380,7 @@ export async function consultarCatastro(referenciaCatastral: string): Promise<Ca
         return { datos: cached, error: null, fromCache: true };
     }
 
-    // 2. Llamar a la API del Catastro directamente
+    // 2. Llamar a la API del Catastro (legacy)
     const datos = await llamarAPICatastro(rc);
     if (!datos) {
         return {
@@ -316,9 +394,6 @@ export async function consultarCatastro(referenciaCatastral: string): Promise<Ca
     const errorMsg = verificarErrores(datos);
     if (errorMsg) return { datos: null, error: errorMsg, fromCache: false };
 
-    // Si viene del backend FastAPI, ya devolvemos el raw_response en la raíz para compatibilidad
-    // con el extractor o extraemos los atributos limpios. Lo más sencillo es devolver
-    // el objeto completo para que las otras funciones puedan extraer 'raw_response'
     return { datos, error: null, fromCache: false };
 }
 

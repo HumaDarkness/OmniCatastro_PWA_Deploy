@@ -9,6 +9,52 @@ interface ExportadorModalProps {
 }
 
 export function ExportadorModal({ onClose, onExport, defaultFecha, isGenerating }: ExportadorModalProps) {
+    const formatDateDdMmYyyy = (date: Date): string => {
+        return date.toLocaleDateString("es-ES", {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+        });
+    };
+
+    const parseSpanishLongDate = (value: string): string | null => {
+        const months: Record<string, number> = {
+            enero: 0,
+            febrero: 1,
+            marzo: 2,
+            abril: 3,
+            mayo: 4,
+            junio: 5,
+            julio: 6,
+            agosto: 7,
+            septiembre: 8,
+            setiembre: 8,
+            octubre: 9,
+            noviembre: 10,
+            diciembre: 11,
+        };
+
+        const match = value
+            .trim()
+            .toLowerCase()
+            .match(/^(\d{1,2})\s+de\s+([a-záéíóú]+)\s+de\s+(\d{4})$/i);
+
+        if (!match) return null;
+
+        const day = Number.parseInt(match[1], 10);
+        const monthIndex = months[match[2].normalize("NFD").replace(/[\u0300-\u036f]/g, "")];
+        const year = Number.parseInt(match[3], 10);
+
+        if (!Number.isFinite(day) || !Number.isFinite(year) || monthIndex === undefined) {
+            return null;
+        }
+
+        const date = new Date(year, monthIndex, day);
+        if (Number.isNaN(date.getTime())) return null;
+
+        return `${String(year)}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    };
+
     // Si defaultFecha es un DD/MM/YYYY, habría que transformarlo a YYYY-MM-DD para el input type="date".
     // Si no es válido, se usa hoy.
     const getInitialDate = () => {
@@ -21,6 +67,11 @@ export function ExportadorModal({ onClose, onExport, defaultFecha, isGenerating 
             if (defaultFecha.includes("-")) {
                 return defaultFecha;
             }
+
+            const parsedLongDate = parseSpanishLongDate(defaultFecha);
+            if (parsedLongDate) {
+                return parsedLongDate;
+            }
         }
         return new Date().toISOString().split('T')[0];
     };
@@ -28,17 +79,11 @@ export function ExportadorModal({ onClose, onExport, defaultFecha, isGenerating 
     const [fechaInput, setFechaInput] = useState(getInitialDate());
 
     const handleGenerar = () => {
-        // Formatear de YYYY-MM-DD a DD/MM/YYYY para el DOCX si es necesario, 
-        // o pasarlo así y que el generador lo formatee.
-        // Lo ideal es tener un Date format localizable.
+        // Forzar salida estable DD/MM/YYYY para mantener formato contractual del certificado.
         const d = new Date(fechaInput);
         let exportFecha = defaultFecha || "";
         if (!isNaN(d.getTime())) {
-            exportFecha = d.toLocaleDateString("es-ES", {
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-            });
+            exportFecha = formatDateDdMmYyyy(d);
         }
         onExport(exportFecha);
     };
