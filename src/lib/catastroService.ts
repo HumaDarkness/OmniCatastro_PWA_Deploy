@@ -424,6 +424,14 @@ export function extraerDatosInmuebleUnico(datos: any): {
     zona_climatica?: string;
     altitud?: number;
     direccion_cruda?: string;
+    // Campos extra finos:
+    tipoVia?: string;
+    nombreVia?: string;
+    numero?: string;
+    planta?: string;
+    puerta?: string;
+    escalera?: string;
+    bloque?: string;
 } {
     // Si la respuesta vino del backend con campos pre-extraidos y smart parsing:
     const fromBackend = datos?.direccion_cruda !== undefined && datos?.raw_response !== undefined;
@@ -477,12 +485,25 @@ export function extraerDatosInmuebleUnico(datos: any): {
         const ptStr = (loint?.pt ?? "").trim();
         const puStr = (loint?.pu ?? "").trim();
         const esStr = (loint?.es ?? "").trim();
+        
+        const plantaRaw = ptStr && !esPlaceholder(ptStr) ? ptStr : "";
+        const puertaRaw = puStr && !esPlaceholder(puStr) ? puStr : "";
+        const escaleraRaw = esStr && !esPlaceholder(esStr) ? esStr : "";
 
-        const planta = ptStr && !esPlaceholder(ptStr) ? ` Pl:${ptStr}` : "";
-        const puerta = puStr && !esPlaceholder(puStr) ? ` Pt:${puStr}` : "";
-        const escalera = esStr && !esPlaceholder(esStr) ? ` Es:${esStr}` : "";
+        const planta = plantaRaw ? ` Pl:${plantaRaw}` : "";
+        const puerta = puertaRaw ? ` Pt:${puertaRaw}` : "";
+        const escalera = escaleraRaw ? ` Es:${escaleraRaw}` : "";
         
         direccion = `${d}${escalera}${planta}${puerta}`.trim();
+        
+        datos._parsed = {
+            tipoVia: tipoVia,
+            nombreVia: nv,
+            numero: num,
+            planta: plantaRaw,
+            puerta: puertaRaw,
+            escalera: escaleraRaw
+        };
     }
 
     // Código Postal — dt.locs.lous.lourb.dp
@@ -517,6 +538,14 @@ export function extraerDatosInmuebleUnico(datos: any): {
         zona_climatica: fromBackend ? datos.zona_climatica : undefined,
         altitud: fromBackend ? datos.altitud : undefined,
         direccion_cruda: fromBackend ? datos.direccion_cruda : undefined,
+
+        tipoVia: fromBackend ? datos.tipo_via : datos._parsed?.tipoVia,
+        nombreVia: fromBackend ? datos.nombre_via : datos._parsed?.nombreVia,
+        numero: fromBackend ? datos.numero : datos._parsed?.numero,
+        planta: fromBackend ? datos.planta : datos._parsed?.planta,
+        puerta: fromBackend ? datos.puerta : datos._parsed?.puerta,
+        escalera: fromBackend ? datos.escalera : datos._parsed?.escalera,
+        bloque: fromBackend ? datos.bloque : undefined,
     };
 }
 

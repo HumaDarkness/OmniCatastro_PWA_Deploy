@@ -17,6 +17,7 @@ import {
     Mail,
     Landmark,
     Layers,
+    Cloud,
 } from "lucide-react";
 import {
     consultarCatastro,
@@ -249,6 +250,8 @@ export function ConsultaCatastral() {
                         <InfoCard icon={<Ruler />} label="Superficie Catastral" value={`${inmuebleUnico.superficie} m²`} color="emerald" />
                         <InfoCard icon={<Calendar />} label="Año Construcción" value={inmuebleUnico.anoConstruccion} color="amber" />
                         <InfoCard icon={<Layers />} label="Sup. Suelo Parcela" value={inmuebleUnico.superficieSuelo ? `${inmuebleUnico.superficieSuelo} m²` : "N/D"} color="teal" />
+                        {inmuebleUnico.zona_climatica && <InfoCard icon={<Cloud />} label="Zona Climática" value={inmuebleUnico.zona_climatica} color="amber" />}
+                        {inmuebleUnico.altitud !== undefined && <InfoCard icon={<MapPin />} label="Altitud (m)" value={`${inmuebleUnico.altitud}`} color="pink" />}
                     </div>
 
                     <Card className="bg-slate-900/40 border-slate-800">
