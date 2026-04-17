@@ -41,6 +41,8 @@ export function HojaEncargoModal({ prefillData, onClose }: HojaEncargoModalProps
 
     const [techFirmaUrl, setTechFirmaUrl] = useState<string | null>(tecnico.firmaBase64 || null);
     
+    const [propFirmaUrl, setPropFirmaUrl] = useState<string | null>(null);
+    const [propFirmaScale, setPropFirmaScale] = useState<number>(1.0);
     // Propietario (Quick-fill aware)
     const [propietario, setPropietario] = useState({
         nombre: prefillData.propietario?.nombre || "",
@@ -103,6 +105,11 @@ export function HojaEncargoModal({ prefillData, onClose }: HojaEncargoModalProps
                 tecnicoBlob = await fetch(techFirmaUrl).then(r => r.blob());
             }
 
+            // Recuperar Firma del Propietario (si es imagen importada)
+            if (!propietarioBlob && propFirmaUrl) {
+                propietarioBlob = await fetch(propFirmaUrl).then(r => r.blob());
+            }
+
             const payload: HojaEncargoPayload = {
                 tecnico,
                 propietario: propietario,
@@ -123,7 +130,8 @@ export function HojaEncargoModal({ prefillData, onClose }: HojaEncargoModalProps
                 fechaFirma,
                 tipoCliente: representante,
                 firmaTecnicoBlob: tecnicoBlob,
-                firmaPropietarioBlob: propietarioBlob
+                firmaPropietarioBlob: propietarioBlob,
+                firmaPropietarioScale: propFirmaScale
             };
 
             const pdfBlob = await generarHojaEncargoPDF(payload);
@@ -154,6 +162,24 @@ export function HojaEncargoModal({ prefillData, onClose }: HojaEncargoModalProps
             } catch(e) {
                console.error(e);
                alert("Error al procesar la firma"); 
+            } finally {
+                setLoading(false);
+            }
+        }
+    };
+
+    const handleUploadPropSignature = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            setLoading(true);
+            try {
+                // Usamos processSignature regular para limpiar el offset y hacerlo transparente
+                const blob = await processSignature(e.target.files[0]);
+                if (blob) {
+                    setPropFirmaUrl(URL.createObjectURL(blob));
+                }
+            } catch(e) {
+               console.error(e);
+               alert("Error al procesar la firma del cliente"); 
             } finally {
                 setLoading(false);
             }
@@ -347,27 +373,58 @@ export function HojaEncargoModal({ prefillData, onClose }: HojaEncargoModalProps
 
                             {/* Firma Propietario */}
                             <div className="bg-[#0a0a1a] p-4 rounded-xl border border-slate-800 ring-2 ring-indigo-500/30">
-                                <h3 className="text-sm font-semibold text-white mb-2 border-b border-slate-800 pb-2">
+                                <h3 className="text-sm font-semibold text-white mb-2 border-b border-slate-800 pb-2 flex justify-between items-center">
                                     2. Firma del Cliente ({representante})
+                                    <label className="inline-flex items-center gap-1 text-[10px] bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded cursor-pointer transition-colors text-slate-300">
+                                        <Upload className="w-3 h-3" /> Cargar Imagen
+                                        <input type="file" accept="image/png, image/jpeg" className="hidden" onChange={handleUploadPropSignature} />
+                                    </label>
                                 </h3>
-                                <p className="text-[11px] text-slate-400 mb-2">Solicite al cliente que firme en el recuadro blanco.</p>
+                                <p className="text-[11px] text-slate-400 mb-2">Solicite al cliente que firme en el recuadro blanco o cargue su firma digitalizada.</p>
                                 
-                                <div className="border-2 border-slate-400 rounded-lg bg-white overflow-hidden shadow-inner">
-                                    <SignatureCanvas 
-                                        ref={sigCanvasRef}
-                                        penColor="black"
-                                        canvasProps={{className: 'signature-canvas w-full h-48'}}
-                                    />
-                                    <div className="flex justify-between items-center p-2 bg-slate-100 border-t border-slate-300">
-                                        <span className="text-xs font-medium text-slate-500 ml-2">Fdo: {propietario.nombre || "El Cliente"}</span>
+                                {propFirmaUrl ? (
+                                    <div className="relative border border-dashed border-slate-400 rounded-lg bg-white p-2 flex justify-center h-48 overflow-hidden shadow-inner flex-col items-center">
+                                        <img 
+                                            src={propFirmaUrl} 
+                                            alt="Firma Cliente" 
+                                            className="object-contain filter invert mix-blend-difference" 
+                                            style={{ transform: `scale(${propFirmaScale})`, transformOrigin: 'center' }} 
+                                        />
                                         <button 
-                                            onClick={() => sigCanvasRef.current?.clear()}
-                                            className="text-xs text-slate-600 hover:text-red-600 flex items-center gap-1 px-3 py-1 rounded bg-slate-200 hover:bg-red-100 transition-colors"
+                                            onClick={() => setPropFirmaUrl(null)}
+                                            className="absolute top-2 right-2 bg-red-500/20 text-red-600 p-1 rounded hover:bg-red-500/40"
+                                            title="Limpiar Firma"
                                         >
-                                            <Eraser className="w-4 h-4" /> Borrar
+                                            <X className="w-4 h-4" />
                                         </button>
+                                        <div className="absolute bottom-2 left-2 right-2 flex items-center gap-2 bg-slate-100/90 p-2 rounded-lg backdrop-blur text-xs font-medium text-slate-600 shadow-sm border border-slate-200">
+                                            <span className="flex-shrink-0">Tamaño: {Math.round(propFirmaScale * 100)}%</span>
+                                            <input 
+                                                type="range" min="0.5" max="2" step="0.1" 
+                                                value={propFirmaScale} 
+                                                onChange={(e) => setPropFirmaScale(parseFloat(e.target.value))}
+                                                className="w-full accent-indigo-600"
+                                            />
+                                        </div>
                                     </div>
-                                </div>
+                                ) : (
+                                    <div className="border-2 border-slate-400 rounded-lg bg-white overflow-hidden shadow-inner">
+                                        <SignatureCanvas 
+                                            ref={sigCanvasRef}
+                                            penColor="black"
+                                            canvasProps={{className: 'signature-canvas w-full h-48'}}
+                                        />
+                                        <div className="flex justify-between items-center p-2 bg-slate-100 border-t border-slate-300">
+                                            <span className="text-xs font-medium text-slate-500 ml-2">Fdo: {propietario.nombre || "El Cliente"}</span>
+                                            <button 
+                                                onClick={() => sigCanvasRef.current?.clear()}
+                                                className="text-xs text-slate-600 hover:text-red-600 flex items-center gap-1 px-3 py-1 rounded bg-slate-200 hover:bg-red-100 transition-colors"
+                                            >
+                                                <Eraser className="w-4 h-4" /> Borrar
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="flex justify-between pt-4">

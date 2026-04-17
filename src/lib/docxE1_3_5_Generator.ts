@@ -6,6 +6,7 @@ import ImageModule from "docxtemplater-image-module-free";
 import { saveAs } from "file-saver";
 import { VALORES_G, type ResultadoTermico, type CapaMaterial, type Caso } from "./thermalCalculator";
 import type { CapturasState } from "../components/CertificadoCapturasPanel";
+import { kyClient } from "./kyClient";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +28,7 @@ export interface DocxE135Payload {
     areaNHE?: number;
     tipoElemento?: string;
     ciudadFirma?: string;
+    fechaFirma?: string;
     case_i?: Caso;
     case_f?: Caso;
     capas?: CapaMaterial[];
@@ -261,12 +263,34 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
         }
     }
 
-    // 4. Fetch template from public folder
+    // 4. Fetch template from Backend Signed URL, fallback to local public folder
     const timestamp = new Date().getTime();
-    const res = await fetch(`/templates/E1-3-5_TEMPLATE.docx?v=${timestamp}`, { cache: "no-store" });
-    if (!res.ok) throw new Error("No se pudo cargar la plantilla E1-3-5_TEMPLATE.docx");
+    let blob: Blob | null = null;
+    
+    try {
+        const res = await kyClient.get("api/v1/templates/signed-url", {
+            searchParams: { template_name: "certificado.docx" },
+            timeout: 5000
+        }).json<{ url: string }>();
+        
+        if (res.url) {
+            const docRes = await fetch(res.url, { cache: "no-store", mode: "cors" });
+            if (docRes.ok) {
+                blob = await docRes.blob();
+            } else {
+                console.warn(`Error al descargar DOCX desde presigned URL: ${docRes.status}`);
+            }
+        }
+    } catch(e) {
+        console.warn("No se pudo cargar la plantilla remota (Supabase signed URL). Fallback a local estática.", e);
+    }
+    
+    if (!blob) {
+        const res = await fetch(`/templates/E1-3-5_TEMPLATE.docx?v=${timestamp}`, { cache: "no-store" });
+        if (!res.ok) throw new Error("No se pudo cargar la plantilla E1-3-5_TEMPLATE.docx");
+        blob = await res.blob();
+    }
 
-    const blob = await res.blob();
     const arrayBuffer = await blob.arrayBuffer();
 
     // 5. Setup PizZip and ImageModule
@@ -341,7 +365,7 @@ export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
         formulaAE: `1 × (${formatES(r.ui_final, 2)} − ${formatES(r.uf_final, 2)}) × ${formatES(supActuacion, 2)} × ${formatES(factorGNum, 2)}`,
         ahorroKwh: String(Math.round(r.ahorro || 0)),
         ciudadFirma: payload.ciudadFirma || "Madrid",
-        fechaFirma: new Date().toLocaleDateString("es-ES", {
+        fechaFirma: payload.fechaFirma || new Date().toLocaleDateString("es-ES", {
             day: "2-digit",
             month: "2-digit",
             year: "numeric",

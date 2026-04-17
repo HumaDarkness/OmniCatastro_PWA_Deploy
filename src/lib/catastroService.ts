@@ -10,6 +10,7 @@
  */
 
 import { supabase } from "./supabase";
+import { kyClient } from "./kyClient";
 
 // ─── Tipos ───────────────────────────────────────────────────────────
 
@@ -260,12 +261,11 @@ export async function getCatastroAvailabilitySnapshot(options?: {
 
 async function llamarAPICatastro(rc: string): Promise<any | null> {
     try {
-        const url = `${CATASTRO_API_URL}?RefCat=${encodeURIComponent(rc)}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
+        const res = await kyClient.get(`api/v1/catastro/consultar/${encodeURIComponent(rc)}`);
+        const jsonResponse = await res.json<any>();
+        return jsonResponse;
     } catch (e: any) {
-        console.error("[Catastro API] Error:", e.message);
+        console.error("[Catastro Backend API] Error:", e.message);
         return null;
     }
 }
@@ -298,13 +298,17 @@ export async function consultarCatastro(referenciaCatastral: string): Promise<Ca
     const errorMsg = verificarErrores(datos);
     if (errorMsg) return { datos: null, error: errorMsg, fromCache: false };
 
+    // Si viene del backend FastAPI, ya devolvemos el raw_response en la raíz para compatibilidad
+    // con el extractor o extraemos los atributos limpios. Lo más sencillo es devolver
+    // el objeto completo para que las otras funciones puedan extraer 'raw_response'
     return { datos, error: null, fromCache: false };
 }
 
 // ─── Verificar errores de la API ─────────────────────────────────────
 
 function verificarErrores(datos: any): string | null {
-    const root = datos?.consulta_dnprcResult ?? datos?.consulta_dnp ?? datos;
+    const raw = datos?.raw_response ?? datos;
+    const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
     const control = root?.control ?? {};
     const cuerr = control?.cuerr;
     if (cuerr && cuerr > 0) {
@@ -322,7 +326,8 @@ function verificarErrores(datos: any): string | null {
 // ─── Detección de parcela múltiple ───────────────────────────────────
 
 export function esParcerlaMultiple(datos: any): { multiple: boolean; numInmuebles: number } {
-    const root = datos?.consulta_dnprcResult ?? datos?.consulta_dnp ?? datos;
+    const raw = datos?.raw_response ?? datos;
+    const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
     const control = root?.control ?? {};
     let cudnp = 1;
     try {
@@ -341,7 +346,8 @@ export function esParcerlaMultiple(datos: any): { multiple: boolean; numInmueble
 // ─── Extracción de lista de inmuebles ────────────────────────────────
 
 export function extraerListaInmuebles(datos: any): InmuebleData[] {
-    const root = datos?.consulta_dnprcResult ?? datos?.consulta_dnp ?? datos;
+    const raw = datos?.raw_response ?? datos;
+    const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
     const lrcdnp = root?.lrcdnp ?? {};
     let rcdnpList = lrcdnp?.rcdnp ?? [];
     if (!Array.isArray(rcdnpList)) rcdnpList = rcdnpList ? [rcdnpList] : [];
@@ -385,6 +391,7 @@ export function extraerListaInmuebles(datos: any): InmuebleData[] {
 
 export function extraerDatosInmuebleUnico(datos: any): {
     direccion: string;
+    // ... rest is similar, let's keep the signature ...
     municipio: string;
     provincia: string;
     codigoPostal: string;
@@ -396,8 +403,15 @@ export function extraerDatosInmuebleUnico(datos: any): {
     superficieSuelo: string;
     construcciones: ConstruccionData[];
     urlCartografia: string;
+    zona_climatica?: string;
+    altitud?: number;
+    direccion_cruda?: string;
 } {
-    const root = datos?.consulta_dnprcResult ?? datos?.consulta_dnp ?? datos;
+    // Si la respuesta vino del backend con campos pre-extraidos y smart parsing:
+    const fromBackend = datos?.direccion_cruda !== undefined && datos?.raw_response !== undefined;
+    
+    const raw = datos?.raw_response ?? datos;
+    const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
     const bico = root?.bico ?? {};
     const bi = bico?.bi ?? {};
     const debi = bi?.debi ?? {};
@@ -453,10 +467,12 @@ export function extraerDatosInmuebleUnico(datos: any): {
     const construcciones = extraerConstrucciones(bico);
 
     return {
-        direccion,
-        municipio,
-        provincia,
-        codigoPostal,
+        // En caso de provenir del Backend, los datos vienen pre-procesados en la raíz y son mucho más precisos:
+        direccion: fromBackend ? datos.direccion : direccion,
+        municipio: fromBackend ? datos.municipio : municipio,
+        provincia: fromBackend ? datos.provincia : provincia,
+        codigoPostal: fromBackend ? datos.codigo_postal : codigoPostal,
+        
         uso: debi?.luso ?? "N/D",
         superficie: debi?.sfc ?? "N/D",
         anoConstruccion: debi?.ant ?? "N/D",
@@ -465,6 +481,11 @@ export function extraerDatosInmuebleUnico(datos: any): {
         superficieSuelo,
         construcciones,
         urlCartografia,
+        
+        // Atributos enriquecidos del backend
+        zona_climatica: fromBackend ? datos.zona_climatica : undefined,
+        altitud: fromBackend ? datos.altitud : undefined,
+        direccion_cruda: fromBackend ? datos.direccion_cruda : undefined,
     };
 }
 

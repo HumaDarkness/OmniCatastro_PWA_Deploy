@@ -96,6 +96,11 @@ class OmniClientSyncService implements ClientSyncService {
     this.db = database;
   }
 
+  async pullFromCloud(): Promise<{ updated: number; skipped: number; withImages: number; }> {
+    // stub to satisfy interface
+    return { updated: 0, skipped: 0, withImages: 0 };
+  }
+
   private async findClientIdV1ByDni(dni: string): Promise<string | null> {
     const dniNormalized = normalizeDniKey(dni);
     if (!dniNormalized) return null;
@@ -418,19 +423,66 @@ class OmniClientSyncService implements ClientSyncService {
           updated_at: new Date(liveClient.updatedAt).toISOString()
         };
 
-        let { error: dbError } = await supabase.from('clients').upsert({
+        // LWW Atómico (Evitar sobreescritura si Nube tiene datos MÁS recientes)
+        const finalPayload = {
           ...basePayload,
           email: liveClient.email || null,
           phone: liveClient.telefono || null,
-        }, { onConflict: 'organization_id, dni' });
+        };
+
+        let attempt1 = await supabase
+          .from('clients')
+          .update(finalPayload)
+          .eq('organization_id', orgId)
+          .eq('dni', liveClient.nif)
+          .lte('updated_at', finalPayload.updated_at)
+          .select('id');
+          
+        let dbError = attempt1.error;
+        let count = attempt1.data?.length ?? 0;
 
         if (dbError && /column\s+clients\.(email|phone)\s+does not exist/i.test(dbError.message || '')) {
-          const retry = await supabase.from('clients').upsert(basePayload, { onConflict: 'organization_id, dni' });
+          const retry = await supabase
+            .from('clients')
+            .update(basePayload)
+            .eq('organization_id', orgId)
+            .eq('dni', liveClient.nif)
+            .lte('updated_at', finalPayload.updated_at)
+            .select('id');
           dbError = retry.error;
+          count = retry.data?.length ?? 0;
         }
 
         if (dbError) {
-          throw new Error(`Database upsert failed: ${dbError.message}`);
+          throw new Error(`Database update (LWW) failed: ${dbError.message}`);
+        }
+
+        if (count === 0) {
+          // Si el update retornó 0, puede ser que la fila No Exista, o que exista pero updated_at > nuestra versión.
+          // Intentamos insert. Si falla por clave duplicada, ¡entonces existía y fue un conflicto stale!
+          let { error: insertError } = await supabase
+            .from('clients')
+            .insert(finalPayload);
+          
+          if (insertError && /column\s+clients\.(email|phone)\s+does not exist/i.test(insertError.message || '')) {
+              const retryInsert = await supabase.from('clients').insert(basePayload);
+              insertError = retryInsert.error;
+          }
+
+          if (insertError) {
+              const isConflict = /duplicate key value|unique constraint|clients_org_dni_uq|clients_organization_id_dni_key/i.test(insertError.message);
+              if (isConflict) {
+                  console.warn("Push abortado por stale conflict", {
+                    clientId: liveClient.id,
+                    nif: liveClient.nif,
+                    localTs: liveClient.updatedAt,
+                  });
+                  await this.db.clientes.update(liveClient.id!, { syncStatus: "stale_conflict" });
+                  return { ok: false, retryable: false, errorCode: 'STALE_CONFLICT', errorMessage: 'El servidor tiene datos más recientes (LWW activado).' };
+              } else {
+                  throw new Error(`Database insert fallback failed: ${insertError.message}`);
+              }
+          }
         }
 
         // Actualizamos que ya fue sincronizado para el local

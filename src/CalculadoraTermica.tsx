@@ -18,6 +18,7 @@ import {
     Search,
     CreditCard,
     FileCode,
+    FileText,
     ZoomIn,
     X,
     Save,
@@ -41,11 +42,10 @@ import {
     type Caso,
 } from "./lib/thermalCalculator";
 import { calcularDbHeRemoto, warmUpCloudApi } from "./lib/apiClient";
-import { generarPDFAnexoE1 } from "./lib/anexoE1Generator";
+// import { generarPDFAnexoE1 } from "./lib/anexoE1Generator";
 import { generarCertificadoE1_3_5_DOCX } from "./lib/docxE1_3_5_Generator";
 import {
     buildIntelliaCertificateFilename,
-    buildIntelliaCertificateText,
     generarPDFCertificadoIntellia,
     type IntelliaCertificateTemplateInput,
 } from "./lib/intelliaCertificatePdf";
@@ -85,6 +85,7 @@ import { GestionLotesSheet } from "./components/GestionLotesSheet";
 import { CertificadoSuccessState } from "./components/CertificadoSuccessState";
 import { Button } from "./components/ui/button";
 import { HojaEncargoModal } from "./components/HojaEncargoModal";
+import { ExportadorModal } from "./components/ExportadorModal";
 
 interface MaterialDB {
     id: string;
@@ -132,6 +133,7 @@ interface ParsedCE3X {
     codigoPostal: string;
     elementosOpacosData: ElementoEnvolvente[];
     elementosHuecosData: ElementoEnvolvente[];
+    fecha: string;
 }
 
 function parseDecimal(value: string | null | undefined): number {
@@ -256,6 +258,15 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
 
     const tecnicoNif = normalizeDni(queryText(doc, ["DatosDelCertificador NIF"]));
     const tecnicoEntidadNif = normalizeDni(queryText(doc, ["DatosDelCertificador NIFEntidad"]));
+    
+    // Extraer fecha de visita (priorizando PruebasComprobacionesInspecciones)
+    const fecha = queryText(doc, [
+        "PruebasComprobacionesInspecciones Fecha",
+        "FechaVisita",
+        "DatosDelCertificador Fecha",
+        "DatosGenerales Fecha",
+        "Fecha"
+    ]);
 
     const docInmueble = doc.querySelector("IdentificacionEdificio") || doc.querySelector("DatosDelInmueble") || doc.querySelector("Entrada") || doc;
     const zonaRaw = queryText(docInmueble, ["ZonaClimatica"]);
@@ -342,6 +353,7 @@ function parseCE3XXml(xmlText: string): ParsedCE3X {
         codigoPostal,
         elementosOpacosData,
         elementosHuecosData,
+        fecha
     };
 }
 
@@ -877,7 +889,7 @@ export function CalculadoraTermica() {
     const [resultado, setResultado] = useState<ResultadoTermico | null>(null);
     const [lastCalculatedFingerprint, setLastCalculatedFingerprint] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
-    const [intelliaTemplateCopied, setIntelliaTemplateCopied] = useState(false);
+
     const [cloudReportText, setCloudReportText] = useState<string | null>(null);
     const [cloudReportCopied, setCloudReportCopied] = useState(false);
     const [materialesDB, setMaterialesDB] = useState<MaterialDB[]>([]);
@@ -900,6 +912,9 @@ export function CalculadoraTermica() {
     // Remote Calculation Toggle
     const [isCloudCalculation, setIsCloudCalculation] = useState(true);
     const [isCalculating, setIsCalculating] = useState(false);
+
+    const [fechaXml, setFechaXml] = useState("");
+    const [showExportador, setShowExportador] = useState(false);
 
     const [clienteFirstName, setClienteFirstName] = useState("");
     const [clienteMiddleName, setClienteMiddleName] = useState("");
@@ -1750,6 +1765,7 @@ export function CalculadoraTermica() {
                 }
             }
             setClienteDni(parsed.clienteDni);
+            setFechaXml(parsed.fecha || "");
 
             if (parsed.clienteDni && supabase) {
                 await buscarClientePorDni(parsed.clienteDni);
@@ -2049,6 +2065,7 @@ export function CalculadoraTermica() {
         };
     };
 
+/*
     const copiarPlantillaIntellia = async () => {
         const resultadoActual = getResultadoActualizado("generar la plantilla INTELLIA");
         if (!resultadoActual) return;
@@ -2058,13 +2075,14 @@ export function CalculadoraTermica() {
         try {
             await navigator.clipboard.writeText(plantilla);
             setDraftError(null);
-            setIntelliaTemplateCopied(true);
-            setTimeout(() => setIntelliaTemplateCopied(false), 2500);
+            // setIntelliaTemplateCopied(true);
+            // setTimeout(() => setIntelliaTemplateCopied(false), 2500);
             setDraftMsg("Plantilla INTELLIA copiada al portapapeles con fecha de emisión actual.");
         } catch {
             setDraftError("No se pudo copiar la plantilla INTELLIA. Revisa permisos del navegador.");
         }
     };
+*/
 
     const registrarCertificadoEmitido = async (
         type: IssuedCertificateType,
@@ -2139,7 +2157,7 @@ export function CalculadoraTermica() {
         }
     };
 
-    const generarDocumentoWord = async () => {
+    const generarDocumentoWord = async (fechaExport?: string) => {
         const resultadoActual = getResultadoActualizado("generar el Word");
         if (!resultadoActual) return;
 
@@ -2149,6 +2167,7 @@ export function CalculadoraTermica() {
             await generarCertificadoE1_3_5_DOCX({
                 version: CERT_DRAFT_VERSION,
                 rc: expedienteRc,
+                fechaFirma: fechaExport,
                 status: certStatus,
                 updatedAt: new Date().toISOString(),
                 clienteNombre: [clienteFirstName, clienteMiddleName, clienteLastName1, clienteLastName2].filter(Boolean).join(" "),
@@ -2176,6 +2195,7 @@ export function CalculadoraTermica() {
         }
     };
 
+/*
     const generarAnexoE1PDF = async () => {
         const resultadoActual = getResultadoActualizado("generar el Anexo E.1");
         if (!resultadoActual) return;
@@ -2200,6 +2220,7 @@ export function CalculadoraTermica() {
             setDraftError("No se pudo generar el PDF del Anexo E.1. Revisa la consola del navegador.");
         }
     };
+*/
 
     // Preview del ratio y b en tiempo real
     const ratio = areaNHE > 0 ? areaHNH / areaNHE : 0;
@@ -5882,7 +5903,7 @@ export function CalculadoraTermica() {
                             )}
 
                             {/* Botones de acción */}
-                            <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
                                 <button
                                     onClick={() => void copiarInforme()}
                                     disabled={outputActionsDisabled}
@@ -5908,45 +5929,20 @@ export function CalculadoraTermica() {
                                     {cloudReportCopied ? "Cloud copiado" : "Informe Cloud"}
                                 </button>
                                 <button
-                                    onClick={copiarPlantillaIntellia}
-                                    disabled={outputActionsDisabled}
-                                    className="h-11 rounded-md bg-violet-600/20 hover:bg-violet-600/40 text-violet-300 hover:text-violet-200 transition-all flex items-center justify-center gap-2 ring-1 ring-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
-                                    title={outputActionsDisabled ? outputActionDisabledTitle : "Copiar plantilla INTELLIA"}
-                                >
-                                    {intelliaTemplateCopied ? <Check className="h-5 w-5 text-emerald-400" /> : <FileCode className="h-5 w-5" />}
-                                    {intelliaTemplateCopied ? "Plantilla copiada" : "Plantilla INTELLIA"}
-                                </button>
-                                <button
-                                    onClick={() => void generarCertificadoIntelliaPDF()}
-                                    disabled={outputActionsDisabled}
-                                    className="h-11 rounded-md bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 hover:text-emerald-200 transition-all flex items-center justify-center gap-2 ring-1 ring-emerald-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
-                                    title={outputActionsDisabled ? outputActionDisabledTitle : "Generar certificado PDF INTELLIA"}
-                                >
-                                    <FileDown className="h-5 w-5" />
-                                    Generar PDF INTELLIA
-                                </button>
-                                <button
                                     onClick={() => setIsHojaEncargoModalOpen(true)}
                                     disabled={false}
                                     className="h-11 rounded-md bg-pink-600/20 hover:bg-pink-600/40 text-pink-400 hover:text-pink-300 transition-all flex items-center justify-center gap-2 ring-1 ring-pink-500/50 disabled:opacity-40"
                                 >
+                                    <FileText className="h-5 w-5" />
                                     Hoja de Encargo
                                 </button>
                                 <button
-                                    onClick={() => void generarAnexoE1PDF()}
-                                    disabled={outputActionsDisabled}
-                                    className="h-11 rounded-md bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 hover:text-blue-300 transition-all flex items-center justify-center gap-2 ring-1 ring-blue-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
-                                    title={outputActionsDisabled ? outputActionDisabledTitle : "Generar Anexo E.1 en PDF"}
-                                >
-                                    Generar Anexo E.1
-                                </button>
-                                <button
-                                    onClick={() => void generarDocumentoWord()}
+                                    onClick={() => setShowExportador(true)}
                                     disabled={outputActionsDisabled}
                                     className="h-11 rounded-md bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 hover:text-indigo-300 transition-all flex items-center justify-center gap-2 ring-1 ring-indigo-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
                                     title={outputActionsDisabled ? outputActionDisabledTitle : "Generar certificado en Word (DOCX)"}
                                 >
-                                    Generar Word DOCX
+                                    Certificado Técnico (DOCX)
                                 </button>
                             </div>
                         </>
@@ -6008,25 +6004,36 @@ export function CalculadoraTermica() {
                 <HojaEncargoModal
                     prefillData={{
                         propietario: { 
-                            nombre: "", 
-                            nif: "", 
-                            direccion: "" 
+                            nombre: clienteFirstName + (clienteLastName1 ? ` ${clienteLastName1}` : ""), 
+                            nif: clienteDni, 
+                            direccion: clienteDireccionDni 
                         },
                         inmueble: {
-                            tipoVia: "CALLE",
-                            nombreVia: "",
+                            tipoVia: "CALLE", // Se podría mejorar si extraemos tipo_via del raw
+                            nombreVia: direccionInmueble,
                             numero: "",
                             bloque: "",
                             escalera: "",
                             planta: "",
                             puerta: "",
-                            municipio: "",
-                            provincia: "",
+                            municipio: municipioInmueble || "",
+                            provincia: provinciaInmueble || "",
                             cp: "",
                             uso: "RESIDENCIAL"
                         }
                     }}
                     onClose={() => setIsHojaEncargoModalOpen(false)}
+                />
+            )}
+
+            {showExportador && (
+                <ExportadorModal
+                    onClose={() => setShowExportador(false)}
+                    defaultFecha={fechaXml}
+                    onExport={async (fechaElegida) => {
+                        await generarDocumentoWord(fechaElegida);
+                        setShowExportador(false);
+                    }}
                 />
             )}
 

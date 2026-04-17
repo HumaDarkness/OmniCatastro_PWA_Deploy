@@ -8,7 +8,6 @@ import {
     ChevronLeft,
     ChevronRight,
     Calculator,
-    FileStack,
     Building2,
     Users,
     RefreshCw,
@@ -22,7 +21,6 @@ import {
 import { CentralDocumental } from "../CentralDocumental";
 import { ConsultaCatastral } from "../ConsultaCatastral";
 import { CalculadoraTermica } from "../CalculadoraTermica";
-import { ProyectosView } from "../ProyectosView";
 import { ClientesView } from "../ClientesView";
 import { HojaEncargoStandaloneView } from "../HojaEncargoStandaloneView";
 import { AjustesView } from "../AjustesView";
@@ -34,7 +32,7 @@ import { clientSyncService } from "../lib/clientSyncService";
 import { db } from "../infra/db/OmniCatastroDB";
 import { useLiveQuery } from "dexie-react-hooks";
 
-type DashboardView = "resumen" | "central-documental" | "calculadora" | "consulta-catastral" | "clientes" | "mis-proyectos" | "hojas-encargo" | "ajustes";
+type DashboardView = "resumen" | "central-documental" | "calculadora" | "consulta-catastral" | "clientes" | "hojas-encargo" | "ajustes";
 
 const HASH_VIEWS: DashboardView[] = [
     "resumen",
@@ -42,7 +40,6 @@ const HASH_VIEWS: DashboardView[] = [
     "consulta-catastral",
     "calculadora",
     "clientes",
-    "mis-proyectos",
     "hojas-encargo",
     "ajustes"
 ];
@@ -102,7 +99,6 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
         { id: "consulta-catastral", label: "Consulta Catastral", icon: <Building2 className="w-5 h-5" /> },
         { id: "calculadora", label: "Calculadora Térmica", icon: <Calculator className="w-5 h-5" /> },
         { id: "clientes", label: "Clientes", icon: <Users className="w-5 h-5" /> },
-        { id: "mis-proyectos", label: "Mis Proyectos", icon: <FileStack className="w-5 h-5" /> },
         { id: "hojas-encargo", label: "Hojas de Encargo", icon: <FileText className="w-5 h-5" /> },
         { id: "ajustes", label: "Ajustes", icon: <Settings className="w-5 h-5" />, badge: deadLetterCount > 0 ? `${deadLetterCount} err` : undefined },
     ];
@@ -351,9 +347,6 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
         if ((uxSnapshot.clientsCount ?? 0) === 0) {
             return { label: "Crear primer cliente", onClick: () => setActiveView("clientes") };
         }
-        if ((uxSnapshot.projectsCount ?? 0) === 0) {
-            return { label: "Crear primer proyecto", onClick: () => setActiveView("mis-proyectos") };
-        }
         if (activeView !== "calculadora") {
             return { label: "Continuar en Calculadora", onClick: () => setActiveView("calculadora") };
         }
@@ -370,8 +363,6 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
                 return <ConsultaCatastral />;
             case "clientes":
                 return <ClientesView />;
-            case "mis-proyectos":
-                return <ProyectosView />;
             case "hojas-encargo":
                 return <HojaEncargoStandaloneView />;
             case "ajustes":
@@ -495,7 +486,6 @@ export function DashboardLayout({ tier, onLogout }: DashboardLayoutProps) {
                                         <p className="text-slate-300">
                                             Sesion y contexto listos.
                                             {(uxSnapshot?.clientsCount ?? 0) > 0 ? ` Clientes: ${uxSnapshot?.clientsCount}` : " Sin clientes"}
-                                            {(uxSnapshot?.projectsCount ?? 0) >= 0 ? ` | Proyectos: ${uxSnapshot?.projectsCount}` : ""}
                                         </p>
                                     </>
                                 )}

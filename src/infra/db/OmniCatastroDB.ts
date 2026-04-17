@@ -19,9 +19,11 @@ export interface ClienteLocal {
   // Metadatos
   fuenteOrigen: 'calculadora' | 'crm' | 'hoja_encargo';
   syncedAt?: number;       // timestamp Unix, null = pendiente de sync
+  syncStatus?: 'stale_conflict' | 'synced' | 'pending'; // Estado lógico de la sincronización
   createdAt: number;
   updatedAt: number;
 }
+
 
 export interface IngenieroLocal {
   id?: number;

@@ -143,7 +143,17 @@ export interface JobExecutionResult {
   nextRunAfter?: number;
 }
 
+export interface PullSyncResult {
+  updated: number;
+  skipped: number;
+  withImages: number;
+  message?: string;
+  listErrors?: string[];
+}
+
 export interface ClientSyncService {
+  pullFromCloud(options?: { silent?: boolean; onProgress?: (msg: string) => void }): Promise<PullSyncResult>;
+
   enqueue(input: EnqueueSyncJobInput): Promise<number>;
   enqueueClienteUpsert(clienteId: number, trigger?: SyncTrigger): Promise<number>;
   enqueueIngenieroUpsert(ingenieroId: number, trigger?: SyncTrigger): Promise<number>;

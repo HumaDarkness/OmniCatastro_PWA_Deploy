@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { PDFDocument, PDFTextField, PDFCheckBox, PDFImage } from "pdf-lib";
-import { saveAs } from "file-saver";
+import { PDFDocument } from "pdf-lib";
+import { kyClient } from "./kyClient";
 
 export interface DocxConfigTecnico {
     nombre: string;
@@ -36,6 +36,8 @@ export interface HojaEncargoPayload {
     tipoCliente: string; // "PROPIETARIO", "REPRESENTANTE", etc.
     firmaTecnicoBlob?: Blob;
     firmaPropietarioBlob?: Blob;
+    firmaPropietarioScale?: number;
+    firmaTecnicoScale?: number;
 }
 
 function getMesNombre(fecha: Date): string {
@@ -49,7 +51,7 @@ function getMesNombre(fecha: Date): string {
  * pdf-lib no tiene "widgets" tan accesibles como PyMuPDF, por lo que usaremos coordenadas conocidas
  * o buscaremos las coordenadas de los campos FdoTecnico y FdoPromotor.
  */
-async function incrustarFirma(pdfDoc: PDFDocument, form: any, fieldName: string, firmaBlob: Blob) {
+async function incrustarFirma(pdfDoc: PDFDocument, form: any, fieldName: string, firmaBlob: Blob, userScaleFactor: number = 1.0) {
     try {
         const field = form.getTextField(fieldName);
         const widgets = field.acroField.getWidgets();
@@ -81,7 +83,7 @@ async function incrustarFirma(pdfDoc: PDFDocument, form: any, fieldName: string,
         const imgH = imageFile.height;
         const aspectRatio = imgW / imgH;
         
-        const scaleFactor = 1.0;
+        const scaleFactor = 1.0 * userScaleFactor;
         const targetW = 110.0 * scaleFactor;
         const targetH = 45.0 * scaleFactor;
         
@@ -120,16 +122,40 @@ async function incrustarFirma(pdfDoc: PDFDocument, form: any, fieldName: string,
 
 export async function generarHojaEncargoPDF(payload: HojaEncargoPayload): Promise<Blob | null> {
     try {
-        // 1. Obtener la plantilla original
-        const urlTemplate = "/templates/HOJA_ENCARGO_TEMPLATE.pdf";
-        const templateResponse = await fetch(urlTemplate);
-        if (!templateResponse.ok) {
-            throw new Error(`Error al descargar la plantilla desde ${urlTemplate}`);
+        // 1. Obtener la plantilla (Backend Signed URL -> Fallback local)
+        let templateArrayBuffer: ArrayBuffer | null = null;
+        const timestamp = new Date().getTime();
+        
+        try {
+            // Intentar obtener URL firmada segura desde FastAPI
+            const res = await kyClient.get("api/v1/templates/signed-url", {
+                searchParams: { template_name: "hoja_encargo.pdf" },
+                timeout: 5000
+            }).json<{ url: string }>();
+            
+            if (res.url) {
+                // Fetch directo de la URL firmada (omitiendo kyClient para no enviar JWT extra al bucket)
+                const docRes = await fetch(res.url, { cache: "no-store", mode: "cors" });
+                if (docRes.ok) {
+                    templateArrayBuffer = await docRes.arrayBuffer();
+                } else {
+                    console.warn(`Error al descargar PDF desde presigned URL: ${docRes.status}`);
+                }
+            }
+        } catch (e) {
+            console.warn("No se pudo obtener la plantilla B2B desde servidor (Fallback a estática local)", e);
+        }
+
+        if (!templateArrayBuffer) {
+            const urlTemplate = `/templates/HOJA_ENCARGO_TEMPLATE.pdf?v=${timestamp}`;
+            const templateResponse = await fetch(urlTemplate, { cache: "no-store" });
+            if (!templateResponse.ok) {
+                throw new Error(`Error al descargar la plantilla desde ${urlTemplate}`);
+            }
+            templateArrayBuffer = await templateResponse.arrayBuffer();
         }
         
-        const templateArrayBuffer = await templateResponse.arrayBuffer();
-        
-        // 2. Cargar el PDF cno pdf-lib
+        // 2. Cargar el PDF con pdf-lib
         const pdfDoc = await PDFDocument.load(templateArrayBuffer);
         const form = pdfDoc.getForm();
 
@@ -191,11 +217,11 @@ export async function generarHojaEncargoPDF(payload: HojaEncargoPayload): Promis
 
         // 5. Inserción de firmas
         if (payload.firmaTecnicoBlob) {
-            await incrustarFirma(pdfDoc, form, "FdoTecnico", payload.firmaTecnicoBlob);
+            await incrustarFirma(pdfDoc, form, "FdoTecnico", payload.firmaTecnicoBlob, payload.firmaTecnicoScale || 1.0);
         }
 
         if (payload.firmaPropietarioBlob) {
-            await incrustarFirma(pdfDoc, form, "FdoPromotor", payload.firmaPropietarioBlob);
+            await incrustarFirma(pdfDoc, form, "FdoPromotor", payload.firmaPropietarioBlob, payload.firmaPropietarioScale || 1.0);
         }
 
         // 6. Remover botones (Imprimir, Limpiar Formulario)
