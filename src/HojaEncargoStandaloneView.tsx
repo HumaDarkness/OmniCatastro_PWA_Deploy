@@ -33,7 +33,8 @@ export function HojaEncargoStandaloneView() {
     const [catastroLoading, setCatastroLoading] = useState(false);
     const [inmueble, setInmueble] = useState({
         tipoVia: "CALLE", nombreVia: "", numero: "", bloque: "", 
-        escalera: "", planta: "", puerta: "", municipio: "", provincia: "", cp: "", uso: "RESIDENCIAL"
+        escalera: "", planta: "", puerta: "", municipio: "", provincia: "", cp: "", uso: "RESIDENCIAL",
+        zonaClimatica: "", altitud: ""
     });
 
     // Cliente
@@ -82,8 +83,9 @@ export function HojaEncargoStandaloneView() {
             setInmueble(prev => ({
                 ...prev,
                 tipoVia: data.tipoVia || prev.tipoVia,
-                nombreVia: (data.tipoVia ? `${data.tipoVia} ${data.nombreVia}` : data.nombreVia) || prev.nombreVia,
+                nombreVia: data.nombreVia || prev.nombreVia,
                 numero: data.numero || prev.numero,
+                bloque: data.bloque || prev.bloque,
                 planta: data.planta || prev.planta,
                 puerta: data.puerta || prev.puerta,
                 escalera: data.escalera || prev.escalera,
@@ -91,6 +93,8 @@ export function HojaEncargoStandaloneView() {
                 provincia: data.provincia || prev.provincia,
                 cp: data.codigoPostal || prev.cp,
                 uso: data.uso || prev.uso,
+                zonaClimatica: data.zona_climatica || prev.zonaClimatica,
+                altitud: data.altitud !== undefined ? String(data.altitud) : prev.altitud
             }));
             if (data.municipio && !lugarFirma) {
                 setLugarFirma(data.municipio);
@@ -229,7 +233,7 @@ export function HojaEncargoStandaloneView() {
             const pdfBlob = await generarHojaEncargoPDF(payload);
             if (pdfBlob) {
                 saveAs(pdfBlob, `Hoja_Encargo_${propietarioPayload.nombre.replace(/ /g, "_")}_${new Date().getFullYear()}.pdf`);
-                setUxMessage({ type: 'success', text: 'Hoja de Encargo generada y descargada. (Stateless Direct to Drive)' });
+                setUxMessage({ type: 'success', text: 'Hoja de Encargo generada y descargada localmente.' });
             }
         } catch (error) {
             console.error("Error generation:", error);
@@ -298,28 +302,55 @@ export function HojaEncargoStandaloneView() {
                                     Buscar
                                 </button>
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Nombre Vía / Calle</label>
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                                <div className="md:col-span-4">
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Tipo Vía</label>
+                                    <input type="text" value={inmueble.tipoVia} onChange={e => setInmueble({...inmueble, tipoVia: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
+                                </div>
+                                <div className="md:col-span-8">
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Nombre Vía</label>
                                     <input type="text" value={inmueble.nombreVia} onChange={e => setInmueble({...inmueble, nombreVia: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
                                 </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Número</label>
-                                        <input type="text" value={inmueble.numero} onChange={e => setInmueble({...inmueble, numero: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Planta/Pta</label>
-                                        <input type="text" value={`${inmueble.planta} ${inmueble.puerta}`.trim()} onChange={e => { const [pl, pu] = e.target.value.split(" "); setInmueble({...inmueble, planta: pl || "", puerta: pu || ""}) }} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" placeholder="Ej: 2 A" />
-                                    </div>
+                                <div className="md:col-span-3">
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Número</label>
+                                    <input type="text" value={inmueble.numero} onChange={e => setInmueble({...inmueble, numero: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
                                 </div>
-                                <div>
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Bloq</label>
+                                    <input type="text" value={inmueble.bloque} onChange={e => setInmueble({...inmueble, bloque: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Esc</label>
+                                    <input type="text" value={inmueble.escalera} onChange={e => setInmueble({...inmueble, escalera: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Plt</label>
+                                    <input type="text" value={inmueble.planta} onChange={e => setInmueble({...inmueble, planta: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
+                                </div>
+                                <div className="md:col-span-3">
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Pta</label>
+                                    <input type="text" value={inmueble.puerta} onChange={e => setInmueble({...inmueble, puerta: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
+                                </div>
+
+                                <div className="md:col-span-3">
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">C.P.</label>
+                                    <input type="text" value={inmueble.cp} onChange={e => setInmueble({...inmueble, cp: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
+                                </div>
+                                <div className="md:col-span-5">
                                     <label className="block text-xs font-semibold text-slate-500 mb-1">Municipio</label>
                                     <input type="text" value={inmueble.municipio} onChange={e => setInmueble({...inmueble, municipio: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
                                 </div>
-                                <div>
+                                <div className="md:col-span-4">
                                     <label className="block text-xs font-semibold text-slate-500 mb-1">Provincia</label>
                                     <input type="text" value={inmueble.provincia} onChange={e => setInmueble({...inmueble, provincia: e.target.value})} className="w-full bg-black/20 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:border-indigo-500 outline-none text-sm" />
+                                </div>
+                                <div className="md:col-span-6">
+                                    <label className="block text-xs font-semibold text-amber-500/80 mb-1">Zona Climática</label>
+                                    <input type="text" value={inmueble.zonaClimatica} onChange={e => setInmueble({...inmueble, zonaClimatica: e.target.value})} className="w-full bg-black/20 border border-amber-900/40 rounded-lg px-3 py-2 text-amber-200 focus:border-amber-500 outline-none text-sm font-mono placeholder:text-amber-900/40" placeholder="Ej: C3" />
+                                </div>
+                                <div className="md:col-span-6">
+                                    <label className="block text-xs font-semibold text-pink-500/80 mb-1">Altitud (m)</label>
+                                    <input type="text" value={inmueble.altitud} onChange={e => setInmueble({...inmueble, altitud: e.target.value})} className="w-full bg-black/20 border border-pink-900/40 rounded-lg px-3 py-2 text-pink-200 focus:border-pink-500 outline-none text-sm font-mono placeholder:text-pink-900/40" placeholder="Ej: 650" />
                                 </div>
                             </div>
                         </div>
