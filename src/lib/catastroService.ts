@@ -200,15 +200,15 @@ function construirDireccionHastaCp(direccionCruda: string, codigoPostal: string)
     if (cp) {
         const idxCp = raw.indexOf(cp);
         if (idxCp >= 0) {
-            const cut = raw.slice(0, idxCp + cp.length);
-            return cleanCatastroText(cut.replace(/[.,;:]+$/g, ""));
+            const cut = raw.slice(0, idxCp);
+            return cleanCatastroText(cut).replace(/[.,;:]+$/g, "").trim();
         }
     }
 
     const cpMatch = raw.match(/\b\d{5}\b/);
     if (cpMatch && cpMatch.index !== undefined) {
-        const cut = raw.slice(0, cpMatch.index + cpMatch[0].length);
-        return cleanCatastroText(cut.replace(/[.,;:]+$/g, ""));
+        const cut = raw.slice(0, cpMatch.index);
+        return cleanCatastroText(cut).replace(/[.,;:]+$/g, "").trim();
     }
 
     return raw;
@@ -241,7 +241,6 @@ function construirDireccionRuralHastaCp(params: {
     const paraje = cleanCatastroText(params.paraje).toUpperCase();
     const poligono = cleanCatastroText(params.poligono).toUpperCase();
     const parcela = cleanCatastroText(params.parcela).toUpperCase();
-    const cp = cleanCatastroText(params.codigoPostal);
 
     const base = [tipoVia, nombreVia, numero].filter(Boolean).join(" ").trim();
     const chunks: string[] = [];
@@ -260,9 +259,6 @@ function construirDireccionRuralHastaCp(params: {
     }
     if (paraje && !base.includes(paraje)) {
         chunks.push(paraje);
-    }
-    if (cp) {
-        chunks.push(cp);
     }
 
     return cleanCatastroText(chunks.join(" "));
