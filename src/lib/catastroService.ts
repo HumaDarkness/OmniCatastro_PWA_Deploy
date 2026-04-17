@@ -545,6 +545,21 @@ export function extraerDatosInmuebleUnico(datos: any): {
         AD: "ALAMEDA", CS: "CUESTA",
     };
 
+    // Catastro semantic labels: es+pt+pu can form words like TODOS, PARTE, RESTO
+    // These are NOT real escalera/planta/puerta values.
+    const SEMANTIC_LABELS = new Set([
+        "TODO", "TODOS", "TODA", "TODAS",
+        "PARTE", "RESTO", "TOTAL", "UNICO", "UNICA",
+    ]);
+
+    function detectSemanticLabel(es: string, pt: string, pu: string): string | null {
+        const concat3 = `${es}${pt}${pu}`.trim().toUpperCase();
+        if (SEMANTIC_LABELS.has(concat3)) return concat3;
+        const concat2 = `${es}${pt}`.trim().toUpperCase();
+        if (SEMANTIC_LABELS.has(concat2)) return concat2;
+        return null;
+    }
+
     let direccion = "";
     if (fromBackend) {
         direccion = datos.direccion; // Usa la ya parseada por Python
@@ -559,20 +574,36 @@ export function extraerDatosInmuebleUnico(datos: any): {
         const puStr = (loint?.pu ?? "").trim();
         const esStr = (loint?.es ?? "").trim();
 
-        const planta = ptStr ? ` Pl:${ptStr}` : "";
-        const puerta = puStr ? ` Pt:${puStr}` : "";
-        const escalera = esStr ? ` Es:${esStr}` : "";
-        
-        direccion = `${d}${escalera}${planta}${puerta}`.trim();
-        
-        datos._parsed = {
-            tipoVia: tipoVia,
-            nombreVia: nv,
-            numero: num,
-            planta: ptStr,
-            puerta: puStr,
-            escalera: esStr
-        };
+        const semanticLabel = detectSemanticLabel(esStr, ptStr, puStr);
+
+        if (semanticLabel) {
+            // es/pt/pu form a semantic word — NOT a real location
+            direccion = d;
+            datos._parsed = {
+                tipoVia: tipoVia,
+                nombreVia: nv,
+                numero: num,
+                planta: "",
+                puerta: "",
+                escalera: "",
+                _semanticLabel: semanticLabel,
+            };
+        } else {
+            const planta = ptStr ? ` Pl:${ptStr}` : "";
+            const puerta = puStr ? ` Pt:${puStr}` : "";
+            const escalera = esStr ? ` Es:${esStr}` : "";
+            
+            direccion = `${d}${escalera}${planta}${puerta}`.trim();
+            
+            datos._parsed = {
+                tipoVia: tipoVia,
+                nombreVia: nv,
+                numero: num,
+                planta: ptStr,
+                puerta: puStr,
+                escalera: esStr
+            };
+        }
     }
 
     // Código Postal — dt.locs.lous.lourb.dp
