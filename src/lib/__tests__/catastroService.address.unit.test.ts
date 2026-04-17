@@ -45,8 +45,7 @@ describe("catastroService address extraction", () => {
         const result = extraerDatosInmuebleUnico(datos);
 
         expect(result.direccion).toContain("POLIGONO 2 PARCELA 30014");
-        expect(result.direccion.endsWith("LOS ARENALES")).toBe(true);
-        expect(result.direccion.includes("45522")).toBe(false);
+        expect(result.direccion.endsWith("45522")).toBe(true);
         expect(result.direccion.includes("ALBARREAL DE TAJO")).toBe(false);
     });
 
@@ -60,7 +59,7 @@ describe("catastroService address extraction", () => {
 
         const result = extraerDatosInmuebleUnico(datos);
 
-        expect(result.direccion).toBe("DS DISEMINADO 5 POLIGONO 11 PARCELA 91");
+        expect(result.direccion).toBe("DS DISEMINADO 5 POLIGONO 11 PARCELA 91 12345");
     });
 
     it("falls back to structured address when direccion_cruda is unavailable", () => {
@@ -113,7 +112,7 @@ describe("catastroService address extraction", () => {
 
         const result = extraerDatosInmuebleUnico(datos);
 
-        expect(result.direccion).toBe("DS DISEMINADO 7 POLIGONO 2 PARCELA 30014 LOS ARENALES");
+        expect(result.direccion).toBe("DS DISEMINADO 7 POLIGONO 2 PARCELA 30014 LOS ARENALES 45522");
         expect(result.codigoPostal).toBe("45522");
         expect(result.municipio).toBe("ALBARREAL DE TAJO");
         expect(result.provincia).toBe("TOLEDO");
@@ -160,7 +159,7 @@ describe("catastroService address extraction", () => {
 
         const result = extraerDatosInmuebleUnico(datos);
 
-        expect(result.direccion).toBe("LG MOLINAFERRERA 7(A)");
+        expect(result.direccion).toBe("LG MOLINAFERRERA 7(A) 24724");
         expect(result.codigoPostal).toBe("24724");
     });
 
@@ -251,7 +250,7 @@ describe("catastroService address extraction", () => {
 
         const result = extraerDatosInmuebleUnico(datos);
 
-        expect(result.direccion).toBe("DISEMINADO 7 POLIGONO 2 PARCELA 30014 000100100UK91D LOS ARENALES");
+        expect(result.direccion).toBe("DISEMINADO 7 POLIGONO 2 PARCELA 30014 000100100UK91D LOS ARENALES 45522");
     });
 
     it("keeps rural address stable when td is missing", () => {
@@ -296,7 +295,7 @@ describe("catastroService address extraction", () => {
 
         const result = extraerDatosInmuebleUnico(datos);
 
-        expect(result.direccion).toBe("DISEMINADO 7 POLIGONO 2 PARCELA 30014 LOS ARENALES");
+        expect(result.direccion).toBe("DISEMINADO 7 POLIGONO 2 PARCELA 30014 LOS ARENALES 45522");
         expect(result.direccion.includes("  ")).toBe(false);
     });
 
@@ -360,7 +359,7 @@ describe("catastroService address extraction", () => {
 
             const result = extraerDatosInmuebleUnico(datos);
 
-            expect(result.direccion.includes(cp)).toBe(false);
+            expect(result.direccion.endsWith(cp)).toBe(true);
             expect(result.direccion.includes("MUNICIPIO TEST")).toBe(false);
         }
     });
