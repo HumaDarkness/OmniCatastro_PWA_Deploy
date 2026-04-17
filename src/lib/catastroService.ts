@@ -265,8 +265,26 @@ async function llamarAPICatastro(rc: string): Promise<any | null> {
         const jsonResponse = await res.json<any>();
         return jsonResponse;
     } catch (e: any) {
-        console.error("[Catastro Backend API] Error:", e.message);
-        return null;
+        console.warn("[Catastro Backend API] Error (posible bloqueo de IP al Data Center). Usando fallback PWA directo:", e.message);
+        try {
+            const probeUrl = `${CATASTRO_API_URL}?RefCat=${encodeURIComponent(rc)}`;
+            const response = await fetch(probeUrl, {
+                headers: {
+                    "Accept": "application/json"
+                }
+            });
+            if (!response.ok) return null;
+            const textResponse = await response.text();
+            try {
+                return JSON.parse(textResponse);
+            } catch (err) {
+                // Return root format directly since fromBackend logic relies on wrapper absence if raw
+                return null;
+            }
+        } catch (errDirect: any) {
+            console.error("[Catastro Direct API] Error en fallback directo:", errDirect.message);
+            return null;
+        }
     }
 }
 
@@ -429,29 +447,42 @@ export function extraerDatosInmuebleUnico(datos: any): {
     const municipio = dt?.nm ?? locs?.locm?.nm ?? "";
     const provincia = dt?.np ?? "";
 
-    // Dirección Completa extraída fielmente del Catastro (ldt) garantizando plantas, escaleras, puertas.
-    let direccion = `${tv} ${nv} ${num}`.trim();
-    if (bi?.ldt && typeof bi.ldt === 'string') {
-        const ldt = bi.ldt.trim();
-        // Extraemos solo la parte inicial antes del CP (24008 LEON ...)
-        const matchLdt = ldt.match(/^(.*?)[ ]+\d{5}/);
-        if (matchLdt) {
-            direccion = matchLdt[1].trim();
-        } else {
-            // Fallback si no hay código postal, quitamos el municipio del final
-            const suffix = municipio ? ` ${municipio.toUpperCase()}` : "";
-            if (suffix && ldt.includes(suffix)) {
-                direccion = ldt.split(suffix)[0].trim();
-            } else {
-                direccion = ldt;
-            }
-        }
+    const TIPO_VIA_MAP: Record<string, string> = {
+        CL: "CALLE", C: "CALLE",
+        AV: "AVENIDA", AVDA: "AVENIDA",
+        PZ: "PLAZA", PL: "PLAZA",
+        PS: "PASEO", CM: "CAMINO",
+        CR: "CARRETERA", CTRA: "CARRETERA",
+        UR: "URBANIZACION", URB: "URBANIZACION",
+        TR: "TRAVESIA", PB: "POBLADO",
+        GL: "GLORIETA", PJ: "PASAJE",
+        CJ: "CALLEJON", RD: "RONDA",
+        AL: "ALDEA", LG: "LUGAR",
+        PR: "PARQUE", POL: "POLIGONO",
+        AD: "ALAMEDA", CS: "CUESTA",
+    };
+
+    const esPlaceholder = (val: string) => ["00", "01", "1"].includes(val.trim());
+
+    let direccion = "";
+    if (fromBackend) {
+        direccion = datos.direccion; // Usa la ya parseada por Python
     } else {
+        const tvRaw = tv.toUpperCase();
+        const tipoVia = TIPO_VIA_MAP[tvRaw] || tvRaw || "CALLE";
         const loint = lourb?.loint ?? dt?.loint ?? {};
-        const planta = loint?.pt ? ` Pl:${loint.pt}` : "";
-        const puerta = loint?.pu ? ` Pt:${loint.pu}` : "";
-        const escalera = loint?.es ? ` Es:${loint.es}` : "";
-        direccion = `${direccion}${escalera}${planta}${puerta}`.trim();
+        
+        let d = `${tipoVia} ${nv} ${num}`.trim();
+        
+        const ptStr = (loint?.pt ?? "").trim();
+        const puStr = (loint?.pu ?? "").trim();
+        const esStr = (loint?.es ?? "").trim();
+
+        const planta = ptStr && !esPlaceholder(ptStr) ? ` Pl:${ptStr}` : "";
+        const puerta = puStr && !esPlaceholder(puStr) ? ` Pt:${puStr}` : "";
+        const escalera = esStr && !esPlaceholder(esStr) ? ` Es:${esStr}` : "";
+        
+        direccion = `${d}${escalera}${planta}${puerta}`.trim();
     }
 
     // Código Postal — dt.locs.lous.lourb.dp
