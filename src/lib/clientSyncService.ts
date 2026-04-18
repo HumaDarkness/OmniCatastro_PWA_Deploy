@@ -1,18 +1,18 @@
-import { db, type ClienteLocal, type OmniCatastroDB } from '../infra/db/OmniCatastroDB';
-import { supabase } from './supabase';
-import { getCurrentOrganizationId } from './supabase';
-import { clientAggregateV1Repository } from '../infra/clients';
-import type { ClientDocumentKindV1 } from '../domain/clients';
-import type { 
-  ClientSyncService, 
-  EnqueueSyncJobInput, 
-  SyncBatchOptions, 
-  SyncExecutionContext, 
-  JobExecutionResult, 
-  SyncJobRecord, 
-  SyncEntityType, 
-  SyncOperation 
-} from './clientSyncService.types';
+import { db, type ClienteLocal, type OmniCatastroDB } from "../infra/db/OmniCatastroDB";
+import { supabase } from "./supabase";
+import { getCurrentOrganizationId } from "./supabase";
+import { clientAggregateV1Repository } from "../infra/clients";
+import type { ClientDocumentKindV1 } from "../domain/clients";
+import type {
+  ClientSyncService,
+  EnqueueSyncJobInput,
+  SyncBatchOptions,
+  SyncExecutionContext,
+  JobExecutionResult,
+  SyncJobRecord,
+  SyncEntityType,
+  SyncOperation,
+} from "./clientSyncService.types";
 
 // ── UTILITIES ───────────────────────────────────────────────────────────────
 
@@ -33,41 +33,41 @@ export function computeNextRunAfter(attemptCount: number, now = Date.now()): num
 }
 
 function normalizeDniKey(value?: string | null): string {
-  return (value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return (value ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
-function buildClientFullName(client: Pick<ClienteLocal, 'nombre' | 'apellidos' | 'nif'>): string {
+function buildClientFullName(client: Pick<ClienteLocal, "nombre" | "apellidos" | "nif">): string {
   const fullName = [client.nombre, client.apellidos]
-    .filter((part) => typeof part === 'string' && part.trim().length > 0)
-    .join(' ')
-    .replace(/\s+/g, ' ')
+    .filter((part) => typeof part === "string" && part.trim().length > 0)
+    .join(" ")
+    .replace(/\s+/g, " ")
     .trim();
 
-  return fullName || normalizeDniKey(client.nif) || 'CLIENTE SIN NOMBRE';
+  return fullName || normalizeDniKey(client.nif) || "CLIENTE SIN NOMBRE";
 }
 
 function resolveImageExtension(contentType?: string): string {
-  const type = (contentType ?? '').toLowerCase();
-  if (type.includes('png')) return 'png';
-  if (type.includes('webp')) return 'webp';
-  if (type.includes('jpeg') || type.includes('jpg')) return 'jpg';
-  return 'jpg';
+  const type = (contentType ?? "").toLowerCase();
+  if (type.includes("png")) return "png";
+  if (type.includes("webp")) return "webp";
+  if (type.includes("jpeg") || type.includes("jpg")) return "jpg";
+  return "jpg";
 }
 
 async function uploadClientDniWithFallback(params: {
   orgId: string;
   nif: string;
-  side: 'front' | 'back';
+  side: "front" | "back";
   blob: Blob;
 }): Promise<string> {
   const normalizedNif = normalizeDniKey(params.nif) || params.nif.toUpperCase();
   const extension = resolveImageExtension(params.blob.type);
   const path = `${params.orgId}/clients/${normalizedNif}_${params.side}.${extension}`;
-  const contentType = params.blob.type || 'application/octet-stream';
+  const contentType = params.blob.type || "application/octet-stream";
 
-  const targets: Array<{ bucket: 'documents' | 'work_photos'; path: string }> = [
-    { bucket: 'documents', path },
-    { bucket: 'work_photos', path },
+  const targets: Array<{ bucket: "documents" | "work_photos"; path: string }> = [
+    { bucket: "documents", path },
+    { bucket: "work_photos", path },
   ];
 
   const errors: string[] = [];
@@ -84,7 +84,7 @@ async function uploadClientDniWithFallback(params: {
     errors.push(`${target.bucket}: ${error.message}`);
   }
 
-  throw new Error(`DNI ${params.side} upload failed (${errors.join(' | ')})`);
+  throw new Error(`DNI ${params.side} upload failed (${errors.join(" | ")})`);
 }
 
 // ── CLASS DEV IMPLEMENTATION ────────────────────────────────────────────────
@@ -96,7 +96,7 @@ class OmniClientSyncService implements ClientSyncService {
     this.db = database;
   }
 
-  async pullFromCloud(): Promise<{ updated: number; skipped: number; withImages: number; }> {
+  async pullFromCloud(): Promise<{ updated: number; skipped: number; withImages: number }> {
     // stub to satisfy interface
     return { updated: 0, skipped: 0, withImages: 0 };
   }
@@ -121,7 +121,7 @@ class OmniClientSyncService implements ClientSyncService {
     blob: Blob;
     idempotencySeed: string;
   }): Promise<void> {
-    const mimeType = input.blob.type || 'application/octet-stream';
+    const mimeType = input.blob.type || "application/octet-stream";
     const prepare = await clientAggregateV1Repository.prepareDocumentUpload({
       clientId: input.clientId,
       docKind: input.docKind,
@@ -149,7 +149,10 @@ class OmniClientSyncService implements ClientSyncService {
     });
   }
 
-  private async mirrorClientToAggregateV1Shadow(liveClient: ClienteLocal, idempotencySeed: string): Promise<void> {
+  private async mirrorClientToAggregateV1Shadow(
+    liveClient: ClienteLocal,
+    idempotencySeed: string
+  ): Promise<void> {
     const fullName = buildClientFullName(liveClient);
     const dniNumber = normalizeDniKey(liveClient.nif) || null;
 
@@ -164,8 +167,9 @@ class OmniClientSyncService implements ClientSyncService {
       });
       clientId = upsertResult.clientId;
     } catch (error: any) {
-      const errorMessage = String(error?.message ?? '');
-      const maybeUniqueDniConflict = /duplicate key value|clients_v1_org_dni_uq|unique constraint/i.test(errorMessage);
+      const errorMessage = String(error?.message ?? "");
+      const maybeUniqueDniConflict =
+        /duplicate key value|clients_v1_org_dni_uq|unique constraint/i.test(errorMessage);
 
       if (!maybeUniqueDniConflict || !dniNumber) {
         throw error;
@@ -188,7 +192,7 @@ class OmniClientSyncService implements ClientSyncService {
     if (liveClient.dniBlobFront) {
       await this.syncClientDocumentShadowV1({
         clientId,
-        docKind: 'dni_front',
+        docKind: "dni_front",
         blob: liveClient.dniBlobFront,
         idempotencySeed: `${idempotencySeed}:dni_front`,
       });
@@ -197,7 +201,7 @@ class OmniClientSyncService implements ClientSyncService {
     if (liveClient.dniBlobBack) {
       await this.syncClientDocumentShadowV1({
         clientId,
-        docKind: 'dni_back',
+        docKind: "dni_back",
         blob: liveClient.dniBlobBack,
         idempotencySeed: `${idempotencySeed}:dni_back`,
       });
@@ -208,13 +212,13 @@ class OmniClientSyncService implements ClientSyncService {
     const now = Date.now();
     const dedupeKey = buildDedupeKey(input.entityType, input.entityId, input.operation);
 
-    const existing = await this.db.sync_jobs.where('dedupeKey').equals(dedupeKey).first();
+    const existing = await this.db.sync_jobs.where("dedupeKey").equals(dedupeKey).first();
 
     // Reusar la misma fila evita colisiones por índice único &dedupeKey en re-guardados.
     if (existing?.id) {
       await this.db.sync_jobs.update(existing.id!, {
         queue: input.queue ?? existing.queue,
-        status: 'pending',
+        status: "pending",
         attemptCount: 0,
         lockedAt: undefined,
         lockToken: undefined,
@@ -224,28 +228,28 @@ class OmniClientSyncService implements ClientSyncService {
         lastHttpStatus: undefined,
         finishedAt: undefined,
         idempotencyKey: input.payload.idempotencyKey,
-        trigger: input.trigger ?? 'user_action',
+        trigger: input.trigger ?? "user_action",
         payload: input.payload,
         priority: Math.min(existing.priority, input.priority ?? 50),
         updatedAt: now,
-        runAfter: now
+        runAfter: now,
       });
       return existing.id!;
     }
 
     return this.db.sync_jobs.add({
-      queue: input.queue ?? 'default',
+      queue: input.queue ?? "default",
       entityType: input.entityType,
       entityId: input.entityId,
       operation: input.operation,
-      status: 'pending',
+      status: "pending",
       priority: input.priority ?? 50,
       attemptCount: 0,
       maxAttempts: 8,
       runAfter: now,
       idempotencyKey: input.payload.idempotencyKey,
       dedupeKey,
-      trigger: input.trigger ?? 'user_action',
+      trigger: input.trigger ?? "user_action",
       payload: input.payload,
       createdAt: now,
       updatedAt: now,
@@ -255,36 +259,42 @@ class OmniClientSyncService implements ClientSyncService {
   async enqueueUnsyncedClientes(limit = 100): Promise<number> {
     const candidates = await this.db.clientes
       .toCollection()
-      .filter((client) => !client.syncedAt && typeof client.id === 'number')
+      .filter((client) => !client.syncedAt && typeof client.id === "number")
       .limit(limit)
       .toArray();
 
     let enqueued = 0;
     for (const client of candidates) {
       try {
-        await this.enqueueClienteUpsert(client.id!, 'startup_recovery');
+        await this.enqueueClienteUpsert(client.id!, "startup_recovery");
         enqueued += 1;
       } catch (error: any) {
-        console.warn(`[SyncOutbox] no se pudo re-encolar cliente ${client.id}:`, error?.message ?? error);
+        console.warn(
+          `[SyncOutbox] no se pudo re-encolar cliente ${client.id}:`,
+          error?.message ?? error
+        );
       }
     }
 
     return enqueued;
   }
 
-  async enqueueClienteUpsert(clienteId: number, trigger: 'user_action' | 'background' | 'startup_recovery' | 'manual_retry' = 'user_action'): Promise<number> {
+  async enqueueClienteUpsert(
+    clienteId: number,
+    trigger: "user_action" | "background" | "startup_recovery" | "manual_retry" = "user_action"
+  ): Promise<number> {
     const clientLocal = await this.db.clientes.get(clienteId);
     if (!clientLocal) throw new Error("ClienteLocal no encontrado en IndexedDB.");
 
     return this.enqueue({
-      queue: 'clientes',
-      entityType: 'cliente',
+      queue: "clientes",
+      entityType: "cliente",
       entityId: clienteId,
-      operation: 'upsert',
+      operation: "upsert",
       trigger,
       payload: {
-        entityType: 'cliente',
-        operation: 'upsert',
+        entityType: "cliente",
+        operation: "upsert",
         entityId: clienteId,
         idempotencyKey: `${clienteId}_${clientLocal.updatedAt}`,
         trigger: trigger,
@@ -294,29 +304,48 @@ class OmniClientSyncService implements ClientSyncService {
           apellidos: clientLocal.apellidos,
           email: clientLocal.email,
           telefono: clientLocal.telefono,
-          updatedAt: clientLocal.updatedAt
+          updatedAt: clientLocal.updatedAt,
         },
         blobs: [
-          ...(clientLocal.dniBlobFront ? [{ field: 'dniBlobFront' as const, mimeType: clientLocal.dniBlobFront.type, size: clientLocal.dniBlobFront.size }] : []),
-          ...(clientLocal.dniBlobBack ? [{ field: 'dniBlobBack' as const, mimeType: clientLocal.dniBlobBack.type, size: clientLocal.dniBlobBack.size }] : [])
-        ]
-      }
+          ...(clientLocal.dniBlobFront
+            ? [
+                {
+                  field: "dniBlobFront" as const,
+                  mimeType: clientLocal.dniBlobFront.type,
+                  size: clientLocal.dniBlobFront.size,
+                },
+              ]
+            : []),
+          ...(clientLocal.dniBlobBack
+            ? [
+                {
+                  field: "dniBlobBack" as const,
+                  mimeType: clientLocal.dniBlobBack.type,
+                  size: clientLocal.dniBlobBack.size,
+                },
+              ]
+            : []),
+        ],
+      },
     });
   }
 
-  async enqueueIngenieroUpsert(ingenieroId: number, trigger: 'user_action' | 'background' | 'startup_recovery' | 'manual_retry' = 'user_action'): Promise<number> {
+  async enqueueIngenieroUpsert(
+    ingenieroId: number,
+    trigger: "user_action" | "background" | "startup_recovery" | "manual_retry" = "user_action"
+  ): Promise<number> {
     const ingenieroLocal = await this.db.ingenieros.get(ingenieroId);
     if (!ingenieroLocal) throw new Error("IngenieroLocal no encontrado.");
 
     return this.enqueue({
-      queue: 'ingenieros',
-      entityType: 'ingeniero',
+      queue: "ingenieros",
+      entityType: "ingeniero",
       entityId: ingenieroId,
-      operation: 'upsert',
+      operation: "upsert",
       trigger,
       payload: {
-        entityType: 'ingeniero',
-        operation: 'upsert',
+        entityType: "ingeniero",
+        operation: "upsert",
         entityId: ingenieroId,
         idempotencyKey: `${ingenieroId}_${ingenieroLocal.updatedAt}`,
         trigger: trigger,
@@ -327,67 +356,97 @@ class OmniClientSyncService implements ClientSyncService {
           colegiado: ingenieroLocal.colegiado,
           email: ingenieroLocal.email,
           isActive: ingenieroLocal.isActive,
-          updatedAt: ingenieroLocal.updatedAt
+          updatedAt: ingenieroLocal.updatedAt,
         },
         blobs: [
-          ...(ingenieroLocal.firmaBlob ? [{ field: 'firmaBlob' as const, mimeType: ingenieroLocal.firmaBlob.type, size: ingenieroLocal.firmaBlob.size }] : [])
-        ]
-      }
+          ...(ingenieroLocal.firmaBlob
+            ? [
+                {
+                  field: "firmaBlob" as const,
+                  mimeType: ingenieroLocal.firmaBlob.type,
+                  size: ingenieroLocal.firmaBlob.size,
+                },
+              ]
+            : []),
+        ],
+      },
     });
   }
 
-  async claimBatch({ now = Date.now(), limit = 10, lockToken, leaseMs = 30_000 }: SyncBatchOptions): Promise<SyncJobRecord[]> {
-    return this.db.transaction('rw', this.db.sync_jobs, async () => {
+  async claimBatch({
+    now = Date.now(),
+    limit = 10,
+    lockToken,
+    leaseMs = 30_000,
+  }: SyncBatchOptions): Promise<SyncJobRecord[]> {
+    return this.db.transaction("rw", this.db.sync_jobs, async () => {
       const jobsPending = await this.db.sync_jobs
-        .where('[status+runAfter]')
-        .between(['pending', 0], ['pending', now])
+        .where("[status+runAfter]")
+        .between(["pending", 0], ["pending", now])
         .toArray();
 
       const jobsRetry = await this.db.sync_jobs
-        .where('[status+runAfter]')
-        .between(['retry', 0], ['retry', now])
+        .where("[status+runAfter]")
+        .between(["retry", 0], ["retry", now])
         .toArray();
 
-      const allReady = [...jobsPending, ...jobsRetry].sort((a, b) => a.priority - b.priority || a.createdAt - b.createdAt);
+      const allReady = [...jobsPending, ...jobsRetry].sort(
+        (a, b) => a.priority - b.priority || a.createdAt - b.createdAt
+      );
       const picked = allReady.slice(0, limit);
 
       await Promise.all(
-        picked.map(job =>
+        picked.map((job) =>
           this.db.sync_jobs.update(job.id!, {
-            status: 'processing',
+            status: "processing",
             lockedAt: now,
             lockToken,
             leaseMs,
-            updatedAt: now
+            updatedAt: now,
           })
         )
       );
 
-      return picked.map(job => ({
+      return picked.map((job) => ({
         ...job,
-        status: 'processing' as const,
+        status: "processing" as const,
         lockedAt: now,
         lockToken,
-        leaseMs
+        leaseMs,
       }));
     });
   }
 
   async executeJob(job: SyncJobRecord): Promise<JobExecutionResult> {
     if (!supabase) {
-      return { ok: false, retryable: true, errorCode: 'NO_SUPABASE', errorMessage: 'Supabase no configurado' };
+      return {
+        ok: false,
+        retryable: true,
+        errorCode: "NO_SUPABASE",
+        errorMessage: "Supabase no configurado",
+      };
     }
 
     const orgId = await getCurrentOrganizationId();
     if (!orgId) {
-      return { ok: false, retryable: true, errorCode: 'NO_ORG_ID', errorMessage: 'Organización no disponible' };
+      return {
+        ok: false,
+        retryable: true,
+        errorCode: "NO_ORG_ID",
+        errorMessage: "Organización no disponible",
+      };
     }
 
     try {
-      if (job.entityType === 'cliente' && job.operation === 'upsert') {
+      if (job.entityType === "cliente" && job.operation === "upsert") {
         const liveClient = await this.db.clientes.get(job.entityId);
         if (!liveClient) {
-          return { ok: false, retryable: false, errorCode: 'DELETED_LOCALLY', errorMessage: 'Cliente inexistente al sincronizar' };
+          return {
+            ok: false,
+            retryable: false,
+            errorCode: "DELETED_LOCALLY",
+            errorMessage: "Cliente inexistente al sincronizar",
+          };
         }
 
         // Subida de Blobs del cliente a Storage
@@ -398,7 +457,7 @@ class OmniClientSyncService implements ClientSyncService {
           updatedDniFrontPath = await uploadClientDniWithFallback({
             orgId,
             nif: liveClient.nif,
-            side: 'front',
+            side: "front",
             blob: liveClient.dniBlobFront,
           });
         }
@@ -407,7 +466,7 @@ class OmniClientSyncService implements ClientSyncService {
           updatedDniBackPath = await uploadClientDniWithFallback({
             orgId,
             nif: liveClient.nif,
-            side: 'back',
+            side: "back",
             blob: liveClient.dniBlobBack,
           });
         }
@@ -420,7 +479,7 @@ class OmniClientSyncService implements ClientSyncService {
           last_name_1: liveClient.apellidos,
           dni_front_path: updatedDniFrontPath,
           dni_back_path: updatedDniBackPath,
-          updated_at: new Date(liveClient.updatedAt).toISOString()
+          updated_at: new Date(liveClient.updatedAt).toISOString(),
         };
 
         // LWW Atómico (Evitar sobreescritura si Nube tiene datos MÁS recientes)
@@ -431,24 +490,27 @@ class OmniClientSyncService implements ClientSyncService {
         };
 
         let attempt1 = await supabase
-          .from('clients')
+          .from("clients")
           .update(finalPayload)
-          .eq('organization_id', orgId)
-          .eq('dni', liveClient.nif)
-          .lte('updated_at', finalPayload.updated_at)
-          .select('id');
-          
+          .eq("organization_id", orgId)
+          .eq("dni", liveClient.nif)
+          .lte("updated_at", finalPayload.updated_at)
+          .select("id");
+
         let dbError = attempt1.error;
         let count = attempt1.data?.length ?? 0;
 
-        if (dbError && /column\s+clients\.(email|phone)\s+does not exist/i.test(dbError.message || '')) {
+        if (
+          dbError &&
+          /column\s+clients\.(email|phone)\s+does not exist/i.test(dbError.message || "")
+        ) {
           const retry = await supabase
-            .from('clients')
+            .from("clients")
             .update(basePayload)
-            .eq('organization_id', orgId)
-            .eq('dni', liveClient.nif)
-            .lte('updated_at', finalPayload.updated_at)
-            .select('id');
+            .eq("organization_id", orgId)
+            .eq("dni", liveClient.nif)
+            .lte("updated_at", finalPayload.updated_at)
+            .select("id");
           dbError = retry.error;
           count = retry.data?.length ?? 0;
         }
@@ -460,28 +522,37 @@ class OmniClientSyncService implements ClientSyncService {
         if (count === 0) {
           // Si el update retornó 0, puede ser que la fila No Exista, o que exista pero updated_at > nuestra versión.
           // Intentamos insert. Si falla por clave duplicada, ¡entonces existía y fue un conflicto stale!
-          let { error: insertError } = await supabase
-            .from('clients')
-            .insert(finalPayload);
-          
-          if (insertError && /column\s+clients\.(email|phone)\s+does not exist/i.test(insertError.message || '')) {
-              const retryInsert = await supabase.from('clients').insert(basePayload);
-              insertError = retryInsert.error;
+          let { error: insertError } = await supabase.from("clients").insert(finalPayload);
+
+          if (
+            insertError &&
+            /column\s+clients\.(email|phone)\s+does not exist/i.test(insertError.message || "")
+          ) {
+            const retryInsert = await supabase.from("clients").insert(basePayload);
+            insertError = retryInsert.error;
           }
 
           if (insertError) {
-              const isConflict = /duplicate key value|unique constraint|clients_org_dni_uq|clients_organization_id_dni_key/i.test(insertError.message);
-              if (isConflict) {
-                  console.warn("Push abortado por stale conflict", {
-                    clientId: liveClient.id,
-                    nif: liveClient.nif,
-                    localTs: liveClient.updatedAt,
-                  });
-                  await this.db.clientes.update(liveClient.id!, { syncStatus: "stale_conflict" });
-                  return { ok: false, retryable: false, errorCode: 'STALE_CONFLICT', errorMessage: 'El servidor tiene datos más recientes (LWW activado).' };
-              } else {
-                  throw new Error(`Database insert fallback failed: ${insertError.message}`);
-              }
+            const isConflict =
+              /duplicate key value|unique constraint|clients_org_dni_uq|clients_organization_id_dni_key/i.test(
+                insertError.message
+              );
+            if (isConflict) {
+              console.warn("Push abortado por stale conflict", {
+                clientId: liveClient.id,
+                nif: liveClient.nif,
+                localTs: liveClient.updatedAt,
+              });
+              await this.db.clientes.update(liveClient.id!, { syncStatus: "stale_conflict" });
+              return {
+                ok: false,
+                retryable: false,
+                errorCode: "STALE_CONFLICT",
+                errorMessage: "El servidor tiene datos más recientes (LWW activado).",
+              };
+            } else {
+              throw new Error(`Database insert fallback failed: ${insertError.message}`);
+            }
           }
         }
 
@@ -489,7 +560,9 @@ class OmniClientSyncService implements ClientSyncService {
         await this.db.clientes.update(liveClient.id!, { syncedAt: Date.now() });
 
         try {
-          const idempotencySeed = String(job.payload?.idempotencyKey ?? `${job.id}_${liveClient.updatedAt}`);
+          const idempotencySeed = String(
+            job.payload?.idempotencyKey ?? `${job.id}_${liveClient.updatedAt}`
+          );
           await this.mirrorClientToAggregateV1Shadow(liveClient, idempotencySeed);
         } catch (shadowError: any) {
           // Shadow mode nunca debe bloquear la ruta legacy estable.
@@ -497,25 +570,33 @@ class OmniClientSyncService implements ClientSyncService {
         }
 
         return { ok: true, retryable: false };
-
       } else {
         // Fallback genérico a otros procesos pendientes de desarrollo (ingenieros, deletes...)
-        return { ok: false, retryable: false, errorCode: 'NOT_IMPLEMENTED', errorMessage: `Operación no procesador para ` };
+        return {
+          ok: false,
+          retryable: false,
+          errorCode: "NOT_IMPLEMENTED",
+          errorMessage: `Operación no procesador para `,
+        };
       }
-
     } catch (e: any) {
       console.warn(`SyncJob ${job.id} falló:`, e.message);
       // Evaluamos si el error es de Red (retryable) o es Hard Fail. (La mayoría del tiempo la subida a DB en fallback network timeout es retryable)
-      return { ok: false, retryable: true, errorMessage: e.message, errorCode: 'NETWORK_OR_API_ERROR' };
+      return {
+        ok: false,
+        retryable: true,
+        errorMessage: e.message,
+        errorCode: "NETWORK_OR_API_ERROR",
+      };
     }
   }
 
   async markDone(jobId: number, lockToken: string, meta?: Partial<SyncJobRecord>): Promise<void> {
     await this.db.sync_jobs.where({ id: jobId, lockToken }).modify({
-      status: 'done',
+      status: "done",
       finishedAt: Date.now(),
       updatedAt: Date.now(),
-      ...meta
+      ...meta,
     });
   }
 
@@ -532,7 +613,7 @@ class OmniClientSyncService implements ClientSyncService {
     const nextRun = result.nextRunAfter ?? computeNextRunAfter(newAttempts);
 
     await this.db.sync_jobs.update(jobId, {
-      status: 'retry',
+      status: "retry",
       attemptCount: newAttempts,
       runAfter: nextRun,
       errorCode: result.errorCode,
@@ -540,24 +621,27 @@ class OmniClientSyncService implements ClientSyncService {
       lastHttpStatus: result.httpStatus,
       updatedAt: Date.now(),
       lockedAt: undefined,
-      lockToken: undefined
+      lockToken: undefined,
     });
   }
 
   async markFailed(jobId: number, lockToken: string, result: JobExecutionResult): Promise<void> {
     await this.db.sync_jobs.where({ id: jobId, lockToken }).modify({
-      status: 'dead_letter',
+      status: "dead_letter",
       errorCode: result.errorCode,
       errorMessage: result.errorMessage,
       lastHttpStatus: result.httpStatus,
       finishedAt: Date.now(),
       updatedAt: Date.now(),
       lockedAt: undefined,
-      lockToken: undefined
+      lockToken: undefined,
     });
   }
 
-  async processBatch(options: SyncBatchOptions, ctx?: SyncExecutionContext): Promise<{ processed: number; succeeded: number; retried: number; failed: number; }> {
+  async processBatch(
+    options: SyncBatchOptions,
+    ctx?: SyncExecutionContext
+  ): Promise<{ processed: number; succeeded: number; retried: number; failed: number }> {
     const jobs = await this.claimBatch(options);
     let succeeded = 0;
     let retried = 0;
@@ -586,20 +670,23 @@ class OmniClientSyncService implements ClientSyncService {
   async recoverStaleLocks(now = Date.now()): Promise<number> {
     const staleLimit = now - 60_000; // 1 min lock tolerance
     const stalledJobs = await this.db.sync_jobs
-      .where('status').equals('processing')
-      .filter(j => !!j.lockedAt && j.lockedAt <= staleLimit)
+      .where("status")
+      .equals("processing")
+      .filter((j) => !!j.lockedAt && j.lockedAt <= staleLimit)
       .toArray();
 
     if (stalledJobs.length === 0) return 0;
 
-    await Promise.all(stalledJobs.map(job => 
-      this.db.sync_jobs.update(job.id!, {
-        status: 'retry', // return to retry
-        lockedAt: undefined,
-        lockToken: undefined,
-        updatedAt: now
-      })
-    ));
+    await Promise.all(
+      stalledJobs.map((job) =>
+        this.db.sync_jobs.update(job.id!, {
+          status: "retry", // return to retry
+          lockedAt: undefined,
+          lockToken: undefined,
+          updatedAt: now,
+        })
+      )
+    );
 
     return stalledJobs.length;
   }
@@ -607,8 +694,9 @@ class OmniClientSyncService implements ClientSyncService {
   async compactQueue(entityType: SyncEntityType, entityId: number): Promise<void> {
     // Purges old 'done'/'dead_letter' items
     await this.db.sync_jobs
-      .where('[entityType+entityId]').equals([entityType, entityId])
-      .filter(j => ['done', 'dead_letter'].includes(j.status))
+      .where("[entityType+entityId]")
+      .equals([entityType, entityId])
+      .filter((j) => ["done", "dead_letter"].includes(j.status))
       .delete();
   }
 }

@@ -26,260 +26,278 @@ let lastCloudWarmupAt = 0;
 let warmupInFlight: Promise<boolean> | null = null;
 let cloudTransientFailureCount = 0;
 
-async function requestWithCloudFallback<T>(request: (client: typeof kyClient) => Promise<T>): Promise<{
-    data: T;
-    viaFallback: boolean;
+async function requestWithCloudFallback<T>(
+  request: (client: typeof kyClient) => Promise<T>
+): Promise<{
+  data: T;
+  viaFallback: boolean;
 }> {
-    try {
-        const data = await request(kyClient);
-        return { data, viaFallback: false };
-    } catch (primaryError) {
-        if (!hasKyFallbackClient) {
-            throw primaryError;
-        }
-
-        const data = await request(kyFallbackClient);
-        return { data, viaFallback: true };
+  try {
+    const data = await request(kyClient);
+    return { data, viaFallback: false };
+  } catch (primaryError) {
+    if (!hasKyFallbackClient) {
+      throw primaryError;
     }
+
+    const data = await request(kyFallbackClient);
+    return { data, viaFallback: true };
+  }
 }
 
 // ─── Mapeos PWA → Backend ────────────────────────────────────────────
 
 function mapScenario(s: Scenario): string {
-    switch (s) {
-        case "particion_aislada": return "despues";
-        case "nada_aislado": return "antes_normal";
-        case "cubierta_aislada": return "antes_aislado";
-        default: return "antes_normal";
-    }
+  switch (s) {
+    case "particion_aislada":
+      return "despues";
+    case "nada_aislado":
+      return "antes_normal";
+    case "cubierta_aislada":
+      return "antes_aislado";
+    default:
+      return "antes_normal";
+  }
 }
 
 function mapCaso(c: Caso): number {
-    // 1 = estanco/lig_ventilado, 2 = muy_ventilado
-    return c === "estanco" ? 1 : 2;
+  // 1 = estanco/lig_ventilado, 2 = muy_ventilado
+  return c === "estanco" ? 1 : 2;
 }
 
 // ─── Tipos públicos ──────────────────────────────────────────────────
 
 export interface RemoteCalculoResponse {
-    resultado: ResultadoTermico;
-    informe: string;
+  resultado: ResultadoTermico;
+  informe: string;
 }
 
 export type CloudAvailabilityState = "active" | "starting" | "offline";
 
 export interface CloudAvailabilitySnapshot {
-    state: CloudAvailabilityState;
-    checkedAt: number;
-    latencyMs: number | null;
-    fromCache: boolean;
-    message: string;
+  state: CloudAvailabilityState;
+  checkedAt: number;
+  latencyMs: number | null;
+  fromCache: boolean;
+  message: string;
 }
 
 function mapRemoteResponse(params: ParamsCAE, data: Record<string, any>): RemoteCalculoResponse {
-    const resultado: ResultadoTermico = {
-        rt_inicial: data.rt_inicial,
-        rt_final: data.rt_final,
-        up_inicial: data.up_inicial,
-        up_final: data.up_final,
-        b_inicial: data.b_inicial,
-        b_final: data.b_final,
-        ui_final: data.ui_final,
-        uf_final: data.uf_final,
-        ratio: data.ratio,
-        ahorro: data.ahorro_kwh, // backend: ahorro_kwh → PWA: ahorro
-        pct_envolvente: data.pct_envolvente,
-        r_mat_inicial: params.capas
-            .filter(c => !c.es_nueva)
-            .reduce((s, c) => s + (Number(c.r_valor) || ((Number(c.espesor) || 0) / (Number(c.lambda_val) || 1))), 0),
-        r_mat_final: params.capas
-            .reduce((s, c) => s + (Number(c.r_valor) || ((Number(c.espesor) || 0) / (Number(c.lambda_val) || 1))), 0),
-    };
+  const resultado: ResultadoTermico = {
+    rt_inicial: data.rt_inicial,
+    rt_final: data.rt_final,
+    up_inicial: data.up_inicial,
+    up_final: data.up_final,
+    b_inicial: data.b_inicial,
+    b_final: data.b_final,
+    ui_final: data.ui_final,
+    uf_final: data.uf_final,
+    ratio: data.ratio,
+    ahorro: data.ahorro_kwh, // backend: ahorro_kwh → PWA: ahorro
+    pct_envolvente: data.pct_envolvente,
+    r_mat_inicial: params.capas
+      .filter((c) => !c.es_nueva)
+      .reduce(
+        (s, c) => s + (Number(c.r_valor) || (Number(c.espesor) || 0) / (Number(c.lambda_val) || 1)),
+        0
+      ),
+    r_mat_final: params.capas.reduce(
+      (s, c) => s + (Number(c.r_valor) || (Number(c.espesor) || 0) / (Number(c.lambda_val) || 1)),
+      0
+    ),
+  };
 
-    return {
-        resultado,
-        informe: data.informe_texto,
-    };
+  return {
+    resultado,
+    informe: data.informe_texto,
+  };
 }
 
 function isRetryableNetworkFailure(error: unknown): boolean {
-    if (!(error instanceof Error)) {
-        return false;
-    }
-    return NETWORK_ERROR_PATTERN.test(error.message);
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return NETWORK_ERROR_PATTERN.test(error.message);
 }
 
 function nowMs(): number {
-    return Date.now();
+  return Date.now();
 }
 
 function buildOfflineSnapshot(message: string): CloudAvailabilitySnapshot {
-    return {
-        state: "offline",
-        checkedAt: nowMs(),
-        latencyMs: null,
-        fromCache: false,
-        message,
-    };
+  return {
+    state: "offline",
+    checkedAt: nowMs(),
+    latencyMs: null,
+    fromCache: false,
+    message,
+  };
 }
 
 export async function getCloudAvailabilitySnapshot(options?: {
-    force?: boolean;
-    timeoutMs?: number;
+  force?: boolean;
+  timeoutMs?: number;
 }): Promise<CloudAvailabilitySnapshot> {
-    const force = options?.force ?? false;
-    const timeoutMs = options?.timeoutMs ?? CLOUD_STATUS_TIMEOUT_MS;
-    const checkedAt = nowMs();
+  const force = options?.force ?? false;
+  const timeoutMs = options?.timeoutMs ?? CLOUD_STATUS_TIMEOUT_MS;
+  const checkedAt = nowMs();
 
-    if (!force && checkedAt - lastCloudWarmupAt < CLOUD_WARMUP_TTL_MS) {
-        return {
-            state: "active",
-            checkedAt,
-            latencyMs: null,
-            fromCache: true,
-            message: "Cloud activa (cache caliente)",
-        };
+  if (!force && checkedAt - lastCloudWarmupAt < CLOUD_WARMUP_TTL_MS) {
+    return {
+      state: "active",
+      checkedAt,
+      latencyMs: null,
+      fromCache: true,
+      message: "Cloud activa (cache caliente)",
+    };
+  }
+
+  const startedAt = nowMs();
+
+  try {
+    const healthResponse = await requestWithCloudFallback((client) =>
+      client
+        .get("health", {
+          timeout: timeoutMs,
+          retry: { limit: 0 },
+        })
+        .json<Record<string, any>>()
+    );
+
+    const finishedAt = nowMs();
+    const latencyMs = Math.max(finishedAt - startedAt, 0);
+    lastCloudWarmupAt = finishedAt;
+    cloudTransientFailureCount = 0;
+
+    return {
+      state: "active",
+      checkedAt: finishedAt,
+      latencyMs,
+      fromCache: false,
+      message: healthResponse.viaFallback
+        ? "Cloud activa (fallback API)"
+        : latencyMs > CLOUD_HIGH_LATENCY_MS
+          ? "Cloud activa con latencia elevada"
+          : "Cloud activa",
+    };
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : "error desconocido";
+    const normalized = rawMessage.toLowerCase();
+
+    if (
+      NETWORK_ERROR_PATTERN.test(rawMessage) ||
+      normalized.includes("503") ||
+      normalized.includes("504")
+    ) {
+      cloudTransientFailureCount += 1;
+      const elapsedSinceLastSuccess = nowMs() - lastCloudWarmupAt;
+      const shouldMarkOffline =
+        cloudTransientFailureCount >= CLOUD_STARTING_RETRY_LIMIT &&
+        elapsedSinceLastSuccess > CLOUD_STARTING_GRACE_MS;
+
+      if (shouldMarkOffline) {
+        return buildOfflineSnapshot("Cloud no disponible temporalmente (reintentos agotados)");
+      }
+
+      return {
+        state: "starting",
+        checkedAt: nowMs(),
+        latencyMs: null,
+        fromCache: false,
+        message: "Cloud iniciando o red inestable",
+      };
     }
 
-    const startedAt = nowMs();
-
-    try {
-        const healthResponse = await requestWithCloudFallback((client) =>
-            client
-                .get("health", {
-                    timeout: timeoutMs,
-                    retry: { limit: 0 },
-                })
-                .json<Record<string, any>>()
-        );
-
-        const finishedAt = nowMs();
-        const latencyMs = Math.max(finishedAt - startedAt, 0);
-        lastCloudWarmupAt = finishedAt;
-        cloudTransientFailureCount = 0;
-
-        return {
-            state: "active",
-            checkedAt: finishedAt,
-            latencyMs,
-            fromCache: false,
-            message: healthResponse.viaFallback
-                ? "Cloud activa (fallback API)"
-                : latencyMs > CLOUD_HIGH_LATENCY_MS
-                ? "Cloud activa con latencia elevada"
-                : "Cloud activa",
-        };
-    } catch (error) {
-        const rawMessage = error instanceof Error ? error.message : "error desconocido";
-        const normalized = rawMessage.toLowerCase();
-
-        if (NETWORK_ERROR_PATTERN.test(rawMessage) || normalized.includes("503") || normalized.includes("504")) {
-            cloudTransientFailureCount += 1;
-            const elapsedSinceLastSuccess = nowMs() - lastCloudWarmupAt;
-            const shouldMarkOffline =
-                cloudTransientFailureCount >= CLOUD_STARTING_RETRY_LIMIT
-                && elapsedSinceLastSuccess > CLOUD_STARTING_GRACE_MS;
-
-            if (shouldMarkOffline) {
-                return buildOfflineSnapshot("Cloud no disponible temporalmente (reintentos agotados)");
-            }
-
-            return {
-                state: "starting",
-                checkedAt: nowMs(),
-                latencyMs: null,
-                fromCache: false,
-                message: "Cloud iniciando o red inestable",
-            };
-        }
-
-        if (normalized.includes("403") || normalized.includes("origin")) {
-            return buildOfflineSnapshot("Cloud bloqueada por origen/CORS");
-        }
-
-        return buildOfflineSnapshot(`Cloud no disponible (${rawMessage})`);
+    if (normalized.includes("403") || normalized.includes("origin")) {
+      return buildOfflineSnapshot("Cloud bloqueada por origen/CORS");
     }
+
+    return buildOfflineSnapshot(`Cloud no disponible (${rawMessage})`);
+  }
 }
 
-export async function warmUpCloudApi(options?: { force?: boolean; timeoutMs?: number }): Promise<boolean> {
-    const force = options?.force ?? false;
-    const timeoutMs = options?.timeoutMs ?? CLOUD_WARMUP_TIMEOUT_MS;
-    const now = Date.now();
+export async function warmUpCloudApi(options?: {
+  force?: boolean;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  const force = options?.force ?? false;
+  const timeoutMs = options?.timeoutMs ?? CLOUD_WARMUP_TIMEOUT_MS;
+  const now = Date.now();
 
-    if (!force && now - lastCloudWarmupAt < CLOUD_WARMUP_TTL_MS) {
-        return true;
-    }
+  if (!force && now - lastCloudWarmupAt < CLOUD_WARMUP_TTL_MS) {
+    return true;
+  }
 
-    if (warmupInFlight) {
-        return warmupInFlight;
-    }
-
-    warmupInFlight = (async () => {
-        try {
-            await requestWithCloudFallback((client) =>
-                client
-                    .get("health", {
-                        timeout: timeoutMs,
-                        retry: { limit: 0 },
-                    })
-                    .json<Record<string, any>>()
-            );
-            lastCloudWarmupAt = Date.now();
-            cloudTransientFailureCount = 0;
-            return true;
-        } catch {
-            cloudTransientFailureCount += 1;
-            return false;
-        } finally {
-            warmupInFlight = null;
-        }
-    })();
-
+  if (warmupInFlight) {
     return warmupInFlight;
+  }
+
+  warmupInFlight = (async () => {
+    try {
+      await requestWithCloudFallback((client) =>
+        client
+          .get("health", {
+            timeout: timeoutMs,
+            retry: { limit: 0 },
+          })
+          .json<Record<string, any>>()
+      );
+      lastCloudWarmupAt = Date.now();
+      cloudTransientFailureCount = 0;
+      return true;
+    } catch {
+      cloudTransientFailureCount += 1;
+      return false;
+    } finally {
+      warmupInFlight = null;
+    }
+  })();
+
+  return warmupInFlight;
 }
 
 // ─── Función pública (firma intacta) ─────────────────────────────────
 
 export async function calcularDbHeRemoto(params: ParamsCAE): Promise<RemoteCalculoResponse> {
-    // 1. Construir payload (la autenticación la inyecta kyClient.beforeRequest)
-    const payload = {
-        capas: params.capas.map(c => ({
-            nombre: c.nombre,
-            espesor: Number(c.espesor) || 0,
-            lambda_val: Number(c.lambda_val) || 0,
-            r_valor: Number(c.r_valor) || 0,
-            es_nueva: c.es_nueva
-        })),
-        area_h_nh: params.area_h_nh,
-        area_nh_e: params.area_nh_e,
-        superficie_actuacion: params.superficie_actuacion,
-        zona_climatica_g: params.g,
-        sup_envolvente_total: params.sup_envolvente_total,
-        escenario_i: mapScenario(params.scenario_i),
-        caso_i: mapCaso(params.case_i),
-        escenario_f: mapScenario(params.scenario_f),
-        caso_f: mapCaso(params.case_f),
-    };
+  // 1. Construir payload (la autenticación la inyecta kyClient.beforeRequest)
+  const payload = {
+    capas: params.capas.map((c) => ({
+      nombre: c.nombre,
+      espesor: Number(c.espesor) || 0,
+      lambda_val: Number(c.lambda_val) || 0,
+      r_valor: Number(c.r_valor) || 0,
+      es_nueva: c.es_nueva,
+    })),
+    area_h_nh: params.area_h_nh,
+    area_nh_e: params.area_nh_e,
+    superficie_actuacion: params.superficie_actuacion,
+    zona_climatica_g: params.g,
+    sup_envolvente_total: params.sup_envolvente_total,
+    escenario_i: mapScenario(params.scenario_i),
+    caso_i: mapCaso(params.case_i),
+    escenario_f: mapScenario(params.scenario_f),
+    caso_f: mapCaso(params.case_f),
+  };
 
-    // 2. Ejecutar llamada vía Ky (retry automático + token refresh transparente)
-    const buildRequest = (client: typeof kyClient) =>
-        client
-            .post("api/v1/calcular-db-he", {
-                json: payload,
-                timeout: CLOUD_CALC_TIMEOUT_MS,
-            })
-            .json<Record<string, any>>();
+  // 2. Ejecutar llamada vía Ky (retry automático + token refresh transparente)
+  const buildRequest = (client: typeof kyClient) =>
+    client
+      .post("api/v1/calcular-db-he", {
+        json: payload,
+        timeout: CLOUD_CALC_TIMEOUT_MS,
+      })
+      .json<Record<string, any>>();
 
-    try {
-        const { data } = await requestWithCloudFallback((client) => buildRequest(client));
-        return mapRemoteResponse(params, data);
-    } catch (error) {
-        if (!isRetryableNetworkFailure(error)) {
-            throw error;
-        }
-
-        await warmUpCloudApi({ force: true, timeoutMs: CLOUD_RECOVERY_WARMUP_TIMEOUT_MS });
-        const { data } = await requestWithCloudFallback((client) => buildRequest(client));
-        return mapRemoteResponse(params, data);
+  try {
+    const { data } = await requestWithCloudFallback((client) => buildRequest(client));
+    return mapRemoteResponse(params, data);
+  } catch (error) {
+    if (!isRetryableNetworkFailure(error)) {
+      throw error;
     }
+
+    await warmUpCloudApi({ force: true, timeoutMs: CLOUD_RECOVERY_WARMUP_TIMEOUT_MS });
+    const { data } = await requestWithCloudFallback((client) => buildRequest(client));
+    return mapRemoteResponse(params, data);
+  }
 }

@@ -1,12 +1,12 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { db, type IngenieroLocal } from '../infra/db/OmniCatastroDB';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { db, type IngenieroLocal } from "../infra/db/OmniCatastroDB";
 
 interface IngenieroContextValue {
   ingeniero: IngenieroLocal | null;
-  firmaUrl: string | null;       // Object URL efímero, listo para <img src>
+  firmaUrl: string | null; // Object URL efímero, listo para <img src>
   isLoading: boolean;
   setActivo: (id: number) => Promise<void>;
-  refresh: () => Promise<void>;  // Forzar recarga tras guardar un nuevo ingeniero
+  refresh: () => Promise<void>; // Forzar recarga tras guardar un nuevo ingeniero
 }
 
 const IngenieroCtx = createContext<IngenieroContextValue | null>(null);
@@ -24,7 +24,11 @@ export function IngenieroProvider({ children }: React.PropsWithChildren) {
       URL.revokeObjectURL(prevFirmaUrl.current);
       prevFirmaUrl.current = null;
     }
-    if (!ing) { setIngeniero(null); setFirmaUrl(null); return; }
+    if (!ing) {
+      setIngeniero(null);
+      setFirmaUrl(null);
+      return;
+    }
 
     setIngeniero(ing);
     if (ing.firmaBlob) {
@@ -52,11 +56,14 @@ export function IngenieroProvider({ children }: React.PropsWithChildren) {
     };
   }, [refresh]);
 
-  const setActivo = useCallback(async (id: number) => {
-    await db.setIngenieroActivo(id);
-    const ing = await db.ingenieros.get(id);
-    _applyIngeniero(ing);
-  }, [_applyIngeniero]);
+  const setActivo = useCallback(
+    async (id: number) => {
+      await db.setIngenieroActivo(id);
+      const ing = await db.ingenieros.get(id);
+      _applyIngeniero(ing);
+    },
+    [_applyIngeniero]
+  );
 
   return (
     <IngenieroCtx.Provider value={{ ingeniero, firmaUrl, isLoading, setActivo, refresh }}>
@@ -68,6 +75,6 @@ export function IngenieroProvider({ children }: React.PropsWithChildren) {
 /** Hook de consumo — lanza error si se usa fuera del Provider */
 export function useIngeniero(): IngenieroContextValue {
   const ctx = useContext(IngenieroCtx);
-  if (!ctx) throw new Error('useIngeniero debe usarse dentro de <IngenieroProvider>');
+  if (!ctx) throw new Error("useIngeniero debe usarse dentro de <IngenieroProvider>");
   return ctx;
 }

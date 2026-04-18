@@ -19,14 +19,14 @@ export function CertificadoSuccessState({
   textoPDF,
   onDescargarPDF,
   modoExperto,
-  onCrearOtro
+  onCrearOtro,
 }: CertificadoSuccessStateProps) {
   const { copy, state: copyState } = useClipboard({ delay: 2500 });
 
   useEffect(() => {
     // Fire confetti on mount
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    
+
     if (!prefersReducedMotion) {
       const duration = 2000;
       const end = Date.now() + duration;
@@ -37,24 +37,24 @@ export function CertificadoSuccessState({
           angle: 60,
           spread: 55,
           origin: { x: 0 },
-          colors: ['#01696f', '#4f98a3', '#ffffff']
+          colors: ["#01696f", "#4f98a3", "#ffffff"],
         });
         confetti({
           particleCount: 3,
           angle: 120,
           spread: 55,
           origin: { x: 1 },
-          colors: ['#01696f', '#4f98a3', '#ffffff']
+          colors: ["#01696f", "#4f98a3", "#ffffff"],
         });
 
         if (Date.now() < end) {
           requestAnimationFrame(frame);
         }
       };
-      
+
       frame();
     }
-    
+
     return () => {
       // cleanup confetti if unmounted quickly
       confetti.reset();
@@ -66,7 +66,7 @@ export function CertificadoSuccessState({
       <div className="rounded-full bg-green-100 p-3 text-green-600 dark:bg-green-900/30 dark:text-green-500">
         <CheckCircle2 className="w-12 h-12" />
       </div>
-      
+
       <div className="text-center space-y-2">
         <h2 className="text-2xl font-bold tracking-tight">Certificado Finalizado</h2>
         <p className="text-muted-foreground">
@@ -75,9 +75,9 @@ export function CertificadoSuccessState({
       </div>
 
       <div className="flex flex-col sm:flex-row items-center gap-4 pt-4 w-full justify-center">
-        <Button 
-          variant="default" 
-          size="lg" 
+        <Button
+          variant="default"
+          size="lg"
           className="w-full sm:w-auto text-base h-12 px-8"
           onClick={() => copy(textoPDF)}
         >
@@ -93,8 +93,8 @@ export function CertificadoSuccessState({
             </>
           )}
         </Button>
-        <Button 
-          variant="outline" 
+        <Button
+          variant="outline"
           size="lg"
           className="w-full sm:w-auto text-base h-12 px-8"
           onClick={onDescargarPDF}
@@ -111,7 +111,7 @@ export function CertificadoSuccessState({
             Este certificado se ha guardado en el lote activo.
           </p>
         ) : null}
-        
+
         <Button variant="ghost" onClick={onCrearOtro}>
           + Crear Otro Certificado
         </Button>

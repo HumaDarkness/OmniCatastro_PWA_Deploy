@@ -2,17 +2,15 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OmniCatastro API",
-    "description": "Backend protegido para cálculos CTE DB-HE y generación de informes CAE.",
+    "description": "Backend protegido para cï¿½lculos CTE DB-HE y generaciï¿½n de informes CAE.",
     "version": "1.0.0"
   },
   "paths": {
     "/api/v1/parse-cex": {
       "post": {
-        "tags": [
-          "Parsing"
-        ],
+        "tags": ["Parsing"],
         "summary": "Parse Cex",
-        "description": "Parsea contenido XML de un archivo .cex (CE3X) y extrae:\n- Identificación del edificio (RC, dirección, zona climática)\n- Superficies de la envolvente térmica\n- Calificación energética\n\nEl XML se procesa vía tempfile con limpieza garantizada (try/finally).",
+        "description": "Parsea contenido XML de un archivo .cex (CE3X) y extrae:\n- Identificaciï¿½n del edificio (RC, direcciï¿½n, zona climï¿½tica)\n- Superficies de la envolvente tï¿½rmica\n- Calificaciï¿½n energï¿½tica\n\nEl XML se procesa vï¿½a tempfile con limpieza garantizada (try/finally).",
         "operationId": "parse_cex_api_v1_parse_cex_post",
         "parameters": [
           {
@@ -62,11 +60,9 @@
     },
     "/api/v1/zona-climatica": {
       "post": {
-        "tags": [
-          "Parsing"
-        ],
+        "tags": ["Parsing"],
         "summary": "Zona Climatica",
-        "description": "Determina la zona climática CTE DB-HE según provincia y altitud.",
+        "description": "Determina la zona climï¿½tica CTE DB-HE segï¿½n provincia y altitud.",
         "operationId": "zona_climatica_api_v1_zona_climatica_post",
         "parameters": [
           {
@@ -116,11 +112,9 @@
     },
     "/api/v1/calcular-db-he": {
       "post": {
-        "tags": [
-          "Cálculos"
-        ],
+        "tags": ["Cï¿½lculos"],
         "summary": "Calcular Db He",
-        "description": "Ejecuta el motor de cálculos CTE DB-HE (Tabla 7).\n\nRecibe las capas de materiales, superficies y parámetros.\nDevuelve transmitancias, factor b, ahorro kWh y el informe textual\nlisto para el portapapeles o PDF.\n\nEl código del motor (fórmulas, tablas, redondeos) nunca sale del servidor.",
+        "description": "Ejecuta el motor de cï¿½lculos CTE DB-HE (Tabla 7).\n\nRecibe las capas de materiales, superficies y parï¿½metros.\nDevuelve transmitancias, factor b, ahorro kWh y el informe textual\nlisto para el portapapeles o PDF.\n\nEl cï¿½digo del motor (fï¿½rmulas, tablas, redondeos) nunca sale del servidor.",
         "operationId": "calcular_db_he_api_v1_calcular_db_he_post",
         "parameters": [
           {
@@ -215,27 +209,27 @@
           "area_h_nh": {
             "type": "number",
             "title": "Area H Nh",
-            "description": "Superficie partición (m²)"
+            "description": "Superficie particiï¿½n (mï¿½)"
           },
           "area_nh_e": {
             "type": "number",
             "title": "Area Nh E",
-            "description": "Superficie cubierta (m²)"
+            "description": "Superficie cubierta (mï¿½)"
           },
           "superficie_actuacion": {
             "type": "number",
             "title": "Superficie Actuacion",
-            "description": "Superficie de actuación (m²)"
+            "description": "Superficie de actuaciï¿½n (mï¿½)"
           },
           "zona_climatica_g": {
             "type": "number",
             "title": "Zona Climatica G",
-            "description": "Valor G de la zona climática (h·K)"
+            "description": "Valor G de la zona climï¿½tica (hï¿½K)"
           },
           "sup_envolvente_total": {
             "type": "number",
             "title": "Sup Envolvente Total",
-            "description": "Superficie total envolvente (m²)",
+            "description": "Superficie total envolvente (mï¿½)",
             "default": 0.0
           },
           "escenario_i": {
@@ -284,13 +278,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "capas",
-          "area_h_nh",
-          "area_nh_e",
-          "superficie_actuacion",
-          "zona_climatica_g"
-        ],
+        "required": ["capas", "area_h_nh", "area_nh_e", "superficie_actuacion", "zona_climatica_g"],
         "title": "CalcularDbHeRequest"
       },
       "CalcularDbHeResponse": {
@@ -342,7 +330,7 @@
           "informe_texto": {
             "type": "string",
             "title": "Informe Texto",
-            "description": "Texto de justificación para copiar",
+            "description": "Texto de justificaciï¿½n para copiar",
             "default": ""
           }
         },
@@ -383,7 +371,7 @@
           "r_valor": {
             "type": "number",
             "title": "R Valor",
-            "description": "m²K/W — alternativa directa",
+            "description": "mï¿½K/W ï¿½ alternativa directa",
             "default": 0.0
           },
           "es_nueva": {
@@ -393,9 +381,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "nombre"
-        ],
+        "required": ["nombre"],
         "title": "CapaMaterialIn"
       },
       "ElementoEnvolvente": {
@@ -422,13 +408,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "tipo",
-          "nombre",
-          "transmitancia",
-          "superficie",
-          "orientacion"
-        ],
+        "required": ["tipo", "nombre", "transmitancia", "superficie", "orientacion"],
         "title": "ElementoEnvolvente"
       },
       "HTTPValidationError": {
@@ -453,9 +433,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "xml_content"
-        ],
+        "required": ["xml_content"],
         "title": "ParseCexRequest",
         "description": "El frontend sube el contenido XML del archivo .cex como string."
       },
@@ -615,11 +593,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
+        "required": ["loc", "msg", "type"],
         "title": "ValidationError"
       },
       "ZonaClimaticaRequest": {
@@ -634,10 +608,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "provincia",
-          "altitud_m"
-        ],
+        "required": ["provincia", "altitud_m"],
         "title": "ZonaClimaticaRequest"
       },
       "ZonaClimaticaResponse": {
@@ -674,9 +645,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "zona"
-        ],
+        "required": ["zona"],
         "title": "ZonaClimaticaResponse"
       }
     }

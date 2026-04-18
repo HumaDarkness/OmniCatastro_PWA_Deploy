@@ -1,9 +1,9 @@
-import { XMLParser, XMLValidator } from 'fast-xml-parser';
-import { XmlParseError } from '../../contracts/hoja-encargo';
+import { XMLParser, XMLValidator } from "fast-xml-parser";
+import { XmlParseError } from "../../contracts/hoja-encargo";
 
 const parser = new XMLParser({
   ignoreAttributes: false,
-  attributeNamePrefix: '@_',
+  attributeNamePrefix: "@_",
   parseTagValue: true,
   trimValues: true,
   // Evita que fast-xml-parser colapte arrays de un solo elemento
@@ -30,7 +30,7 @@ export async function parseCe3xFechaVisita(xmlString: string): Promise<string | 
   const isValid = XMLValidator.validate(xmlString);
   if (isValid !== true) {
     throw new XmlParseError(
-      `XML CE3X malformado: ${(isValid as any).err?.msg ?? 'Error desconocido'}`
+      `XML CE3X malformado: ${(isValid as any).err?.msg ?? "Error desconocido"}`
     );
   }
 
@@ -39,11 +39,11 @@ export async function parseCe3xFechaVisita(xmlString: string): Promise<string | 
   // 1. Barrido por rutas conocidas (O(1) por ruta, zero-alloc)
   for (const getter of FECHA_VISITA_PATHS) {
     const val = getter(obj);
-    if (typeof val === 'string' && val.trim() !== '') {
+    if (typeof val === "string" && val.trim() !== "") {
       return _normalizeCe3xDateString(val.trim());
     }
     // fast-xml-parser puede parsear fechas como números si son solo dígitos
-    if (typeof val === 'number') {
+    if (typeof val === "number") {
       return String(val);
     }
   }
@@ -58,8 +58,8 @@ export async function parseCe3xFechaVisita(xmlString: string): Promise<string | 
 /** Búsqueda wildcard con DOMParser — namespace-safe, versión-agnostic */
 function _extractFechaVisitaDOM(xmlString: string): string | null {
   try {
-    const doc = new DOMParser().parseFromString(xmlString, 'application/xml');
-    if (doc.querySelector('parsererror')) return null;
+    const doc = new DOMParser().parseFromString(xmlString, "application/xml");
+    if (doc.querySelector("parsererror")) return null;
 
     // XPath wildcard: encuentra FechaVisita en cualquier profundidad
     const result = doc.evaluate(
@@ -82,5 +82,5 @@ function _normalizeCe3xDateString(raw: string): string {
   const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoMatch) return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
   // Guiones → barras: 15-03-2024 → 15/03/2024
-  return raw.replace(/-/g, '/');
+  return raw.replace(/-/g, "/");
 }

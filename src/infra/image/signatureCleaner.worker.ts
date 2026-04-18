@@ -24,7 +24,7 @@ self.onmessage = function (e: MessageEvent<SignatureWorkerInput>) {
     // Transferir el buffer (zero-copy) para no bloquear el hilo principal
     self.postMessage(result, [result.imageData.data.buffer]);
   } catch (err) {
-    self.postMessage({ error: err instanceof Error ? err.message : 'Worker error' });
+    self.postMessage({ error: err instanceof Error ? err.message : "Worker error" });
   }
 };
 
@@ -56,20 +56,31 @@ function processSignature(
     }
   }
   // Bordes sin procesar → copiar gray directamente
-  for (let x = 0; x < W; x++) { sharpened[x] = gray[x]; sharpened[(H - 1) * W + x] = gray[(H - 1) * W + x]; }
-  for (let y = 0; y < H; y++) { sharpened[y * W] = gray[y * W]; sharpened[y * W + W - 1] = gray[y * W + W - 1]; }
+  for (let x = 0; x < W; x++) {
+    sharpened[x] = gray[x];
+    sharpened[(H - 1) * W + x] = gray[(H - 1) * W + x];
+  }
+  for (let y = 0; y < H; y++) {
+    sharpened[y * W] = gray[y * W];
+    sharpened[y * W + W - 1] = gray[y * W + W - 1];
+  }
 
   // ── 3. Integral images para Sauvola O(1) por píxel ────────────────────────
   const stride = W + 1;
-  const intSum   = new Float64Array((W + 1) * (H + 1));
+  const intSum = new Float64Array((W + 1) * (H + 1));
   const intSumSq = new Float64Array((W + 1) * (H + 1));
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const v = sharpened[y * W + x];
       const i = (y + 1) * stride + (x + 1);
-      intSum[i]   = v     + intSum[y * stride + x + 1] + intSum[(y + 1) * stride + x] - intSum[y * stride + x];
-      intSumSq[i] = v * v + intSumSq[y * stride + x + 1] + intSumSq[(y + 1) * stride + x] - intSumSq[y * stride + x];
+      intSum[i] =
+        v + intSum[y * stride + x + 1] + intSum[(y + 1) * stride + x] - intSum[y * stride + x];
+      intSumSq[i] =
+        v * v +
+        intSumSq[y * stride + x + 1] +
+        intSumSq[(y + 1) * stride + x] -
+        intSumSq[y * stride + x];
     }
   }
 
@@ -80,15 +91,25 @@ function processSignature(
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const x0 = Math.max(0, x - half), x1 = Math.min(W - 1, x + half);
-      const y0 = Math.max(0, y - half), y1 = Math.min(H - 1, y + half);
-      const N  = (x1 - x0 + 1) * (y1 - y0 + 1);
+      const x0 = Math.max(0, x - half),
+        x1 = Math.min(W - 1, x + half);
+      const y0 = Math.max(0, y - half),
+        y1 = Math.min(H - 1, y + half);
+      const N = (x1 - x0 + 1) * (y1 - y0 + 1);
 
-      const s  = intSum[(y1 + 1) * stride + (x1 + 1)]   - intSum[y0 * stride + (x1 + 1)]   - intSum[(y1 + 1) * stride + x0]   + intSum[y0 * stride + x0];
-      const sq = intSumSq[(y1 + 1) * stride + (x1 + 1)] - intSumSq[y0 * stride + (x1 + 1)] - intSumSq[(y1 + 1) * stride + x0] + intSumSq[y0 * stride + x0];
+      const s =
+        intSum[(y1 + 1) * stride + (x1 + 1)] -
+        intSum[y0 * stride + (x1 + 1)] -
+        intSum[(y1 + 1) * stride + x0] +
+        intSum[y0 * stride + x0];
+      const sq =
+        intSumSq[(y1 + 1) * stride + (x1 + 1)] -
+        intSumSq[y0 * stride + (x1 + 1)] -
+        intSumSq[(y1 + 1) * stride + x0] +
+        intSumSq[y0 * stride + x0];
 
       const mean = s / N;
-      const std  = Math.sqrt(Math.max(0, sq / N - mean * mean));
+      const std = Math.sqrt(Math.max(0, sq / N - mean * mean));
       // Fórmula Sauvola: T = mean × (1 + k × (σ/R − 1))
       const threshold = mean * (1 + k * (std / R - 1));
 
@@ -98,19 +119,24 @@ function processSignature(
 
   // ── 5. Construir ImageData + calcular bounding box ────────────────────────
   const out = new ImageData(W, H);
-  let minX = W, minY = H, maxX = 0, maxY = 0;
+  let minX = W,
+    minY = H,
+    maxX = 0,
+    maxY = 0;
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const isFg = binary[y * W + x] === 0;
-      const idx  = (y * W + x) * 4;
-      out.data[idx]     = isFg ? 0 : 255;   // R: negro puro o blanco
-      out.data[idx + 1] = isFg ? 0 : 255;   // G
-      out.data[idx + 2] = isFg ? 0 : 255;   // B
+      const idx = (y * W + x) * 4;
+      out.data[idx] = isFg ? 0 : 255; // R: negro puro o blanco
+      out.data[idx + 1] = isFg ? 0 : 255; // G
+      out.data[idx + 2] = isFg ? 0 : 255; // B
       out.data[idx + 3] = 255; // Alpha: siempre 100% opaco
       if (isFg) {
-        if (x < minX) minX = x; if (y < minY) minY = y;
-        if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
       }
     }
   }

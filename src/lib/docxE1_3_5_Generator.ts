@@ -4,7 +4,12 @@ import PizZip from "pizzip";
 // @ts-ignore
 import ImageModule from "docxtemplater-image-module-free";
 import { saveAs } from "file-saver";
-import { VALORES_G, type ResultadoTermico, type CapaMaterial, type Caso } from "./thermalCalculator";
+import {
+  VALORES_G,
+  type ResultadoTermico,
+  type CapaMaterial,
+  type Caso,
+} from "./thermalCalculator";
 import type { CapturasState } from "../components/CertificadoCapturasPanel";
 import { kyClient } from "./kyClient";
 
@@ -14,88 +19,114 @@ import { kyClient } from "./kyClient";
 
 /** Payload que recibe el generador desde CalculadoraTermica */
 export interface DocxE135Payload {
-    resultado: ResultadoTermico;
-    clienteNombre?: string;
-    direccionInmueble?: string;
-    municipioInmueble?: string;
-    cpInmueble?: string;
-    provinciaInmueble?: string;
-    comunidadInmueble?: string;
-    supEnvolvente?: number | string;
-    supActuacion?: number | string;
-    zonaKey?: string;
-    alturaMsnm?: number | string;
-    areaNHE?: number;
-    tipoElemento?: string;
-    ciudadFirma?: string;
-    fechaFirma?: string;
-    case_i?: Caso;
-    case_f?: Caso;
-    capas?: CapaMaterial[];
-    capturas?: CapturasState;
-    // Campos ignorados pero presentes del payload general
-    [key: string]: unknown;
+  resultado: ResultadoTermico;
+  clienteNombre?: string;
+  direccionInmueble?: string;
+  municipioInmueble?: string;
+  cpInmueble?: string;
+  provinciaInmueble?: string;
+  comunidadInmueble?: string;
+  supEnvolvente?: number | string;
+  supActuacion?: number | string;
+  zonaKey?: string;
+  alturaMsnm?: number | string;
+  areaNHE?: number;
+  tipoElemento?: string;
+  ciudadFirma?: string;
+  fechaFirma?: string;
+  case_i?: Caso;
+  case_f?: Caso;
+  capas?: CapaMaterial[];
+  capturas?: CapturasState;
+  // Campos ignorados pero presentes del payload general
+  [key: string]: unknown;
 }
 
 /** Mapa provincia → comunidad autónoma */
 const PROVINCIA_CCAA: Record<string, string> = {
-    "álava": "País Vasco", "alava": "País Vasco", "araba": "País Vasco",
-    "albacete": "Castilla-La Mancha",
-    "alicante": "Comunidad Valenciana", "alacant": "Comunidad Valenciana",
-    "almería": "Andalucía", "almeria": "Andalucía",
-    "asturias": "Asturias",
-    "ávila": "Castilla y León", "avila": "Castilla y León",
-    "badajoz": "Extremadura",
-    "barcelona": "Cataluña",
-    "burgos": "Castilla y León",
-    "cáceres": "Extremadura", "caceres": "Extremadura",
-    "cádiz": "Andalucía", "cadiz": "Andalucía",
-    "cantabria": "Cantabria",
-    "castellón": "Comunidad Valenciana", "castellon": "Comunidad Valenciana",
-    "ciudad real": "Castilla-La Mancha",
-    "córdoba": "Andalucía", "cordoba": "Andalucía",
-    "cuenca": "Castilla-La Mancha",
-    "gerona": "Cataluña", "girona": "Cataluña",
-    "granada": "Andalucía",
-    "guadalajara": "Castilla-La Mancha",
-    "guipúzcoa": "País Vasco", "guipuzcoa": "País Vasco", "gipuzkoa": "País Vasco",
-    "huelva": "Andalucía",
-    "huesca": "Aragón",
-    "islas baleares": "Islas Baleares", "illes balears": "Islas Baleares", "baleares": "Islas Baleares",
-    "jaén": "Andalucía", "jaen": "Andalucía",
-    "la coruña": "Galicia", "a coruña": "Galicia", "coruña": "Galicia",
-    "la rioja": "La Rioja", "rioja": "La Rioja",
-    "las palmas": "Canarias",
-    "león": "Castilla y León", "leon": "Castilla y León",
-    "lérida": "Cataluña", "lleida": "Cataluña", "lerida": "Cataluña",
-    "lugo": "Galicia",
-    "madrid": "Comunidad de Madrid",
-    "málaga": "Andalucía", "malaga": "Andalucía",
-    "murcia": "Región de Murcia",
-    "navarra": "Navarra",
-    "orense": "Galicia", "ourense": "Galicia",
-    "palencia": "Castilla y León",
-    "pontevedra": "Galicia",
-    "salamanca": "Castilla y León",
-    "santa cruz de tenerife": "Canarias", "tenerife": "Canarias",
-    "segovia": "Castilla y León",
-    "sevilla": "Andalucía",
-    "soria": "Castilla y León",
-    "tarragona": "Cataluña",
-    "teruel": "Aragón",
-    "toledo": "Castilla-La Mancha",
-    "valencia": "Comunidad Valenciana", "valència": "Comunidad Valenciana",
-    "valladolid": "Castilla y León",
-    "vizcaya": "País Vasco", "bizkaia": "País Vasco",
-    "zamora": "Castilla y León",
-    "zaragoza": "Aragón",
-    "ceuta": "Ceuta",
-    "melilla": "Melilla",
+  álava: "País Vasco",
+  alava: "País Vasco",
+  araba: "País Vasco",
+  albacete: "Castilla-La Mancha",
+  alicante: "Comunidad Valenciana",
+  alacant: "Comunidad Valenciana",
+  almería: "Andalucía",
+  almeria: "Andalucía",
+  asturias: "Asturias",
+  ávila: "Castilla y León",
+  avila: "Castilla y León",
+  badajoz: "Extremadura",
+  barcelona: "Cataluña",
+  burgos: "Castilla y León",
+  cáceres: "Extremadura",
+  caceres: "Extremadura",
+  cádiz: "Andalucía",
+  cadiz: "Andalucía",
+  cantabria: "Cantabria",
+  castellón: "Comunidad Valenciana",
+  castellon: "Comunidad Valenciana",
+  "ciudad real": "Castilla-La Mancha",
+  córdoba: "Andalucía",
+  cordoba: "Andalucía",
+  cuenca: "Castilla-La Mancha",
+  gerona: "Cataluña",
+  girona: "Cataluña",
+  granada: "Andalucía",
+  guadalajara: "Castilla-La Mancha",
+  guipúzcoa: "País Vasco",
+  guipuzcoa: "País Vasco",
+  gipuzkoa: "País Vasco",
+  huelva: "Andalucía",
+  huesca: "Aragón",
+  "islas baleares": "Islas Baleares",
+  "illes balears": "Islas Baleares",
+  baleares: "Islas Baleares",
+  jaén: "Andalucía",
+  jaen: "Andalucía",
+  "la coruña": "Galicia",
+  "a coruña": "Galicia",
+  coruña: "Galicia",
+  "la rioja": "La Rioja",
+  rioja: "La Rioja",
+  "las palmas": "Canarias",
+  león: "Castilla y León",
+  leon: "Castilla y León",
+  lérida: "Cataluña",
+  lleida: "Cataluña",
+  lerida: "Cataluña",
+  lugo: "Galicia",
+  madrid: "Comunidad de Madrid",
+  málaga: "Andalucía",
+  malaga: "Andalucía",
+  murcia: "Región de Murcia",
+  navarra: "Navarra",
+  orense: "Galicia",
+  ourense: "Galicia",
+  palencia: "Castilla y León",
+  pontevedra: "Galicia",
+  salamanca: "Castilla y León",
+  "santa cruz de tenerife": "Canarias",
+  tenerife: "Canarias",
+  segovia: "Castilla y León",
+  sevilla: "Andalucía",
+  soria: "Castilla y León",
+  tarragona: "Cataluña",
+  teruel: "Aragón",
+  toledo: "Castilla-La Mancha",
+  valencia: "Comunidad Valenciana",
+  valència: "Comunidad Valenciana",
+  valladolid: "Castilla y León",
+  vizcaya: "País Vasco",
+  bizkaia: "País Vasco",
+  zamora: "Castilla y León",
+  zaragoza: "Aragón",
+  ceuta: "Ceuta",
+  melilla: "Melilla",
 };
 
 function getComunidad(provincia: string): string {
-    if (!provincia) return "";
-    return PROVINCIA_CCAA[provincia.toLowerCase().trim()] || "";
+  if (!provincia) return "";
+  return PROVINCIA_CCAA[provincia.toLowerCase().trim()] || "";
 }
 
 // ---------------------------------------------------------------------------
@@ -103,47 +134,48 @@ function getComunidad(provincia: string): string {
 // ---------------------------------------------------------------------------
 
 // Transparent 1x1 PNG to prevent docxtemplater "reading 'part'" crash on empty image slots
-const TRANSPARENT_1X1_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+const TRANSPARENT_1X1_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
 function getTransparentPixel(): ArrayBuffer {
-    const binary = atob(TRANSPARENT_1X1_PNG_B64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes.buffer;
+  const binary = atob(TRANSPARENT_1X1_PNG_B64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
 }
 
 function dataURLToArrayBuffer(dataUrl: string): ArrayBuffer {
-    if (!dataUrl || typeof dataUrl !== "string") {
-        console.warn("⚠️ [DOCX Image] dataUrl vacía o tipo incorrecto, usando pixel.");
-        return getTransparentPixel();
-    }
+  if (!dataUrl || typeof dataUrl !== "string") {
+    console.warn("⚠️ [DOCX Image] dataUrl vacía o tipo incorrecto, usando pixel.");
+    return getTransparentPixel();
+  }
 
-    const commaIdx = dataUrl.indexOf(",");
-    if (commaIdx === -1) {
-        console.warn("⚠️ [DOCX Image] Formato inválido (sin coma), usando pixel.");
-        return getTransparentPixel();
-    }
+  const commaIdx = dataUrl.indexOf(",");
+  if (commaIdx === -1) {
+    console.warn("⚠️ [DOCX Image] Formato inválido (sin coma), usando pixel.");
+    return getTransparentPixel();
+  }
 
-    const header = dataUrl.substring(0, Math.min(commaIdx, 200));
-    const payload = dataUrl.substring(commaIdx + 1);
-    // Remover espacios en blanco o saltos de línea basura que rompen atob
-    const cleanPayload = payload.replace(/\s+/g, "");
-    
-    const isBase64 = header.toLowerCase().includes("base64");
+  const header = dataUrl.substring(0, Math.min(commaIdx, 200));
+  const payload = dataUrl.substring(commaIdx + 1);
+  // Remover espacios en blanco o saltos de línea basura que rompen atob
+  const cleanPayload = payload.replace(/\s+/g, "");
 
-    let binary: string;
-    try {
-        binary = isBase64 ? atob(cleanPayload) : decodeURIComponent(cleanPayload);
-    } catch (e: unknown) {
-        console.error("⚠️ [DOCX Image] Falla al decodificar (atob/URI). Usando pixel.", e);
-        return getTransparentPixel();
-    }
+  const isBase64 = header.toLowerCase().includes("base64");
 
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes.buffer;
+  let binary: string;
+  try {
+    binary = isBase64 ? atob(cleanPayload) : decodeURIComponent(cleanPayload);
+  } catch (e: unknown) {
+    console.error("⚠️ [DOCX Image] Falla al decodificar (atob/URI). Usando pixel.", e);
+    return getTransparentPixel();
+  }
+
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,62 +184,72 @@ function dataURLToArrayBuffer(dataUrl: string): ArrayBuffer {
 
 /** Formatea un número con coma decimal al estilo español */
 function formatES(value: number | undefined | null, decimals: number): string {
-    return (Number(value) || 0).toFixed(decimals).replace(".", ",");
+  return (Number(value) || 0).toFixed(decimals).replace(".", ",");
 }
 
 async function getImageDimensionsFromDataUrl(dataUrl: string): Promise<[number, number]> {
-    return new Promise((resolve) => {
-        if (!dataUrl) return resolve([0, 0]);
-        const img = new Image();
-        img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
-        img.onerror = () => resolve([0, 0]);
-        img.src = dataUrl;
-    });
+  return new Promise((resolve) => {
+    if (!dataUrl) return resolve([0, 0]);
+    const img = new Image();
+    img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
+    img.onerror = () => resolve([0, 0]);
+    img.src = dataUrl;
+  });
 }
 
-function calculateAspectRatioFit(srcWidth: number, srcHeight: number, maxWidth: number, maxHeight: number): [number, number] {
-    if (!srcWidth || !srcHeight) return [maxWidth, maxHeight];
-    const ratio = Math.min(maxWidth / srcWidth, maxHeight / srcHeight);
-    return [Math.round(srcWidth * ratio), Math.round(srcHeight * ratio)];
+function calculateAspectRatioFit(
+  srcWidth: number,
+  srcHeight: number,
+  maxWidth: number,
+  maxHeight: number
+): [number, number] {
+  if (!srcWidth || !srcHeight) return [maxWidth, maxHeight];
+  const ratio = Math.min(maxWidth / srcWidth, maxHeight / srcHeight);
+  return [Math.round(srcWidth * ratio), Math.round(srcHeight * ratio)];
 }
 
-function resolveDocxVentilationCase(caso?: Caso): { casoNumero: "1" | "2"; columna: "izquierda" | "derecha" } {
-    return caso === "ventilado"
-        ? { casoNumero: "2", columna: "derecha" }
-        : { casoNumero: "1", columna: "izquierda" };
+function resolveDocxVentilationCase(caso?: Caso): {
+  casoNumero: "1" | "2";
+  columna: "izquierda" | "derecha";
+} {
+  return caso === "ventilado"
+    ? { casoNumero: "2", columna: "derecha" }
+    : { casoNumero: "1", columna: "izquierda" };
 }
 
 function patchVentilationNarrativeInDocx(doc: Docxtemplater, caso?: Caso): void {
-    const xmlFile = doc.getZip().file("word/document.xml");
-    if (!xmlFile) return;
+  const xmlFile = doc.getZip().file("word/document.xml");
+  if (!xmlFile) return;
 
-    const originalXml = xmlFile.asText();
-    const ventilation = resolveDocxVentilationCase(caso);
+  const originalXml = xmlFile.asText();
+  const ventilation = resolveDocxVentilationCase(caso);
 
-    const columnPattern = /(<w:t xml:space="preserve">a la columna <\/w:t>[\s\S]*?<w:t>)(izquierda|derecha)(<\/w:t>[\s\S]*?<w:t xml:space="preserve"> de la imagen 4\. <\/w:t>)/;
-    const casePattern = /(<w:t xml:space="preserve">CASO <\/w:t>[\s\S]*?<w:t xml:space="preserve">)(1|2)(\s<\/w:t>)/;
+  const columnPattern =
+    /(<w:t xml:space="preserve">a la columna <\/w:t>[\s\S]*?<w:t>)(izquierda|derecha)(<\/w:t>[\s\S]*?<w:t xml:space="preserve"> de la imagen 4\. <\/w:t>)/;
+  const casePattern =
+    /(<w:t xml:space="preserve">CASO <\/w:t>[\s\S]*?<w:t xml:space="preserve">)(1|2)(\s<\/w:t>)/;
 
-    let patchedXml = originalXml.replace(columnPattern, `$1${ventilation.columna}$3`);
-    patchedXml = patchedXml.replace(casePattern, `$1${ventilation.casoNumero}$3`);
+  let patchedXml = originalXml.replace(columnPattern, `$1${ventilation.columna}$3`);
+  patchedXml = patchedXml.replace(casePattern, `$1${ventilation.casoNumero}$3`);
 
-    if (patchedXml !== originalXml) {
-        doc.getZip().file("word/document.xml", patchedXml);
-    }
+  if (patchedXml !== originalXml) {
+    doc.getZip().file("word/document.xml", patchedXml);
+  }
 }
 
 function patchInitialUiFormulaInDocx(doc: Docxtemplater, resultado: ResultadoTermico): void {
-    const xmlFile = doc.getZip().file("word/document.xml");
-    if (!xmlFile) return;
+  const xmlFile = doc.getZip().file("word/document.xml");
+  if (!xmlFile) return;
 
-    const originalXml = xmlFile.asText();
-    const bInicial = formatES(resultado.b_inicial, 2);
+  const originalXml = xmlFile.asText();
+  const bInicial = formatES(resultado.b_inicial, 2);
 
-    const initialUiPattern = /(<w:t[^>]*>= Up \* b = [^<]*\*)\s*0[\.,]7(\s*=\s*[^<]*W\/m²K<\/w:t>)/;
-    const patchedXml = originalXml.replace(initialUiPattern, `$1 ${bInicial}$2`);
+  const initialUiPattern = /(<w:t[^>]*>= Up \* b = [^<]*\*)\s*0[\.,]7(\s*=\s*[^<]*W\/m²K<\/w:t>)/;
+  const patchedXml = originalXml.replace(initialUiPattern, `$1 ${bInicial}$2`);
 
-    if (patchedXml !== originalXml) {
-        doc.getZip().file("word/document.xml", patchedXml);
-    }
+  if (patchedXml !== originalXml) {
+    doc.getZip().file("word/document.xml", patchedXml);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,218 +258,230 @@ function patchInitialUiFormulaInDocx(doc: Docxtemplater, resultado: ResultadoTer
 
 /** Tamaños en pt (ancho, alto) por slot de imagen en la plantilla Word */
 const IMG_SIZES: Record<string, [number, number]> = {
-    capturaCEEInicial: [540, 351],         // pág 1 – CEE Inicial (+35%)
-    capturaLibreriaAntes: [427, 336],      // pág 2 – materiales antes (+35%)
-    capturaLibreriaDespues: [547, 431],    // pág 4 – materiales después (+35%)
-    imgFichaTecnica: [540, 760],           // pág 6 – ficha técnica (más grande)
-    capturaCE3X_1: [540, 351],             // pág 7 – CE3X antes (+35%)
-    capturaCE3X_2: [540, 351],             // pág 7 – CE3X después (+35%)
+  capturaCEEInicial: [540, 351], // pág 1 – CEE Inicial (+35%)
+  capturaLibreriaAntes: [427, 336], // pág 2 – materiales antes (+35%)
+  capturaLibreriaDespues: [547, 431], // pág 4 – materiales después (+35%)
+  imgFichaTecnica: [540, 760], // pág 6 – ficha técnica (más grande)
+  capturaCE3X_1: [540, 351], // pág 7 – CE3X antes (+35%)
+  capturaCE3X_2: [540, 351], // pág 7 – CE3X después (+35%)
 };
 
 export async function generarCertificadoE1_3_5_DOCX(payload: DocxE135Payload) {
-    if (!payload.resultado) {
-        throw new Error("No hay resultados térmicos calculados para generar el DOCX.");
+  if (!payload.resultado) {
+    throw new Error("No hay resultados térmicos calculados para generar el DOCX.");
+  }
+
+  // 3. Extract data from payload
+  const r: ResultadoTermico = payload.resultado;
+  const c: Partial<CapturasState> = payload.capturas || {};
+
+  // --- Image DataURLs ---
+  const imgCE3XAntes = c.ce3x_antes?.dataUrl || "";
+  const imgCE3XDespues = c.ce3x_despues?.dataUrl || "";
+  const imgLibAntes = c.materiales_antes?.dataUrl || "";
+  const imgLibDespues = c.materiales_despues?.dataUrl || "";
+  const imgCEEInicial = c.cee_inicial?.dataUrl || "";
+  const imgFicha = c.ficha_tecnica?.dataUrl || "";
+
+  // --- Pre-calculate dynamic aspect-ratio constrained sizes ---
+  const dynamicSizes: Record<string, [number, number]> = {};
+
+  const imagePairs = [
+    ["capturaCEEInicial", imgCEEInicial],
+    ["capturaLibreriaAntes", imgLibAntes],
+    ["capturaLibreriaDespues", imgLibDespues],
+    ["imgFichaTecnica", imgFicha],
+    ["capturaCE3X_1", imgCE3XAntes],
+    ["capturaCE3X_2", imgCE3XDespues],
+  ] as const;
+
+  for (const [tagName, dataUrl] of imagePairs) {
+    if (dataUrl) {
+      const [w, h] = await getImageDimensionsFromDataUrl(dataUrl);
+      const [maxW, maxH] = IMG_SIZES[tagName];
+      dynamicSizes[tagName] = calculateAspectRatioFit(w, h, maxW, maxH);
+    } else {
+      dynamicSizes[tagName] = IMG_SIZES[tagName];
     }
+  }
 
-    // 3. Extract data from payload
-    const r: ResultadoTermico = payload.resultado;
-    const c: Partial<CapturasState> = payload.capturas || {};
+  // 4. Fetch template from Backend Signed URL, fallback to local public folder
+  const timestamp = new Date().getTime();
+  let blob: Blob | null = null;
 
-    // --- Image DataURLs ---
-    const imgCE3XAntes = c.ce3x_antes?.dataUrl || "";
-    const imgCE3XDespues = c.ce3x_despues?.dataUrl || "";
-    const imgLibAntes = c.materiales_antes?.dataUrl || "";
-    const imgLibDespues = c.materiales_despues?.dataUrl || "";
-    const imgCEEInicial = c.cee_inicial?.dataUrl || "";
-    const imgFicha = c.ficha_tecnica?.dataUrl || "";
+  try {
+    const res = await kyClient
+      .get("api/v1/templates/signed-url", {
+        searchParams: { template_name: "certificado.docx" },
+        timeout: 5000,
+      })
+      .json<{ url: string }>();
 
-    // --- Pre-calculate dynamic aspect-ratio constrained sizes ---
-    const dynamicSizes: Record<string, [number, number]> = {};
-
-    const imagePairs = [
-        ["capturaCEEInicial", imgCEEInicial],
-        ["capturaLibreriaAntes", imgLibAntes],
-        ["capturaLibreriaDespues", imgLibDespues],
-        ["imgFichaTecnica", imgFicha],
-        ["capturaCE3X_1", imgCE3XAntes],
-        ["capturaCE3X_2", imgCE3XDespues],
-    ] as const;
-
-    for (const [tagName, dataUrl] of imagePairs) {
-        if (dataUrl) {
-            const [w, h] = await getImageDimensionsFromDataUrl(dataUrl);
-            const [maxW, maxH] = IMG_SIZES[tagName];
-            dynamicSizes[tagName] = calculateAspectRatioFit(w, h, maxW, maxH);
-        } else {
-            dynamicSizes[tagName] = IMG_SIZES[tagName];
-        }
+    if (res.url) {
+      const docRes = await fetch(res.url, { cache: "no-store", mode: "cors" });
+      if (docRes.ok) {
+        blob = await docRes.blob();
+      } else {
+        console.warn(`Error al descargar DOCX desde presigned URL: ${docRes.status}`);
+      }
     }
+  } catch (e) {
+    console.warn(
+      "No se pudo cargar la plantilla remota (Supabase signed URL). Fallback a local estática.",
+      e
+    );
+  }
 
-    // 4. Fetch template from Backend Signed URL, fallback to local public folder
-    const timestamp = new Date().getTime();
-    let blob: Blob | null = null;
-    
-    try {
-        const res = await kyClient.get("api/v1/templates/signed-url", {
-            searchParams: { template_name: "certificado.docx" },
-            timeout: 5000
-        }).json<{ url: string }>();
-        
-        if (res.url) {
-            const docRes = await fetch(res.url, { cache: "no-store", mode: "cors" });
-            if (docRes.ok) {
-                blob = await docRes.blob();
-            } else {
-                console.warn(`Error al descargar DOCX desde presigned URL: ${docRes.status}`);
-            }
-        }
-    } catch(e) {
-        console.warn("No se pudo cargar la plantilla remota (Supabase signed URL). Fallback a local estática.", e);
-    }
-    
-    if (!blob) {
-        const res = await fetch(`/templates/E1-3-5_TEMPLATE.docx?v=${timestamp}`, { cache: "no-store" });
-        if (!res.ok) throw new Error("No se pudo cargar la plantilla E1-3-5_TEMPLATE.docx");
-        blob = await res.blob();
-    }
-
-    const arrayBuffer = await blob.arrayBuffer();
-
-    // 5. Setup PizZip and ImageModule
-    const zip = new PizZip(arrayBuffer);
-
-    const imageOptions = {
-        centered: false,
-        getImage: (tagValue: unknown, _tagName: string) => {
-            if (typeof tagValue === "string") {
-                return dataURLToArrayBuffer(tagValue);
-            }
-            if (tagValue instanceof ArrayBuffer) {
-                return tagValue;
-            }
-            return getTransparentPixel();
-        },
-        getSize: (_img: unknown, _tagValue: string, tagName: string) => {
-            return dynamicSizes[tagName] || IMG_SIZES[tagName] || [400, 280];
-        },
-    };
-
-    const imageModule = new ImageModule(imageOptions);
-
-    const doc = new Docxtemplater(zip, {
-        modules: [imageModule],
-        paragraphLoop: true,
-        linebreaks: true,
+  if (!blob) {
+    const res = await fetch(`/templates/E1-3-5_TEMPLATE.docx?v=${timestamp}`, {
+      cache: "no-store",
     });
-    let espesorMM = 0;
-    const nuevaCapa = payload.capas?.find((capa) => capa.es_nueva);
-    if (nuevaCapa) {
-        // CapaMaterial.espesor is in meters; convert to mm
-        const espesorM = Number(nuevaCapa.espesor) || 0;
-        espesorMM = espesorM * 1000;
+    if (!res.ok) throw new Error("No se pudo cargar la plantilla E1-3-5_TEMPLATE.docx");
+    blob = await res.blob();
+  }
+
+  const arrayBuffer = await blob.arrayBuffer();
+
+  // 5. Setup PizZip and ImageModule
+  const zip = new PizZip(arrayBuffer);
+
+  const imageOptions = {
+    centered: false,
+    getImage: (tagValue: unknown, _tagName: string) => {
+      if (typeof tagValue === "string") {
+        return dataURLToArrayBuffer(tagValue);
+      }
+      if (tagValue instanceof ArrayBuffer) {
+        return tagValue;
+      }
+      return getTransparentPixel();
+    },
+    getSize: (_img: unknown, _tagValue: string, tagName: string) => {
+      return dynamicSizes[tagName] || IMG_SIZES[tagName] || [400, 280];
+    },
+  };
+
+  const imageModule = new ImageModule(imageOptions);
+
+  const doc = new Docxtemplater(zip, {
+    modules: [imageModule],
+    paragraphLoop: true,
+    linebreaks: true,
+  });
+  let espesorMM = 0;
+  const nuevaCapa = payload.capas?.find((capa) => capa.es_nueva);
+  if (nuevaCapa) {
+    // CapaMaterial.espesor is in meters; convert to mm
+    const espesorM = Number(nuevaCapa.espesor) || 0;
+    espesorMM = espesorM * 1000;
+  }
+
+  // --- Build full address string (includes comunidad autónoma) ---
+  const comunidad = payload.comunidadInmueble || getComunidad(payload.provinciaInmueble || "");
+  const dirArr = [
+    payload.direccionInmueble,
+    payload.cpInmueble,
+    payload.municipioInmueble,
+    payload.provinciaInmueble,
+    comunidad,
+  ].filter(Boolean);
+  const direccionFull =
+    dirArr.length > 0 ? dirArr.join(", ").toUpperCase() : "DIRECCIÓN NO ESPECIFICADA";
+
+  // --- Numeric helpers ---
+  const factorGNum = VALORES_G[payload.zonaKey || ""] || 0;
+  const supEnvolvente = Number(payload.supEnvolvente) || 0;
+  const supActuacion = Number(payload.supActuacion) || 0;
+  const pctAfectado = supEnvolvente > 0 ? (supActuacion / supEnvolvente) * 100 : 0;
+
+  // --- Build the data object for docxtemplater ---
+  const dataDocx: Record<string, unknown> = {
+    // ─── COMMON / NEW VARIABLES ────────────────────────────────────
+    clienteNombre: (payload.clienteNombre || "").toUpperCase(),
+    direccionInmueble: direccionFull,
+    direccionInmueblePag5: direccionFull,
+    supEnvolvente: formatES(supEnvolvente, 2),
+    tipoElemento: payload.tipoElemento || "partición",
+    supActuacion: formatES(supActuacion, 2),
+    porcentajeAfectado: formatES(pctAfectado, 2),
+
+    areaNHE: formatES(payload.areaNHE, 2),
+    espesorMM: String(Math.round(espesorMM)),
+    materialNombre: "KNAUF SUPAFIL LOFT",
+
+    alturaMsnm: String(Number(payload.alturaMsnm) || 0),
+    zonaClimatica: payload.zonaKey || "-",
+    factorG: formatES(factorGNum, 2),
+    formulaAE: `1 × (${formatES(r.ui_final, 2)} − ${formatES(r.uf_final, 2)}) × ${formatES(supActuacion, 2)} × ${formatES(factorGNum, 2)}`,
+    ahorroKwh: String(Math.round(r.ahorro || 0)),
+    ciudadFirma: payload.ciudadFirma || "Madrid",
+    fechaFirma:
+      payload.fechaFirma ||
+      new Date().toLocaleDateString("es-ES", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      }),
+
+    // ─── THERMAL VALUES ────────────────────────────────────────────
+    rCapasIniciales: formatES(r.r_mat_inicial, 3),
+    RTi: formatES(r.rt_inicial, 3),
+    Upi: formatES(r.up_inicial, 3),
+    ratioB: formatES(r.ratio, 2),
+    bInicial: formatES(r.b_inicial, 2),
+    Ui: formatES(r.ui_final, 2),
+    rCapasFinales: formatES(r.r_mat_final, 3),
+    RTf: formatES(r.rt_final, 3),
+    Upf: formatES(r.up_final, 3),
+    bFinal: formatES(r.b_final, 2),
+    Uf: formatES(r.uf_final, 2),
+
+    // ─── LEGACY VARIABLES (for current Word template) ──────────────
+    RBase: formatES(r.r_mat_inicial, 3),
+    RtBaseVal: formatES(r.r_mat_inicial, 3),
+    RtBase: formatES(r.rt_inicial, 3),
+    UpBase: formatES(r.up_inicial, 3),
+    areaNhe: formatES(payload.areaNHE, 2),
+    factorHnhNhe: formatES(r.ratio, 2),
+    bBase: formatES(r.b_inicial, 2),
+    UiBase: formatES(r.ui_final, 2),
+    RtMaterial: formatES(r.r_mat_final, 3),
+    RtFinal: formatES(r.rt_final, 3),
+    UpFinal: formatES(r.up_final, 3),
+    UiFinal: formatES(r.uf_final, 2),
+
+    // ─── IMAGES (tags must match {%tagName} in the Word template) ──
+    capturaCEEInicial: imgCEEInicial, // pág 1 – CEE Inicial (cerramientos/huecos)
+    capturaLibreriaAntes: imgLibAntes, // pág 2 – Materiales antes
+    capturaLibreriaDespues: imgLibDespues, // pág 4 – Materiales después
+    imgFichaTecnica: imgFicha, // pág 6 – Ficha técnica
+    capturaCE3X_1: imgCE3XAntes, // pág 7 – CE3X antes
+    capturaCE3X_2: imgCE3XDespues, // pág 7 – CE3X después
+  };
+
+  // 4. Render and save
+  try {
+    doc.render(dataDocx);
+    patchVentilationNarrativeInDocx(doc, payload.case_i ?? payload.case_f);
+    patchInitialUiFormulaInDocx(doc, r);
+  } catch (error: unknown) {
+    console.error("Error al renderizar DOCX:", error);
+    if (error instanceof Error) {
+      throw new Error(`No se pudo estructurar el documento Word: ${error.message}`);
     }
+    throw new Error(
+      "No se pudo estructurar el documento Word. Revisa que todos los campos y capturas estén completos."
+    );
+  }
 
-    // --- Build full address string (includes comunidad autónoma) ---
-    const comunidad = payload.comunidadInmueble || getComunidad(payload.provinciaInmueble || "");
-    const dirArr = [
-        payload.direccionInmueble,
-        payload.cpInmueble,
-        payload.municipioInmueble,
-        payload.provinciaInmueble,
-        comunidad,
-    ].filter(Boolean);
-    const direccionFull = dirArr.length > 0 ? dirArr.join(", ").toUpperCase() : "DIRECCIÓN NO ESPECIFICADA";
+  const outputBlob = doc.getZip().generate({
+    type: "blob",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
 
-    // --- Numeric helpers ---
-    const factorGNum = VALORES_G[payload.zonaKey || ""] || 0;
-    const supEnvolvente = Number(payload.supEnvolvente) || 0;
-    const supActuacion = Number(payload.supActuacion) || 0;
-    const pctAfectado = supEnvolvente > 0 ? (supActuacion / supEnvolvente) * 100 : 0;
-
-    // --- Build the data object for docxtemplater ---
-    const dataDocx: Record<string, unknown> = {
-        // ─── COMMON / NEW VARIABLES ────────────────────────────────────
-        clienteNombre: (payload.clienteNombre || "").toUpperCase(),
-        direccionInmueble: direccionFull,
-        direccionInmueblePag5: direccionFull,
-        supEnvolvente: formatES(supEnvolvente, 2),
-        tipoElemento: payload.tipoElemento || "partición",
-        supActuacion: formatES(supActuacion, 2),
-        porcentajeAfectado: formatES(pctAfectado, 2),
-
-        areaNHE: formatES(payload.areaNHE, 2),
-        espesorMM: String(Math.round(espesorMM)),
-        materialNombre: "KNAUF SUPAFIL LOFT",
-
-        alturaMsnm: String(Number(payload.alturaMsnm) || 0),
-        zonaClimatica: payload.zonaKey || "-",
-        factorG: formatES(factorGNum, 2),
-        formulaAE: `1 × (${formatES(r.ui_final, 2)} − ${formatES(r.uf_final, 2)}) × ${formatES(supActuacion, 2)} × ${formatES(factorGNum, 2)}`,
-        ahorroKwh: String(Math.round(r.ahorro || 0)),
-        ciudadFirma: payload.ciudadFirma || "Madrid",
-        fechaFirma: payload.fechaFirma || new Date().toLocaleDateString("es-ES", {
-            day: "2-digit",
-            month: "2-digit",
-            year: "numeric",
-        }),
-
-        // ─── THERMAL VALUES ────────────────────────────────────────────
-        rCapasIniciales: formatES(r.r_mat_inicial, 3),
-        RTi: formatES(r.rt_inicial, 3),
-        Upi: formatES(r.up_inicial, 3),
-        ratioB: formatES(r.ratio, 2),
-        bInicial: formatES(r.b_inicial, 2),
-        Ui: formatES(r.ui_final, 2),
-        rCapasFinales: formatES(r.r_mat_final, 3),
-        RTf: formatES(r.rt_final, 3),
-        Upf: formatES(r.up_final, 3),
-        bFinal: formatES(r.b_final, 2),
-        Uf: formatES(r.uf_final, 2),
-
-        // ─── LEGACY VARIABLES (for current Word template) ──────────────
-        RBase: formatES(r.r_mat_inicial, 3),
-        RtBaseVal: formatES(r.r_mat_inicial, 3),
-        RtBase: formatES(r.rt_inicial, 3),
-        UpBase: formatES(r.up_inicial, 3),
-        areaNhe: formatES(payload.areaNHE, 2),
-        factorHnhNhe: formatES(r.ratio, 2),
-        bBase: formatES(r.b_inicial, 2),
-        UiBase: formatES(r.ui_final, 2),
-        RtMaterial: formatES(r.r_mat_final, 3),
-        RtFinal: formatES(r.rt_final, 3),
-        UpFinal: formatES(r.up_final, 3),
-        UiFinal: formatES(r.uf_final, 2),
-
-        // ─── IMAGES (tags must match {%tagName} in the Word template) ──
-        capturaCEEInicial: imgCEEInicial,           // pág 1 – CEE Inicial (cerramientos/huecos)
-        capturaLibreriaAntes: imgLibAntes,          // pág 2 – Materiales antes
-        capturaLibreriaDespues: imgLibDespues,      // pág 4 – Materiales después
-        imgFichaTecnica: imgFicha,                  // pág 6 – Ficha técnica
-        capturaCE3X_1: imgCE3XAntes,                // pág 7 – CE3X antes
-        capturaCE3X_2: imgCE3XDespues,              // pág 7 – CE3X después
-    };
-
-    // 4. Render and save
-    try {
-        doc.render(dataDocx);
-        patchVentilationNarrativeInDocx(doc, payload.case_i ?? payload.case_f);
-        patchInitialUiFormulaInDocx(doc, r);
-    } catch (error: unknown) {
-        console.error("Error al renderizar DOCX:", error);
-        if (error instanceof Error) {
-            throw new Error(`No se pudo estructurar el documento Word: ${error.message}`);
-        }
-        throw new Error("No se pudo estructurar el documento Word. Revisa que todos los campos y capturas estén completos.");
-    }
-
-    const outputBlob = doc.getZip().generate({
-        type: "blob",
-        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    });
-
-    const safeFilename = (payload.clienteNombre || "Certificado")
-        .trim()
-        .toUpperCase()
-        .replace(/\s+/g, "_");
-    saveAs(outputBlob, `CERTIFICADO_E1-3-5_${safeFilename}.docx`);
+  const safeFilename = (payload.clienteNombre || "Certificado")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "_");
+  saveAs(outputBlob, `CERTIFICADO_E1-3-5_${safeFilename}.docx`);
 }

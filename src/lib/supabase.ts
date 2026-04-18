@@ -52,34 +52,34 @@ export interface ResolveExpedienteConflictParams {
 
 export type UpsertExpedienteResult =
   | {
-    ok: true;
-    id: string;
-    organizationId: string;
-    rc: string;
-    status: ExpedienteStatus;
-    versionToken: string;
-    updatedAt: string;
-    lastSyncedAt: string | null;
-  }
+      ok: true;
+      id: string;
+      organizationId: string;
+      rc: string;
+      status: ExpedienteStatus;
+      versionToken: string;
+      updatedAt: string;
+      lastSyncedAt: string | null;
+    }
   | {
-    ok: false;
-    error: string;
-    hint?: string;
-  };
+      ok: false;
+      error: string;
+      hint?: string;
+    };
 
 export type ResolveExpedienteConflictResult =
   | {
-    ok: true;
-    action: ResolveExpedienteConflictMode;
-    id: string;
-    versionToken: string;
-    updatedAt: string;
-  }
+      ok: true;
+      action: ResolveExpedienteConflictMode;
+      id: string;
+      versionToken: string;
+      updatedAt: string;
+    }
   | {
-    ok: false;
-    error: string;
-    hint?: string;
-  };
+      ok: false;
+      error: string;
+      hint?: string;
+    };
 
 export interface ExpedienteMvpRecord {
   id: string;
@@ -111,9 +111,10 @@ function isStorageWritable(storage: Storage): boolean {
 function resolveAuthStorage(): Storage | undefined {
   if (typeof window === "undefined") return undefined;
 
-  const preferred = AUTH_STORAGE_MODE === "local"
-    ? [window.localStorage, window.sessionStorage]
-    : [window.sessionStorage, window.localStorage];
+  const preferred =
+    AUTH_STORAGE_MODE === "local"
+      ? [window.localStorage, window.sessionStorage]
+      : [window.sessionStorage, window.localStorage];
 
   for (const candidate of preferred) {
     if (isStorageWritable(candidate)) return candidate;
@@ -127,13 +128,13 @@ const authStorage = resolveAuthStorage();
 export const supabase: SupabaseClient =
   SUPABASE_URL && SUPABASE_ANON_KEY
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      auth: {
-        autoRefreshToken: true,
-        persistSession: Boolean(authStorage),
-        storage: authStorage,
-        storageKey: SUPABASE_STORAGE_KEY,
-      },
-    })
+        auth: {
+          autoRefreshToken: true,
+          persistSession: Boolean(authStorage),
+          storage: authStorage,
+          storageKey: SUPABASE_STORAGE_KEY,
+        },
+      })
     : (null as unknown as SupabaseClient);
 
 // ---------------------------------------------------------------------------
@@ -166,12 +167,8 @@ function normalizeRcKey(value: string): string {
 /**
  * Inicia sesión con email/password y valida la licencia del usuario.
  */
-export async function loginWithEmail(
-  email: string,
-  password: string
-): Promise<LoginResult> {
-  if (!supabase)
-    return { valid: false, message: "Supabase no configurado." };
+export async function loginWithEmail(email: string, password: string): Promise<LoginResult> {
+  if (!supabase) return { valid: false, message: "Supabase no configurado." };
 
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
@@ -212,8 +209,7 @@ export async function loginWithEmail(
  * Restaura sesión existente tras recarga (F5) usando el token auth persistido.
  */
 export async function restoreSessionFromAuth(): Promise<LoginResult> {
-  if (!supabase)
-    return { valid: false, message: "Supabase no configurado." };
+  if (!supabase) return { valid: false, message: "Supabase no configurado." };
 
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError) {
@@ -276,11 +272,8 @@ export async function logoutUser(): Promise<void> {
  * `auth.uid() = user_id` permita la lectura. Sin sesión, la query
  * devuelve 0 rows por diseño (no hay policy anon en 'licenses').
  */
-export async function validateUserLicense(
-  licenseKey: string
-): Promise<LoginResult> {
-  if (!supabase)
-    return { valid: false, message: "Supabase no configurado." };
+export async function validateUserLicense(licenseKey: string): Promise<LoginResult> {
+  if (!supabase) return { valid: false, message: "Supabase no configurado." };
 
   // Verificar que hay sesión activa — sin auth, RLS bloquea lectura
   const { data: userData } = await supabase.auth.getUser();
@@ -292,7 +285,7 @@ export async function validateUserLicense(
     .from("licenses")
     .select("license_key, tier, status, expiration_date")
     .eq("license_key", licenseKey)
-    .eq("user_id", userData.user.id)  // defensa explícita + RLS
+    .eq("user_id", userData.user.id) // defensa explícita + RLS
     .eq("status", "active")
     .limit(1);
 
@@ -334,7 +327,9 @@ export async function getCurrentOrganizationId(): Promise<string | null> {
     return fromJwt;
   }
 
-  const pickOrgId = (rows: Array<{ organization_id?: unknown }> | null | undefined): string | null => {
+  const pickOrgId = (
+    rows: Array<{ organization_id?: unknown }> | null | undefined
+  ): string | null => {
     if (!rows || rows.length === 0) return null;
     for (const row of rows) {
       const orgId = row?.organization_id;
@@ -370,7 +365,9 @@ export async function getCurrentOrganizationId(): Promise<string | null> {
       .limit(25);
 
     if (!emailLicError) {
-      const orgFromEmailLicenses = pickOrgId(licensesByEmail as Array<{ organization_id?: unknown }> | null);
+      const orgFromEmailLicenses = pickOrgId(
+        licensesByEmail as Array<{ organization_id?: unknown }> | null
+      );
       if (orgFromEmailLicenses) return orgFromEmailLicenses;
     }
   }
@@ -453,7 +450,7 @@ export async function getUxRecoverySnapshot(): Promise<UxRecoverySnapshot> {
  * No reemplaza el guardado actual de borradores: habilita integracion gradual.
  */
 export async function upsertExpedienteMvp(
-  params: UpsertExpedienteParams,
+  params: UpsertExpedienteParams
 ): Promise<UpsertExpedienteResult> {
   if (!supabase) {
     return { ok: false, error: "SUPABASE_NOT_CONFIGURED", hint: "Supabase no configurado." };
@@ -539,7 +536,7 @@ export async function getExpedienteMvpByRc(rc: string): Promise<ExpedienteMvpRec
  * entre fetch de contexto y escritura final.
  */
 export async function resolveExpedienteMvpConflict(
-  params: ResolveExpedienteConflictParams,
+  params: ResolveExpedienteConflictParams
 ): Promise<ResolveExpedienteConflictResult> {
   if (!supabase) {
     return { ok: false, error: "SUPABASE_NOT_CONFIGURED", hint: "Supabase no configurado." };
@@ -557,8 +554,11 @@ export async function resolveExpedienteMvpConflict(
 
   const hintPreview = error?.message ?? "";
   const codePreview = error?.code ?? "";
-  const maybeLegacyRpc = codePreview === "PGRST202"
-    || /resolve_expediente_conflict\(p_expediente_id, p_local_datos, p_resolution, p_expected_version\)|could not find the function/i.test(hintPreview);
+  const maybeLegacyRpc =
+    codePreview === "PGRST202" ||
+    /resolve_expediente_conflict\(p_expediente_id, p_local_datos, p_resolution, p_expected_version\)|could not find the function/i.test(
+      hintPreview
+    );
 
   if (error && maybeLegacyRpc) {
     const fallbackCall = await supabase.rpc("resolve_expediente_conflict", {
@@ -574,7 +574,8 @@ export async function resolveExpedienteMvpConflict(
   if (error) {
     const hint = error.message ?? "RPC error";
     const code = error.code ?? "RPC_ERROR";
-    const notAvailable = code === "PGRST202" || /could not find the function|resolve_expediente_conflict/i.test(hint);
+    const notAvailable =
+      code === "PGRST202" || /could not find the function|resolve_expediente_conflict/i.test(hint);
     if (notAvailable) {
       return {
         ok: false,

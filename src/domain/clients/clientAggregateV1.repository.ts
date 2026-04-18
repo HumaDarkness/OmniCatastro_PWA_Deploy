@@ -20,12 +20,10 @@ export interface ClientAggregateV1Repository {
   upsert(input: UpsertClientV1Input): Promise<UpsertClientV1Result>;
 
   prepareDocumentUpload(
-    input: PrepareDocumentUploadV1Input,
+    input: PrepareDocumentUploadV1Input
   ): Promise<PrepareDocumentUploadV1Result>;
 
-  commitDocumentUpload(
-    input: CommitDocumentUploadV1Input,
-  ): Promise<CommitDocumentUploadV1Result>;
+  commitDocumentUpload(input: CommitDocumentUploadV1Input): Promise<CommitDocumentUploadV1Result>;
 
   listChanges(params: ListClientChangesV1Params): Promise<ClientChangeEventV1[]>;
 }

@@ -1,24 +1,29 @@
-import { useEffect, useState } from 'react';
-import { Shield, Sparkles, Database, Layers, ArrowLeft, Loader2 } from 'lucide-react';
-import { loginWithEmail, logoutUser, restoreSessionFromAuth, validateUserLicense } from './lib/supabase';
-import { warmUpCloudApi } from './lib/apiClient';
-import type { LicenseTier } from './lib/supabase';
-import { LandingPage } from './LandingPage';
-import { DashboardLayout } from './components/DashboardLayout';
+import { useEffect, useState } from "react";
+import { Shield, Sparkles, Database, Layers, ArrowLeft, Loader2 } from "lucide-react";
+import {
+  loginWithEmail,
+  logoutUser,
+  restoreSessionFromAuth,
+  validateUserLicense,
+} from "./lib/supabase";
+import { warmUpCloudApi } from "./lib/apiClient";
+import type { LicenseTier } from "./lib/supabase";
+import { LandingPage } from "./LandingPage";
+import { DashboardLayout } from "./components/DashboardLayout";
 
-type AppView = 'landing' | 'login' | 'dashboard';
+type AppView = "landing" | "login" | "dashboard";
 
 function App() {
-  const showDemoMode = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO_MODE === 'true';
+  const showDemoMode = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO_MODE === "true";
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [view, setView] = useState<AppView>('landing');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [view, setView] = useState<AppView>("landing");
   const [isValidating, setIsValidating] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [sessionTier, setSessionTier] = useState<LicenseTier>('pwa_only');
-  const [sessionKey, setSessionKey] = useState('');
+  const [sessionTier, setSessionTier] = useState<LicenseTier>("pwa_only");
+  const [sessionKey, setSessionKey] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -29,9 +34,9 @@ function App() {
         if (cancelled) return;
 
         if (result.valid) {
-          setSessionTier(result.tier || 'pwa_only');
-          setSessionKey(result.licenseKey || '');
-          setView('dashboard');
+          setSessionTier(result.tier || "pwa_only");
+          setSessionKey(result.licenseKey || "");
+          setView("dashboard");
           void warmUpCloudApi({ force: true });
         }
       } finally {
@@ -50,20 +55,23 @@ function App() {
     e.preventDefault();
     if (!email.trim() || !password.trim()) {
       // Intentar fallback con token (Legacy desktop) si el formato parece key
-      if (email.trim().startsWith('OMNI-') && !password) {
+      if (email.trim().startsWith("OMNI-") && !password) {
         setIsValidating(true);
         setErrorMsg(null);
         try {
           const result = await validateUserLicense(email.trim());
           if (result.valid) {
-            setSessionTier(result.tier || 'pwa_only');
+            setSessionTier(result.tier || "pwa_only");
             setSessionKey(email.trim());
-            setView('dashboard');
+            setView("dashboard");
           } else {
-            setErrorMsg(result.message || 'Licencia inválida.');
+            setErrorMsg(result.message || "Licencia inválida.");
           }
-        } catch (err) { setErrorMsg('Error de conexión.'); }
-        finally { setIsValidating(false); }
+        } catch (err) {
+          setErrorMsg("Error de conexión.");
+        } finally {
+          setIsValidating(false);
+        }
         return;
       }
       return;
@@ -75,15 +83,15 @@ function App() {
     try {
       const result = await loginWithEmail(email.trim(), password);
       if (result.valid) {
-        setSessionTier(result.tier || 'pwa_only');
-        setSessionKey(result.licenseKey || '');
-        setView('dashboard');
+        setSessionTier(result.tier || "pwa_only");
+        setSessionKey(result.licenseKey || "");
+        setView("dashboard");
         void warmUpCloudApi({ force: true });
       } else {
-        setErrorMsg(result.message || 'Credenciales inválidas.');
+        setErrorMsg(result.message || "Credenciales inválidas.");
       }
     } catch (err) {
-      setErrorMsg('Error de conexión durante validación.');
+      setErrorMsg("Error de conexión durante validación.");
     } finally {
       setIsValidating(false);
     }
@@ -91,10 +99,10 @@ function App() {
 
   const handleLogout = async () => {
     await logoutUser();
-    setView('landing');
-    setEmail('');
-    setPassword('');
-    setSessionKey('');
+    setView("landing");
+    setEmail("");
+    setPassword("");
+    setSessionKey("");
     setErrorMsg(null);
   };
 
@@ -110,19 +118,13 @@ function App() {
   }
 
   // --- LANDING PAGE ---
-  if (view === 'landing') {
-    return <LandingPage onLoginClick={() => setView('login')} />;
+  if (view === "landing") {
+    return <LandingPage onLoginClick={() => setView("login")} />;
   }
 
   // --- DASHBOARD (RUTA PROTEGIDA) ---
-  if (view === 'dashboard') {
-    return (
-      <DashboardLayout
-        licenseKey={sessionKey}
-        tier={sessionTier}
-        onLogout={handleLogout}
-      />
-    );
+  if (view === "dashboard") {
+    return <DashboardLayout licenseKey={sessionKey} tier={sessionTier} onLogout={handleLogout} />;
   }
 
   // --- LOGIN ---
@@ -130,7 +132,7 @@ function App() {
     <div className="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden bg-[#0A0A0A]">
       {/* Back button */}
       <button
-        onClick={() => setView('landing')}
+        onClick={() => setView("landing")}
         className="absolute top-6 left-6 flex items-center gap-2 text-gray-400 hover:text-white transition-colors z-50 group"
       >
         <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
@@ -149,9 +151,7 @@ function App() {
           <h1 className="text-4xl font-extrabold tracking-tight mb-3 bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
             OmniCatastro Web
           </h1>
-          <p className="text-muted-foreground text-lg">
-            Plataforma Profesional PWA
-          </p>
+          <p className="text-muted-foreground text-lg">Plataforma Profesional PWA</p>
         </div>
 
         <div className="glass-panel p-8 mb-8 relative">
@@ -177,9 +177,7 @@ function App() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground/80 ml-1">
-                  Contraseña
-                </label>
+                <label className="text-sm font-medium text-foreground/80 ml-1">Contraseña</label>
                 <div className="relative">
                   <Shield className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                   <input
@@ -208,7 +206,7 @@ function App() {
                 ) : (
                   <Shield className="w-5 h-5" />
                 )}
-                {isValidating ? 'Validando...' : 'Ingresar al Dashboard'}
+                {isValidating ? "Validando..." : "Ingresar al Dashboard"}
               </button>
             </div>
           </form>
@@ -228,9 +226,9 @@ function App() {
         {showDemoMode && (
           <button
             onClick={() => {
-              setSessionTier('suite_pro');
-              setSessionKey('DEMO-MODE');
-              setView('dashboard');
+              setSessionTier("suite_pro");
+              setSessionKey("DEMO-MODE");
+              setView("dashboard");
               void warmUpCloudApi({ force: true });
             }}
             className="mt-4 w-full text-xs text-slate-600 hover:text-slate-400 transition-colors py-2 border border-dashed border-slate-800 rounded-lg"

@@ -96,20 +96,23 @@ function parseClientAggregate(payload: unknown): ClientAggregateV1 | null {
       const versionId = readNullableString(doc.current_version_id);
       const version = versionId
         ? {
-          id: versionId,
-          bucket: readString(doc.storage_bucket, "document.storage_bucket"),
-          path: readString(doc.storage_path, "document.storage_path"),
-          mimeType: readString(doc.mime_type, "document.mime_type"),
-          sizeBytes: readNumber(doc.size_bytes, "document.size_bytes"),
-          sha256: readString(doc.sha256, "document.sha256"),
-          createdAt: readString(doc.version_created_at, "document.version_created_at"),
-        }
+            id: versionId,
+            bucket: readString(doc.storage_bucket, "document.storage_bucket"),
+            path: readString(doc.storage_path, "document.storage_path"),
+            mimeType: readString(doc.mime_type, "document.mime_type"),
+            sizeBytes: readNumber(doc.size_bytes, "document.size_bytes"),
+            sha256: readString(doc.sha256, "document.sha256"),
+            createdAt: readString(doc.version_created_at, "document.version_created_at"),
+          }
         : null;
 
       return {
         id: readString(doc.id, "document.id"),
         kind: readString(doc.doc_kind, "document.doc_kind") as ClientDocumentKindV1,
-        status: readString(doc.status, "document.status") as ClientAggregateV1["documents"][number]["status"],
+        status: readString(
+          doc.status,
+          "document.status"
+        ) as ClientAggregateV1["documents"][number]["status"],
         revision: readNumber(doc.revision, "document.revision"),
         logicalDeleted: readBoolean(doc.logical_deleted, "document.logical_deleted"),
         updatedAt: readString(doc.updated_at, "document.updated_at"),

@@ -1,26 +1,16 @@
-import * as React from "react"
-import { useMediaQuery } from "usehooks-ts"
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "./ui/sheet"
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-} from "./ui/drawer"
+import * as React from "react";
+import { useMediaQuery } from "usehooks-ts";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "./ui/sheet";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "./ui/drawer";
 
 interface GestionLotesSheetProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  children: React.ReactNode
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactNode;
 }
 
 export function GestionLotesSheet({ open, onOpenChange, children }: GestionLotesSheetProps) {
-  const isDesktop = useMediaQuery("(min-width: 768px)")
+  const isDesktop = useMediaQuery("(min-width: 768px)");
 
   if (isDesktop) {
     return (
@@ -32,12 +22,10 @@ export function GestionLotesSheet({ open, onOpenChange, children }: GestionLotes
               <span>Gestión Avanzada de Lotes</span>
             </SheetTitle>
           </SheetHeader>
-          <div className="flex flex-col space-y-6">
-            {children}
-          </div>
+          <div className="flex flex-col space-y-6">{children}</div>
         </SheetContent>
       </Sheet>
-    )
+    );
   }
 
   return (
@@ -49,10 +37,8 @@ export function GestionLotesSheet({ open, onOpenChange, children }: GestionLotes
             <span>Gestión Avanzada de Lotes</span>
           </DrawerTitle>
         </DrawerHeader>
-        <div className="flex flex-col space-y-4 px-4 pb-8 overflow-y-auto">
-          {children}
-        </div>
+        <div className="flex flex-col space-y-4 px-4 pb-8 overflow-y-auto">{children}</div>
       </DrawerContent>
     </Drawer>
-  )
+  );
 }
