@@ -383,7 +383,7 @@ export async function consultarCatastro(referenciaCatastral: string, userId?: st
                     const wrappedDatos = {
                         ...normalized,
                         _fromNormalizar: true,
-                        // Map to legacy-compatible fields for extraerDatosInmuebleUnico
+                        // Map to legacy-compatible fields para extraerDatosInmuebleUnico
                         raw_response: normalized.raw?.catastro,
                         direccion: normalized.direccion_certificador,
                         direccion_cruda: normalized.display?.full || "",
@@ -399,8 +399,9 @@ export async function consultarCatastro(referenciaCatastral: string, userId?: st
                         altitud: normalized.altitud_msnm,
                     };
                     return { datos: wrappedDatos, error: null, fromCache: false, fromNormalizar: true };
+                } else {
+                    return { datos: null, error: "[Canary Debug] El normalizador falló (el backend de Render devolvió 500, 403 o 401). Presiona F12 y mira la consola para ver qué devolvió el kyClient.", fromCache: false };
                 }
-                // If normalizar failed, fall through to legacy path
             }
         } catch {
             // Feature flag check failed, fall through to legacy
