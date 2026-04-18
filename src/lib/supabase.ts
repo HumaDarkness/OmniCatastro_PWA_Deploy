@@ -379,7 +379,7 @@ export async function getCurrentOrganizationId(): Promise<string | null> {
   const { data: projects, error: projError } = await supabase
     .from("projects")
     .select("organization_id")
-    .eq("created_by", userData.user.id)
+    .eq("license_user_id", userData.user.id)
     .order("created_at", { ascending: false })
     .limit(25);
 

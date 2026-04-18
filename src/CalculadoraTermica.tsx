@@ -1219,10 +1219,21 @@ export function CalculadoraTermica() {
             if (!supabase) return;
             const { data } = await supabase
                 .from("ce3x_materials")
-                .select("id, nombre, marca, lambda_w_mk, is_default, application_method")
+                .select("id, name, group_name, conductivity, is_default, application_method")
                 .order("is_default", { ascending: false })
-                .order("nombre", { ascending: true });
-            if (data) setMaterialesDB(data);
+                .order("name", { ascending: true });
+            
+            if (data) {
+                const mapped = data.map((item: any) => ({
+                    id: item.id,
+                    nombre: item.name,
+                    marca: item.group_name || "Desconocida",
+                    lambda_w_mk: item.conductivity,
+                    is_default: item.is_default,
+                    application_method: item.application_method
+                }));
+                setMaterialesDB(mapped);
+            }
         }
         load();
     }, []);
