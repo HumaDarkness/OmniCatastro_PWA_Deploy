@@ -2497,7 +2497,7 @@ export function CalculadoraTermica() {
             const { data: projectsByUser } = await supabase
                 .from("projects")
                 .select("organization_id")
-                .eq("created_by", userId)
+                .eq("license_user_id", userId)
                 .order("created_at", { ascending: false })
                 .limit(25);
             addRows(projectsByUser as Array<{ organization_id?: unknown }> | null);
