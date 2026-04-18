@@ -601,6 +601,51 @@ function limpiarLdtTerritorial(ldt: string): string {
     return ldt;
 }
 
+export function extraerDatosParcela(datos: any): {
+    direccion: string;
+    municipio: string;
+    provincia: string;
+    codigoPostal: string;
+    zona_climatica?: string;
+    altitud?: number;
+} {
+    const fromBackend = datos?.direccion_cruda !== undefined && datos?.raw_response !== undefined;
+    
+    if (fromBackend) {
+        return {
+            direccion: datos.direccion_certificador || datos.direccion || "",
+            municipio: datos.municipio || "",
+            provincia: datos.provincia || "",
+            codigoPostal: datos.codigo_postal || "",
+            zona_climatica: datos.zona_climatica,
+            altitud: datos.altitud,
+        };
+    }
+
+    const raw = datos?.raw_response ?? datos;
+    const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
+    const lrcdnp = root?.lrcdnp ?? {};
+    const rcdnpList = Array.isArray(lrcdnp?.rcdnp) ? lrcdnp.rcdnp : (lrcdnp?.rcdnp ? [lrcdnp.rcdnp] : []);
+    const primerItem = rcdnpList[0] || {};
+    const dt = primerItem?.dt ?? {};
+    const locs = dt?.locs ?? {};
+    const lous = locs?.lous ?? {};
+    const lourb = lous?.lourb ?? {};
+
+    const ldtRaw = (primerItem?.ldt ?? dt?.ldt ?? "").toString().trim();
+    const direccion = limpiarLdtTerritorial(ldtRaw) || "";
+    const municipio = dt?.nm ?? locs?.locm?.nm ?? "";
+    const provincia = dt?.np ?? "";
+    const codigoPostal = lourb?.dp ?? "";
+
+    return {
+        direccion,
+        municipio,
+        provincia,
+        codigoPostal,
+    };
+}
+
 export function extraerDatosInmuebleUnico(datos: any): {
     direccion: string;
     direccion_certificador: string;

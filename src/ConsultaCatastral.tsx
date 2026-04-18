@@ -27,6 +27,7 @@ import {
     esParcerlaMultiple,
     extraerListaInmuebles,
     extraerDatosInmuebleUnico,
+    extraerDatosParcela,
     getUrlCroquis,
     type InmuebleData,
     type ConstruccionData,
@@ -91,6 +92,7 @@ export function ConsultaCatastral() {
     const [fromCache, setFromCache] = useState(false);
     const [inmuebles, setInmuebles] = useState<InmuebleData[]>([]);
     const [inmuebleUnico, setInmuebleUnico] = useState<ReturnType<typeof extraerDatosInmuebleUnico> | null>(null);
+    const [parcelaData, setParcelaData] = useState<ReturnType<typeof extraerDatosParcela> | null>(null);
     const [esMultiple, setEsMultiple] = useState(false);
     const [copied, setCopied] = useState<string | null>(null);
 
@@ -131,6 +133,7 @@ export function ConsultaCatastral() {
         setDatos(null);
         setInmuebles([]);
         setInmuebleUnico(null);
+        setParcelaData(null);
 
         const { data: userCtx } = await supabase.auth.getUser();
         const userId = userCtx.user?.id;
@@ -152,6 +155,7 @@ export function ConsultaCatastral() {
         if (multiple) {
             const lista = extraerListaInmuebles(result.datos!);
             setInmuebles(lista);
+            setParcelaData(extraerDatosParcela(result.datos!));
         } else {
             const unico = extraerDatosInmuebleUnico(result.datos!);
             setInmuebleUnico(unico);
@@ -256,6 +260,8 @@ export function ConsultaCatastral() {
                         <InfoCard icon={<Ruler />} label="Superficie Catastral" value={`${inmuebleUnico.superficie} m²`} color="emerald" />
                         <InfoCard icon={<Calendar />} label="Año Construcción" value={inmuebleUnico.anoConstruccion} color="amber" />
                         <InfoCard icon={<Layers />} label="Sup. Suelo Parcela" value={inmuebleUnico.superficieSuelo ? `${inmuebleUnico.superficieSuelo} m²` : "N/D"} color="teal" />
+                        
+                        {/* Variables climáticas provistas directamente por el backend normalizado si el canary está activo */}
                         {inmuebleUnico.zona_climatica && <InfoCard icon={<Cloud />} label="Zona Climática" value={inmuebleUnico.zona_climatica} color="amber" />}
                         {inmuebleUnico.altitud !== undefined && <InfoCard icon={<MapPin />} label="Altitud (m)" value={`${inmuebleUnico.altitud}`} color="pink" />}
                     </div>
@@ -377,6 +383,17 @@ export function ConsultaCatastral() {
                             {fromCache ? <><Database className="h-3 w-3 mr-1" />Caché</> : <><Wifi className="h-3 w-3 mr-1" />Live</>}
                         </Badge>
                     </div>
+
+                    {parcelaData && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                            {parcelaData.direccion && <InfoCard icon={<MapPin />} label="Dirección" value={parcelaData.direccion} color="cyan" wide />}
+                            {parcelaData.municipio && <InfoCard icon={<Building2 />} label="Municipio" value={parcelaData.municipio} color="blue" />}
+                            {parcelaData.provincia && <InfoCard icon={<Landmark />} label="Provincia" value={parcelaData.provincia} color="indigo" />}
+                            {parcelaData.codigoPostal && <InfoCard icon={<Mail />} label="Código Postal" value={parcelaData.codigoPostal} color="violet" />}
+                            {parcelaData.zona_climatica && <InfoCard icon={<Cloud />} label="Zona Climática" value={parcelaData.zona_climatica} color="amber" />}
+                            {parcelaData.altitud !== undefined && <InfoCard icon={<MapPin />} label="Altitud (m)" value={`${parcelaData.altitud}`} color="pink" />}
+                        </div>
+                    )}
 
                     <Card className="bg-slate-900/40 border-slate-800">
                         <CardHeader className="pb-2">
