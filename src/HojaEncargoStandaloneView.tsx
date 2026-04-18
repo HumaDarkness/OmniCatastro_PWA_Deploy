@@ -76,7 +76,8 @@ export function HojaEncargoStandaloneView() {
         setCatastroLoading(true);
         setUxMessage(null);
         try {
-            const res = await consultarCatastro(rcInput);
+            const { data: userCtx } = await supabase.auth.getUser();
+            const res = await consultarCatastro(rcInput, userCtx.user?.id);
             if (res.error || !res.datos) throw new Error(res.error || 'Error conectando con Catastro');
             const data = extraerDatosInmuebleUnico(res.datos);
             setInmueble(prev => ({

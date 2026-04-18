@@ -1555,9 +1555,11 @@ export function CalculadoraTermica() {
 
         setXmlImportMsg(baseMsg + " Verificando Catastro (altura, zona y ubicación)...");
 
+        const { data: userCtx } = await supabase.auth.getUser();
+        
         const [climateCheck, catastroCheck] = await Promise.all([
             fetchAltitudeAndProvince(rcNormalized, provinciaXml || "", municipioXml || ""),
-            consultarCatastro(rcNormalized),
+            consultarCatastro(rcNormalized, userCtx.user?.id),
         ]);
 
         let climateMsg = "";

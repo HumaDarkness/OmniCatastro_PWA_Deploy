@@ -66,6 +66,39 @@ export interface ConstruccionData {
     puerta: string;
     escalera: string;
     superficie: string;
+    _semanticLabel?: string;
+}
+
+// ─── Constants & Utils ─────────────────────────────────────────────
+
+export const TIPO_VIA_MAP: Record<string, string> = {
+    CL: "CALLE", C: "CALLE",
+    AV: "AVENIDA", AVDA: "AVENIDA",
+    PZ: "PLAZA", PL: "PLAZA",
+    PS: "PASEO", CM: "CAMINO",
+    CR: "CARRETERA", CTRA: "CARRETERA",
+    UR: "URBANIZACION", URB: "URBANIZACION",
+    TR: "TRAVESIA", PB: "POBLADO",
+    GL: "GLORIETA", PJ: "PASAJE",
+    CJ: "CALLEJON", RD: "RONDA",
+    AL: "ALDEA", LG: "LUGAR",
+    PR: "PARQUE", POL: "POLIGONO",
+    AD: "ALAMEDA", CS: "CUESTA",
+    DS: "DISEMINADO",
+};
+
+// Catastro semantic labels: es+pt+pu can form words like TODOS, PARTE, RESTO
+export const SEMANTIC_LABELS = new Set([
+    "TODO", "TODOS", "TODA", "TODAS",
+    "PARTE", "RESTO", "TOTAL", "UNICO", "UNICA",
+]);
+
+export function detectSemanticLabel(es: string, pt: string, pu: string): string | null {
+    const concat3 = `${es}${pt}${pu}`.trim().toUpperCase();
+    if (SEMANTIC_LABELS.has(concat3)) return concat3;
+    const concat2 = `${es}${pt}`.trim().toUpperCase();
+    if (SEMANTIC_LABELS.has(concat2)) return concat2;
+    return null;
 }
 
 export type CatastroAvailabilityState = "active" | "maintenance" | "offline";
@@ -623,35 +656,7 @@ export function extraerDatosInmuebleUnico(datos: any): {
     const municipio = dt?.nm ?? locs?.locm?.nm ?? "";
     const provincia = dt?.np ?? "";
 
-    const TIPO_VIA_MAP: Record<string, string> = {
-        CL: "CALLE", C: "CALLE",
-        AV: "AVENIDA", AVDA: "AVENIDA",
-        PZ: "PLAZA", PL: "PLAZA",
-        PS: "PASEO", CM: "CAMINO",
-        CR: "CARRETERA", CTRA: "CARRETERA",
-        UR: "URBANIZACION", URB: "URBANIZACION",
-        TR: "TRAVESIA", PB: "POBLADO",
-        GL: "GLORIETA", PJ: "PASAJE",
-        CJ: "CALLEJON", RD: "RONDA",
-        AL: "ALDEA", LG: "LUGAR",
-        PR: "PARQUE", POL: "POLIGONO",
-        AD: "ALAMEDA", CS: "CUESTA",
-    };
 
-    // Catastro semantic labels: es+pt+pu can form words like TODOS, PARTE, RESTO
-    // These are NOT real escalera/planta/puerta values.
-    const SEMANTIC_LABELS = new Set([
-        "TODO", "TODOS", "TODA", "TODAS",
-        "PARTE", "RESTO", "TOTAL", "UNICO", "UNICA",
-    ]);
-
-    function detectSemanticLabel(es: string, pt: string, pu: string): string | null {
-        const concat3 = `${es}${pt}${pu}`.trim().toUpperCase();
-        if (SEMANTIC_LABELS.has(concat3)) return concat3;
-        const concat2 = `${es}${pt}`.trim().toUpperCase();
-        if (SEMANTIC_LABELS.has(concat2)) return concat2;
-        return null;
-    }
 
     let direccion = "";
     if (fromBackend) {
@@ -768,13 +773,19 @@ function extraerConstrucciones(bico: any): ConstruccionData[] {
 
     return lcons.map((c: any) => {
         const loint = c?.dt?.lourb?.loint ?? {};
+        const pt = (loint?.pt ?? "").trim();
+        const pu = (loint?.pu ?? "").trim();
+        const es = (loint?.es ?? "").trim();
+        const semantic = detectSemanticLabel(es, pt, pu);
+
         return {
             uso: c?.lcd ?? "N/D",
             tipo: c?.dvcons?.dtip ?? "N/D",
-            planta: loint?.pt ?? "N/D",
-            puerta: loint?.pu ?? "N/D",
-            escalera: loint?.es ?? "—",
+            planta: semantic ? "" : (pt || "N/D"),
+            puerta: semantic ? "" : (pu || "N/D"),
+            escalera: semantic ? "" : (es || "—"),
             superficie: c?.dfcons?.stl ?? "N/D",
+            _semanticLabel: semantic || undefined,
         };
     });
 }

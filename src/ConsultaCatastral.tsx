@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { supabase } from "./lib/supabase";
 import {
     Building2,
     Search,
@@ -131,7 +132,10 @@ export function ConsultaCatastral() {
         setInmuebles([]);
         setInmuebleUnico(null);
 
-        const result = await consultarCatastro(rc);
+        const { data: userCtx } = await supabase.auth.getUser();
+        const userId = userCtx.user?.id;
+
+        const result = await consultarCatastro(rc, userId);
         setLoading(false);
 
         if (result.error) {
@@ -299,8 +303,8 @@ export function ConsultaCatastral() {
                                             <TableHead className="text-slate-500 text-xs">Uso</TableHead>
                                             <TableHead className="text-slate-500 text-xs">Computa CE3X</TableHead>
                                             <TableHead className="text-slate-500 text-xs">Tipo</TableHead>
-                                            {!inmuebleUnico._semanticLabel && <TableHead className="text-slate-500 text-xs">Planta</TableHead>}
-                                            {!inmuebleUnico._semanticLabel && <TableHead className="text-slate-500 text-xs">Puerta</TableHead>}
+                                            <TableHead className="text-slate-500 text-xs">Planta</TableHead>
+                                            <TableHead className="text-slate-500 text-xs">Puerta</TableHead>
                                             <TableHead className="text-slate-500 text-xs text-right">Superficie</TableHead>
                                         </TableRow>
                                     </TableHeader>
@@ -314,8 +318,8 @@ export function ConsultaCatastral() {
                                                     </Badge>
                                                 </TableCell>
                                                 <TableCell className="text-xs text-slate-400">{c.tipo}</TableCell>
-                                                {!inmuebleUnico._semanticLabel && <TableCell className="text-sm text-slate-300 font-mono">{c.planta}</TableCell>}
-                                                {!inmuebleUnico._semanticLabel && <TableCell className="text-sm text-slate-300 font-mono">{c.puerta}</TableCell>}
+                                                <TableCell className="text-sm text-slate-300 font-mono">{c._semanticLabel ? "—" : c.planta}</TableCell>
+                                                <TableCell className="text-sm text-slate-300 font-mono">{c._semanticLabel ? "—" : c.puerta}</TableCell>
                                                 <TableCell className="text-sm text-emerald-400 font-mono text-right">{c.superficie} m²</TableCell>
                                             </TableRow>
                                         ))}
