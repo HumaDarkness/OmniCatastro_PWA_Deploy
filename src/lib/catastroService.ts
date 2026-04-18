@@ -399,12 +399,12 @@ export async function consultarCatastro(referenciaCatastral: string, userId?: st
                         altitud: normalized.altitud_msnm,
                     };
                     return { datos: wrappedDatos, error: null, fromCache: false, fromNormalizar: true };
-                } else {
-                    return { datos: null, error: "[Canary Debug] El normalizador falló (el backend de Render devolvió 500, 403 o 401). Presiona F12 y mira la consola para ver qué devolvió el kyClient.", fromCache: false };
                 }
+                // If normalizar failed, fall through to legacy path
             }
-        } catch {
-            // Feature flag check failed, fall through to legacy
+        } catch (e: any) {
+            // Feature flag check failed or normalizar threw 401/403/500, fall through to legacy
+            console.warn("[Catastro Normalizar] Error, will use legacy fallback:", e.message);
         }
     }
 
