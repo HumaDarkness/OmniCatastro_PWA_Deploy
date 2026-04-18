@@ -18,6 +18,7 @@ import {
     Landmark,
     Layers,
     Cloud,
+    Globe,
 } from "lucide-react";
 import {
     consultarCatastro,
@@ -246,6 +247,7 @@ export function ConsultaCatastral() {
                         <InfoCard icon={<Building2 />} label="Municipio" value={inmuebleUnico.municipio || "N/D"} color="blue" />
                         <InfoCard icon={<Landmark />} label="Provincia" value={inmuebleUnico.provincia || "N/D"} color="indigo" />
                         <InfoCard icon={<Mail />} label="Código Postal" value={inmuebleUnico.codigoPostal || "N/D"} color="violet" />
+                        {inmuebleUnico.comunidad_autonoma && <InfoCard icon={<Globe />} label="Comunidad Autónoma" value={inmuebleUnico.comunidad_autonoma} color="blue" />}
                         <InfoCard icon={<Home />} label="Uso" value={inmuebleUnico.uso} color="purple" />
                         <InfoCard icon={<Ruler />} label="Superficie Catastral" value={`${inmuebleUnico.superficie} m²`} color="emerald" />
                         <InfoCard icon={<Calendar />} label="Año Construcción" value={inmuebleUnico.anoConstruccion} color="amber" />
@@ -297,8 +299,8 @@ export function ConsultaCatastral() {
                                             <TableHead className="text-slate-500 text-xs">Uso</TableHead>
                                             <TableHead className="text-slate-500 text-xs">Computa CE3X</TableHead>
                                             <TableHead className="text-slate-500 text-xs">Tipo</TableHead>
-                                            <TableHead className="text-slate-500 text-xs">Planta</TableHead>
-                                            <TableHead className="text-slate-500 text-xs">Puerta</TableHead>
+                                            {!inmuebleUnico._semanticLabel && <TableHead className="text-slate-500 text-xs">Planta</TableHead>}
+                                            {!inmuebleUnico._semanticLabel && <TableHead className="text-slate-500 text-xs">Puerta</TableHead>}
                                             <TableHead className="text-slate-500 text-xs text-right">Superficie</TableHead>
                                         </TableRow>
                                     </TableHeader>
@@ -312,8 +314,8 @@ export function ConsultaCatastral() {
                                                     </Badge>
                                                 </TableCell>
                                                 <TableCell className="text-xs text-slate-400">{c.tipo}</TableCell>
-                                                <TableCell className="text-sm text-slate-300 font-mono">{c.planta}</TableCell>
-                                                <TableCell className="text-sm text-slate-300 font-mono">{c.puerta}</TableCell>
+                                                {!inmuebleUnico._semanticLabel && <TableCell className="text-sm text-slate-300 font-mono">{c.planta}</TableCell>}
+                                                {!inmuebleUnico._semanticLabel && <TableCell className="text-sm text-slate-300 font-mono">{c.puerta}</TableCell>}
                                                 <TableCell className="text-sm text-emerald-400 font-mono text-right">{c.superficie} m²</TableCell>
                                             </TableRow>
                                         ))}

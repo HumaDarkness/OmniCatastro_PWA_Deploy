@@ -482,9 +482,96 @@ export function extraerListaInmuebles(datos: any): InmuebleData[] {
 
 // ─── Extraer datos de un inmueble único (bico) ──────────────────────
 
+// ─── Tabla oficial provincia → comunidad autónoma (determinista) ──────
+const PROVINCIA_CCAA_MAP: Record<string, string> = {
+    // Andalucía
+    "ALMERIA": "Andalucía", "CADIZ": "Andalucía", "CORDOBA": "Andalucía",
+    "GRANADA": "Andalucía", "HUELVA": "Andalucía", "JAEN": "Andalucía",
+    "MALAGA": "Andalucía", "SEVILLA": "Andalucía",
+    // Aragón
+    "HUESCA": "Aragón", "TERUEL": "Aragón", "ZARAGOZA": "Aragón",
+    // Asturias
+    "ASTURIAS": "Principado de Asturias", "OVIEDO": "Principado de Asturias",
+    // Baleares
+    "BALEARES": "Illes Balears", "ILLES BALEARS": "Illes Balears", "ISLAS BALEARES": "Illes Balears",
+    // Canarias
+    "LAS PALMAS": "Canarias", "SANTA CRUZ DE TENERIFE": "Canarias", "PALMAS, LAS": "Canarias",
+    // Cantabria
+    "CANTABRIA": "Cantabria", "SANTANDER": "Cantabria",
+    // Castilla y León
+    "AVILA": "Castilla y León", "BURGOS": "Castilla y León", "LEON": "Castilla y León",
+    "PALENCIA": "Castilla y León", "SALAMANCA": "Castilla y León",
+    "SEGOVIA": "Castilla y León", "SORIA": "Castilla y León",
+    "VALLADOLID": "Castilla y León", "ZAMORA": "Castilla y León",
+    // Castilla-La Mancha
+    "ALBACETE": "Castilla-La Mancha", "CIUDAD REAL": "Castilla-La Mancha",
+    "CUENCA": "Castilla-La Mancha", "GUADALAJARA": "Castilla-La Mancha",
+    "TOLEDO": "Castilla-La Mancha",
+    // Cataluña
+    "BARCELONA": "Cataluña", "GIRONA": "Cataluña", "GERONA": "Cataluña",
+    "LLEIDA": "Cataluña", "LERIDA": "Cataluña", "TARRAGONA": "Cataluña",
+    // Comunitat Valenciana
+    "ALICANTE": "Comunitat Valenciana", "CASTELLON": "Comunitat Valenciana",
+    "VALENCIA": "Comunitat Valenciana", "ALACANT": "Comunitat Valenciana",
+    "CASTELLO": "Comunitat Valenciana",
+    // Extremadura
+    "BADAJOZ": "Extremadura", "CACERES": "Extremadura",
+    // Galicia
+    "A CORUNA": "Galicia", "CORUNA, A": "Galicia", "LA CORUNA": "Galicia",
+    "LUGO": "Galicia", "OURENSE": "Galicia", "ORENSE": "Galicia",
+    "PONTEVEDRA": "Galicia",
+    // Madrid
+    "MADRID": "Comunidad de Madrid",
+    // Murcia
+    "MURCIA": "Región de Murcia",
+    // Navarra
+    "NAVARRA": "Comunidad Foral de Navarra", "PAMPLONA": "Comunidad Foral de Navarra",
+    // País Vasco
+    "ALAVA": "País Vasco", "ARABA": "País Vasco",
+    "BIZKAIA": "País Vasco", "VIZCAYA": "País Vasco",
+    "GIPUZKOA": "País Vasco", "GUIPUZCOA": "País Vasco",
+    // La Rioja
+    "LA RIOJA": "La Rioja", "RIOJA": "La Rioja", "LOGRONO": "La Rioja",
+    // Ceuta y Melilla
+    "CEUTA": "Ceuta", "MELILLA": "Melilla",
+};
+
+/** Resolve comunidad_autonoma from province name (deterministic, no guessing). */
+function resolverComunidadAutonoma(provincia: string): { ccaa: string; warning?: string } {
+    if (!provincia || !provincia.trim()) return { ccaa: "", warning: "provincia_empty" };
+    const normalized = provincia.trim()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // strip accents
+        .toUpperCase();
+    const ccaa = PROVINCIA_CCAA_MAP[normalized];
+    if (ccaa) return { ccaa };
+    // Try partial match for edge cases like "CORUNA" vs "A CORUNA"
+    for (const [key, val] of Object.entries(PROVINCIA_CCAA_MAP)) {
+        if (normalized.includes(key) || key.includes(normalized)) return { ccaa: val };
+    }
+    return { ccaa: "", warning: `ccaa_unresolvable:${provincia}` };
+}
+
+/**
+ * Strip trailing territorial block from Catastro ldt.
+ * Input:  "DS DISEMINADO 7 Polígono 2 Parcela 30014 ... LOS ARENALES. 45522 ALBARREAL DE TAJO (TOLEDO)"
+ * Output: "DS DISEMINADO 7 Polígono 2 Parcela 30014 ... LOS ARENALES."
+ */
+function limpiarLdtTerritorial(ldt: string): string {
+    if (!ldt) return "";
+    // Pattern: trailing " 45522 MUNICIPIO (PROVINCIA)" — CP is 5 digits at the END
+    // Use greedy .+ to match everything up to the LAST 5-digit block + territorial
+    const match = ldt.match(/^(.+)\s+\d{5}\s+.+\([^)]+\)\s*$/);
+    if (match) return match[1].trim();
+    // Fallback: " CP MUNICIPIO" without parenthesized province
+    const match2 = ldt.match(/^(.+)\s+\d{5}\s+[A-ZÁÉÍÓÚÑ\s]+$/i);
+    if (match2) return match2[1].trim();
+    return ldt;
+}
+
 export function extraerDatosInmuebleUnico(datos: any): {
     direccion: string;
     direccion_certificador: string;
+    comunidad_autonoma: string;
     municipio: string;
     provincia: string;
     codigoPostal: string;
@@ -499,7 +586,7 @@ export function extraerDatosInmuebleUnico(datos: any): {
     zona_climatica?: string;
     altitud?: number;
     direccion_cruda?: string;
-    // Campos extra finos:
+    _semanticLabel?: string;
     tipoVia?: string;
     nombreVia?: string;
     numero?: string;
@@ -507,6 +594,7 @@ export function extraerDatosInmuebleUnico(datos: any): {
     puerta?: string;
     escalera?: string;
     bloque?: string;
+    _warnings?: string[];
 } {
     // Si la respuesta vino del backend con campos pre-extraidos y smart parsing:
     const fromBackend = datos?.direccion_cruda !== undefined && datos?.raw_response !== undefined;
@@ -518,8 +606,10 @@ export function extraerDatosInmuebleUnico(datos: any): {
     const debi = bi?.debi ?? {};
     const dt = bi?.dt ?? {};
 
-    // Localización literal completa (ldt) — "DS DISEMINADO 7 Polígono 2 Parcela 30014 ..."
-    const localizacionLiteral = (bi?.ldt ?? bico?.finca?.ldt ?? dt?.ldt ?? "").toString().trim();
+    // Localización literal completa (ldt) — contiene TODO: dirección + CP + municipio + (provincia)
+    const ldtRaw = (bi?.ldt ?? bico?.finca?.ldt ?? dt?.ldt ?? "").toString().trim();
+    // Limpiar: quitar bloque territorial del final → solo la parte de dirección
+    const localizacionLiteral = limpiarLdtTerritorial(ldtRaw);
 
     // Dirección — dt.locs.lous.lourb.dir
     const locs = dt?.locs ?? {};
@@ -621,16 +711,28 @@ export function extraerDatosInmuebleUnico(datos: any): {
     // Construcciones (lcons) — array de unidades constructivas
     const construcciones = extraerConstrucciones(bico);
 
+    // Resolver provincia → comunidad autónoma de forma determinista
+    const provinciaFinal = fromBackend ? datos.provincia : provincia;
+    const ccaaResult = resolverComunidadAutonoma(provinciaFinal);
+    const warnings: string[] = [];
+    if (ccaaResult.warning) warnings.push(ccaaResult.warning);
+
+    // Semantic label (from es+pt+pu detection) for consumers to know
+    const semanticLabel = datos._parsed?._semanticLabel ?? undefined;
+
     return {
-        // direccion_certificador = localización literal COMPLETA del Catastro (ldt)
-        // Dirección principal para certificación — NO recortada a tipo_via + nombre_via
+        // direccion_certificador = ldt LIMPIO (sin bloque territorial)
+        // Solo la parte de dirección/localización, SIN CP/municipio/provincia
         direccion_certificador: fromBackend
-            ? (datos.direccion_certificador || datos.direccion || localizacionLiteral)
+            ? (datos.direccion_certificador || localizacionLiteral || datos.direccion)
             : (localizacionLiteral || direccion),
-        // direccion legacy (tipo_via + nombre_via + num) — para Hoja de Encargo y compat
+        // direccion legacy (tipo_via + nombre_via + num)
         direccion: fromBackend ? datos.direccion : direccion,
         municipio: fromBackend ? datos.municipio : municipio,
-        provincia: fromBackend ? datos.provincia : provincia,
+        provincia: provinciaFinal,
+        comunidad_autonoma: fromBackend
+            ? (datos.comunidad_autonoma || ccaaResult.ccaa)
+            : ccaaResult.ccaa,
         codigoPostal: fromBackend ? datos.codigo_postal : codigoPostal,
         
         uso: debi?.luso ?? "N/D",
@@ -642,10 +744,11 @@ export function extraerDatosInmuebleUnico(datos: any): {
         construcciones,
         urlCartografia,
         
-        // Atributos enriquecidos del backend
         zona_climatica: fromBackend ? datos.zona_climatica : undefined,
         altitud: fromBackend ? datos.altitud : undefined,
         direccion_cruda: fromBackend ? datos.direccion_cruda : undefined,
+        _semanticLabel: semanticLabel,
+        _warnings: warnings.length > 0 ? warnings : undefined,
 
         tipoVia: fromBackend ? datos.tipo_via : datos._parsed?.tipoVia,
         nombreVia: fromBackend ? datos.nombre_via : datos._parsed?.nombreVia,
