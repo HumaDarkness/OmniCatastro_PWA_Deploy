@@ -31,13 +31,10 @@ import {
 import {
   consultarCatastro,
   validarRC,
-  esParcerlaMultiple,
-  extraerListaInmuebles,
-  extraerDatosInmuebleUnico,
-  extraerDatosParcela,
   getUrlCroquis,
   type InmuebleData,
   type ConstruccionData,
+  type CatastroUIModel,
 } from "./lib/catastroService";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Input } from "./components/ui/input";
@@ -134,12 +131,8 @@ export function ConsultaCatastral() {
   const [datos, setDatos] = useState<any>(null);
   const [fromCache, setFromCache] = useState(false);
   const [inmuebles, setInmuebles] = useState<InmuebleData[]>([]);
-  const [inmuebleUnico, setInmuebleUnico] = useState<ReturnType<
-    typeof extraerDatosInmuebleUnico
-  > | null>(null);
-  const [parcelaData, setParcelaData] = useState<ReturnType<typeof extraerDatosParcela> | null>(
-    null
-  );
+  const [inmuebleUnico, setInmuebleUnico] = useState<any>(null);
+  const [parcelaData, setParcelaData] = useState<any>(null);
   const [esMultiple, setEsMultiple] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   // CTE Evaluation state
@@ -151,7 +144,7 @@ export function ConsultaCatastral() {
   const { valido: rcValido } = rc.trim() ? validarRC(rc) : { valido: false };
   const rcLength = rc.trim().replace(/[\s-]/g, "").length;
   const construccionesAnalizadas: ConstruccionAnalizada[] = inmuebleUnico
-    ? inmuebleUnico.construcciones.map((c) => {
+    ? inmuebleUnico.construcciones.map((c: any) => {
         const superficieNumero = parsearSuperficie(c.superficie);
         return {
           ...c,
@@ -213,23 +206,42 @@ export function ConsultaCatastral() {
       return;
     }
 
-    setDatos(result.datos);
+    const uiModel = result.datos as CatastroUIModel;
+    setDatos(uiModel);
     setFromCache(result.fromCache);
+    setEsMultiple(uiModel.es_multiple);
 
-    const { multiple } = esParcerlaMultiple(result.datos!);
-    setEsMultiple(multiple);
-
-    if (multiple) {
-      const lista = extraerListaInmuebles(result.datos!);
-      setInmuebles(lista);
-      setParcelaData(extraerDatosParcela(result.datos!));
+    if (uiModel.es_multiple) {
+      setInmuebles(uiModel.inmuebles);
+      setParcelaData({
+         direccion: uiModel.direccion_certificador,
+         municipio: uiModel.municipio,
+         provincia: uiModel.provincia,
+         codigoPostal: uiModel.codigo_postal,
+         zona_climatica: uiModel.zona_climatica,
+         altitud: uiModel.altitud,
+      });
     } else {
-      const unico = extraerDatosInmuebleUnico(result.datos!);
-      setInmuebleUnico(unico);
+      setInmuebleUnico({
+         ...uiModel.detalle_inmueble,
+         direccion_certificador: uiModel.direccion_certificador,
+         direccion_cruda: uiModel.direccion_cruda,
+         direccion: uiModel.detalle_inmueble.tipo_via ? `${uiModel.detalle_inmueble.tipo_via} ${uiModel.detalle_inmueble.nombre_via} ${uiModel.detalle_inmueble.numero}`.trim() : uiModel.direccion_certificador,
+         municipio: uiModel.municipio,
+         provincia: uiModel.provincia,
+         comunidad_autonoma: uiModel.comunidad_autonoma,
+         codigoPostal: uiModel.codigo_postal,
+         zona_climatica: uiModel.zona_climatica,
+         altitud: uiModel.altitud,
+         anoConstruccion: uiModel.detalle_inmueble.ano_construccion,
+         superficieSuelo: uiModel.detalle_inmueble.superficie_suelo,
+         tipoFinca: uiModel.detalle_inmueble.tipo_finca,
+         urlCartografia: uiModel.detalle_inmueble.url_cartografia,
+      });
     }
 
     // Auto-trigger CTE evaluation for single properties
-    if (!multiple) {
+    if (!esMultiple) {
       fetchCteEvaluation(rc.trim().toUpperCase().replace(/[\s-]/g, ""));
     }
   };
@@ -788,7 +800,7 @@ function InfoCard({
   label,
   value,
   color,
-  wide,
+  wide = false,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -797,77 +809,31 @@ function InfoCard({
   wide?: boolean;
 }) {
   const colorMap: Record<string, string> = {
-    cyan: "text-cyan-400 bg-cyan-500/10",
-    blue: "text-blue-400 bg-blue-500/10",
-    indigo: "text-indigo-400 bg-indigo-500/10",
-    violet: "text-violet-400 bg-violet-500/10",
-    purple: "text-purple-400 bg-purple-500/10",
-    emerald: "text-emerald-400 bg-emerald-500/10",
-    amber: "text-amber-400 bg-amber-500/10",
-    pink: "text-pink-400 bg-pink-500/10",
-    teal: "text-teal-400 bg-teal-500/10",
+    cyan: "text-cyan-400 bg-cyan-500/10 ring-cyan-500/20",
+    blue: "text-blue-400 bg-blue-500/10 ring-blue-500/20",
+    indigo: "text-indigo-400 bg-indigo-500/10 ring-indigo-500/20",
+    violet: "text-violet-400 bg-violet-500/10 ring-violet-500/20",
+    purple: "text-purple-400 bg-purple-500/10 ring-purple-500/20",
+    emerald: "text-emerald-400 bg-emerald-500/10 ring-emerald-500/20",
+    amber: "text-amber-400 bg-amber-500/10 ring-amber-500/20",
+    teal: "text-teal-400 bg-teal-500/10 ring-teal-500/20",
+    pink: "text-pink-400 bg-pink-500/10 ring-pink-500/20",
   };
-  const classes = colorMap[color] ?? colorMap.cyan;
 
   return (
-    <Card className={`bg-slate-900/40 border-slate-800${wide ? " lg:col-span-2" : ""}`}>
-      <CardContent className="p-4 flex items-start gap-3">
-        <div className={`p-2 rounded-lg ${classes} shrink-0 [&>svg]:h-5 [&>svg]:w-5`}>{icon}</div>
-        <div className="min-w-0">
-          <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5">{label}</p>
-          <p
-            className={`text-sm font-medium text-slate-200 ${wide ? "break-words" : "truncate"}`}
-            title={value}
-          >
-            {value}
-          </p>
+    <Card className={`bg-slate-900/40 border-slate-800 ${wide ? "lg:col-span-2" : ""}`}>
+      <CardContent className="p-4 flex items-center gap-4">
+        <div className={`p-2 rounded-lg ring-1 ${colorMap[color] || ""}`}>{icon}</div>
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>
+          <p className="text-sm font-medium text-slate-200">{value}</p>
         </div>
       </CardContent>
     </Card>
   );
 }
 
-// ─── CTE Evaluation Panel ────────────────────────────────────────────
-
-const COMPLIANCE_CONFIG = {
-  compliant: {
-    icon: ShieldCheck,
-    label: "Cumple CTE",
-    color: "emerald",
-    bg: "bg-emerald-500/10",
-    text: "text-emerald-400",
-    ring: "ring-emerald-500/30",
-    border: "border-emerald-500/20",
-  },
-  partial: {
-    icon: ShieldAlert,
-    label: "Cumplimiento Parcial",
-    color: "amber",
-    bg: "bg-amber-500/10",
-    text: "text-amber-400",
-    ring: "ring-amber-500/30",
-    border: "border-amber-500/20",
-  },
-  non_compliant: {
-    icon: ShieldX,
-    label: "No Cumple CTE",
-    color: "red",
-    bg: "bg-red-500/10",
-    text: "text-red-400",
-    ring: "ring-red-500/30",
-    border: "border-red-500/20",
-  },
-  unknown: {
-    icon: HelpCircle,
-    label: "Sin Evaluar",
-    color: "slate",
-    bg: "bg-slate-500/10",
-    text: "text-slate-400",
-    ring: "ring-slate-500/30",
-    border: "border-slate-500/20",
-  },
-} as const;
-
+// ─── CTE Evaluation Panel ───
 function CTEEvaluationPanel({
   data,
   loading,
@@ -877,158 +843,121 @@ function CTEEvaluationPanel({
   loading: boolean;
   error: string | null;
 }) {
-  if (!loading && !data && !error) return null;
+  if (loading) {
+    return (
+      <Card className="bg-slate-900/40 border-slate-800 animate-pulse">
+        <CardContent className="p-12 flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 text-amber-500/20 animate-spin" />
+          <p className="text-sm text-slate-600">Evaluando cumplimiento CTE...</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error || !data) return null;
+
+  const toneMap = {
+    compliant: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+    partial: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+    non_compliant: "text-rose-400 bg-rose-500/10 border-rose-500/20",
+    unknown: "text-slate-400 bg-slate-500/10 border-slate-500/20",
+  };
+
+  const statusIcons = {
+    compliant: <ShieldCheck className="h-6 w-6" />,
+    partial: <ShieldAlert className="h-6 w-6" />,
+    non_compliant: <ShieldX className="h-6 w-6" />,
+    unknown: <HelpCircle className="h-6 w-6" />,
+  };
+
+  const statusLabels = {
+    compliant: "Cumple CTE (Actual)",
+    partial: "Cumplimiento Parcial",
+    non_compliant: "No Cumple (Rehabilitación Recomendada)",
+    unknown: "Estado Desconocido",
+  };
 
   return (
-    <Card className="bg-slate-900/40 border-slate-800 animate-in fade-in slide-in-from-bottom-2 duration-300">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
-          <Thermometer className="h-4 w-4 text-amber-400" />
-          Evaluación CTE — Rehabilitación Energética
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="pt-0 space-y-4">
-        {/* Loading */}
-        {loading && (
-          <div className="flex items-center gap-3 py-4">
-            <Loader2 className="h-5 w-5 animate-spin text-cyan-400" />
-            <span className="text-sm text-slate-400">Evaluando cumplimiento CTE...</span>
+    <Card className="bg-slate-900/40 border-slate-800 overflow-hidden">
+      <div className={`p-4 border-b flex items-center justify-between ${toneMap[data.cumplimiento]}`}>
+        <div className="flex items-center gap-3">
+          {statusIcons[data.cumplimiento]}
+          <div>
+            <h4 className="font-bold text-sm tracking-tight">{statusLabels[data.cumplimiento]}</h4>
+            <p className="text-[10px] opacity-70 uppercase">
+              Normativa Aplicable: {data.normativa_aplicable}
+            </p>
           </div>
-        )}
+        </div>
+        <Badge className="bg-black/20 font-mono text-xs border-none hover:bg-black/30">
+          ZONA {data.zona_climatica} ({data.zona_label})
+        </Badge>
+      </div>
 
-        {/* Error */}
-        {error && !loading && (
-          <div className="flex items-center gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            {error}
-          </div>
-        )}
-
-        {/* Data */}
-        {data && !loading && (
-          <>
-            {/* Compliance Status Badge */}
-            {(() => {
-              const config = COMPLIANCE_CONFIG[data.cumplimiento] ?? COMPLIANCE_CONFIG.unknown;
-              const Icon = config.icon;
-              return (
-                <div
-                  className={`flex items-start gap-4 p-4 rounded-lg ${config.bg} border ${config.border}`}
-                >
-                  <div className={`p-2 rounded-lg ${config.bg} shrink-0`}>
-                    <Icon className={`h-6 w-6 ${config.text}`} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Badge className={`${config.bg} ${config.text} ring-1 ${config.ring}`}>
-                        {config.label}
-                      </Badge>
-                      {data.prioridad_rehabilitacion &&
-                        data.prioridad_rehabilitacion !== "ninguna" && (
-                          <Badge className="bg-slate-700/50 text-slate-300 ring-1 ring-slate-600/50">
-                            Prioridad: {data.prioridad_rehabilitacion}
-                          </Badge>
-                        )}
-                      {data.ahorro_estimado_pct != null && data.ahorro_estimado_pct > 0 && (
-                        <Badge className="bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30">
-                          <TrendingDown className="h-3 w-3 mr-1" />
-                          Ahorro estimado: {data.ahorro_estimado_pct}%
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="text-sm text-slate-300 leading-relaxed">{data.resumen}</p>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Zone + Year Info */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-800">
-                <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">
-                  Zona Climática
-                </p>
-                <p className="text-sm font-medium text-slate-200">{data.zona_label}</p>
-                <p className="text-xs text-slate-500 mt-1">{data.zona_descripcion}</p>
-              </div>
-              <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-800">
-                <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">
-                  Normativa Aplicable
-                </p>
-                <p className="text-sm font-medium text-slate-200">{data.normativa_aplicable}</p>
-                <p className="text-xs text-slate-500 mt-1">
-                  CTE obligatorio desde {data.year_cte_obligatorio} · Actualizado{" "}
-                  {data.year_cte_actualizado}
-                </p>
-              </div>
+      <CardContent className="p-6 space-y-6">
+        <div className="space-y-2">
+          <p className="text-sm text-slate-300 leading-relaxed italic border-l-2 border-slate-700 pl-4">
+            "{data.resumen}"
+          </p>
+          <div className="flex flex-wrap gap-4 mt-4 py-3 border-y border-slate-800/50">
+            <div className="flex-1 min-w-[120px]">
+              <span className="text-[10px] text-slate-500 uppercase">Prioridad</span>
+              <p
+                className={`text-sm font-semibold ${data.prioridad_rehabilitacion === "ALTA" ? "text-rose-400" : "text-amber-400"}`}
+              >
+                {data.prioridad_rehabilitacion}
+              </p>
             </div>
-
-            {/* Element Analysis */}
-            {data.elementos.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-xs uppercase tracking-wider text-slate-500 font-medium">
-                  Análisis por Elemento Constructivo
+            {data.ahorro_estimado_pct && (
+              <div className="flex-1 min-w-[120px]">
+                <span className="text-[10px] text-slate-500 uppercase">Ahorro Estimado</span>
+                <p className="text-sm font-semibold text-emerald-400">
+                  <TrendingDown className="h-3 w-3 inline mr-1" />
+                  {data.ahorro_estimado_pct}% de demanda
                 </p>
-                <div className="space-y-2">
-                  {data.elementos.map((elem) => (
-                    <div
-                      key={elem.elemento}
-                      className={`p-3 rounded-lg border ${
-                        elem.excede_limite
-                          ? "bg-red-500/5 border-red-500/15"
-                          : "bg-emerald-500/5 border-emerald-500/15"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-slate-200">
-                          {elem.elemento_label}
-                        </span>
-                        {elem.excede_limite ? (
-                          <Badge className="bg-red-500/15 text-red-400 ring-1 ring-red-500/30 text-xs">
-                            Excede {elem.mejora_necesaria_pct}%
-                          </Badge>
-                        ) : (
-                          <Badge className="bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30 text-xs">
-                            Cumple
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-2 gap-4 text-xs mb-2">
-                        <div>
-                          <span className="text-slate-500">U máx. CTE:</span>{" "}
-                          <span className="text-slate-300 font-mono">
-                            {elem.u_max_cte.toFixed(2)} W/m²·K
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-slate-500">U típico edificio:</span>{" "}
-                          <span
-                            className={`font-mono ${elem.excede_limite ? "text-red-400" : "text-emerald-400"}`}
-                          >
-                            {elem.u_tipico_pre_cte.toFixed(2)} W/m²·K
-                          </span>
-                        </div>
-                      </div>
-                      {elem.excede_limite && (
-                        <>
-                          <div className="w-full bg-slate-800 rounded-full h-1.5 mb-2">
-                            <div
-                              className="bg-gradient-to-r from-red-500 to-amber-500 h-1.5 rounded-full transition-all duration-500"
-                              style={{ width: `${Math.min(elem.mejora_necesaria_pct, 100)}%` }}
-                            />
-                          </div>
-                          <p className="text-xs text-slate-400 italic">{elem.recomendacion}</p>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
               </div>
             )}
-          </>
-        )}
+            <div className="flex-1 min-w-[120px]">
+              <span className="text-[10px] text-slate-500 uppercase">Altitud</span>
+              <p className="text-sm font-semibold text-slate-300">{data.zona_descripcion}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Elementos Evaluados */}
+        <div className="space-y-3">
+          <h5 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+            Análisis de Envolvente
+          </h5>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {data.elementos.map((el, i) => (
+              <div
+                key={i}
+                className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 hover:border-slate-700 transition-colors"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-slate-200">{el.elemento_label}</span>
+                  <Badge
+                    className={`text-[9px] font-mono ${el.excede_limite ? "bg-rose-500/10 text-rose-400" : "bg-emerald-500/10 text-emerald-400"}`}
+                  >
+                    {el.excede_limite ? "EXCEDE" : "OK"}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono mb-2">
+                  <span>Actual: ~{el.u_tipico_pre_cte} W/m²K</span>
+                  <span>Límite: {el.u_max_cte} W/m²K</span>
+                </div>
+                {el.excede_limite && (
+                  <div className="mt-2 text-[11px] text-slate-400 bg-slate-800/80 p-2 rounded border-l-2 border-amber-500/50">
+                    <Zap className="h-3 w-3 inline mr-1 text-amber-400" />
+                    {el.recomendacion}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
 }
-

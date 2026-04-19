@@ -69,6 +69,46 @@ export interface ConstruccionData {
   _semanticLabel?: string;
 }
 
+export interface CatastroUIModel {
+  es_multiple: boolean;
+  num_inmuebles: number;
+  inmuebles: InmuebleData[];
+  
+  // Transversales
+  direccion_certificador: string;
+  direccion_cruda: string;
+  municipio: string;
+  provincia: string;
+  comunidad_autonoma: string;
+  codigo_postal: string;
+  zona_climatica: string | null;
+  altitud: number | null;
+  coordenadas: { lat: number | null; lon: number | null };
+
+  // Detalles de inmueble o lista
+  detalle_inmueble: {
+    uso: string;
+    superficie: string;
+    ano_construccion: string;
+    participacion: string;
+    tipo_finca: string;
+    superficie_suelo: string;
+    construcciones: ConstruccionData[];
+    url_cartografia: string;
+    tipo_via: string;
+    nombre_via: string;
+    numero: string;
+    planta: string;
+    puerta: string;
+    escalera: string;
+    bloque: string;
+    _warnings: string[];
+    _semanticLabel?: string;
+  };
+  
+  source: 'backend_normalized' | 'backend_legacy' | 'direct' | 'cache';
+}
+
 // ─── Constants & Utils ─────────────────────────────────────────────
 
 export const TIPO_VIA_MAP: Record<string, string> = {
@@ -406,31 +446,11 @@ export async function consultarCatastro(
       if (useNormalizar) {
         const normalized = await llamarAPINormalizar(rc);
         if (normalized) {
-          // Wrap the response so downstream consumers can detect it
-          const wrappedDatos = {
-            ...normalized,
-            _fromNormalizar: true,
-            // Map to legacy-compatible fields para extraerDatosInmuebleUnico
-            raw_response: normalized.raw?.catastro,
-            direccion: normalized.direccion_certificador,
-            direccion_cruda: normalized.display?.full || "",
-            tipo_via: normalized.tipo_via,
-            nombre_via: normalized.nombre_via,
-            numero: normalized.numero,
-            bloque: normalized.bloque,
-            escalera: normalized.escalera,
-            planta: normalized.planta,
-            puerta: normalized.puerta,
-            codigo_postal: normalized.codigo_postal,
-            zona_climatica: normalized.zona_climatica,
-            altitud: normalized.altitud_msnm,
-          };
-          return { datos: wrappedDatos, error: null, fromCache: false, fromNormalizar: true };
+          const uiModel = mapCatastroResponseToUIModel(normalized, "backend_normalized");
+          return { datos: uiModel, error: null, fromCache: false, fromNormalizar: true };
         }
-        // If normalizar failed, fall through to legacy path
       }
     } catch (e: any) {
-      // Feature flag check failed or normalizar threw 401/403/500, fall through to legacy
       console.warn("[Catastro Normalizar] Error, will use legacy fallback:", e.message);
     }
   }
@@ -438,7 +458,9 @@ export async function consultarCatastro(
   // 1. Buscar en cache Supabase
   const cached = await buscarEnCache(rc);
   if (cached) {
-    return { datos: cached, error: null, fromCache: true };
+    // Asumimos que la cache guarda backend legacy / raw json
+    // Ajustaremos con mapCatastroResponseToUIModel
+    return { datos: mapCatastroResponseToUIModel(cached, "cache"), error: null, fromCache: true };
   }
 
   // 2. Llamar a la API del Catastro (legacy)
@@ -455,7 +477,169 @@ export async function consultarCatastro(
   const errorMsg = verificarErrores(datos);
   if (errorMsg) return { datos: null, error: errorMsg, fromCache: false };
 
-  return { datos, error: null, fromCache: false };
+  // Identificar si vino del python API o es direct JSON PWA 
+  const isDirect = datos.raw_response === undefined;
+  const source = isDirect ? "direct" : "backend_legacy";
+
+  return { datos: mapCatastroResponseToUIModel(datos, source), error: null, fromCache: false };
+}
+
+// ─── Mapper a CatastroUIModel ────────────────────────────────────────
+
+export function mapCatastroResponseToUIModel(datos: any, source: CatastroUIModel['source']): CatastroUIModel {
+  const fromBackend = (source === 'backend_normalized' || source === 'backend_legacy' || (source === 'cache' && datos?.raw_response !== undefined));
+  
+  const raw = datos?.raw_response ?? datos?.raw?.catastro ?? datos;
+
+  // Analizar si es múltiple
+  const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
+  const control = root?.control ?? {};
+  let cudnp = 1;
+  try {
+    cudnp = parseInt(control?.cudnp ?? "1", 10);
+  } catch {
+    cudnp = 1;
+  }
+  const lrcdnp = root?.lrcdnp;
+  const es_multiple = !!(lrcdnp && lrcdnp.rcdnp);
+  
+  const inmuebles = extraerListaInmuebles(raw);
+
+  // Extraer Finca y Primera Fila (bico)
+  const bico = root?.bico ?? (root?.lrcdnp?.rcdnp?.[0]?.bico) ?? {};
+  const bi = bico?.bi ?? {};
+  const debi = bi?.debi ?? {};
+  const dt = bi?.dt ?? {};
+  
+  const ldtRaw = (bi?.ldt ?? bico?.finca?.ldt ?? dt?.ldt ?? "").toString().trim();
+  const localizacionLiteral = limpiarLdtTerritorial(ldtRaw);
+  
+  const locs = dt?.locs ?? {};
+  const lous = locs?.lous ?? {};
+  const lourb = lous?.lourb ?? {};
+  const dir = lourb?.dir ?? {};
+  const tv = dir?.tv ?? "";
+  const nv = dir?.nv ?? "";
+  const num = dir?.pnp ?? "";
+
+  const municipio = fromBackend ? datos.municipio : (dt?.nm ?? locs?.locm?.nm ?? "");
+  const provincia = fromBackend ? datos.provincia : (dt?.np ?? "");
+  const codigoPostal = fromBackend ? (datos.codigo_postal ?? datos.codigoPostal ?? "") : (lourb?.dp ?? "");
+
+  const tvRaw = tv.toUpperCase();
+  const tipoVia = TIPO_VIA_MAP[tvRaw] || tvRaw || "CALLE";
+  const loint = lourb?.loint ?? dt?.loint ?? {};
+  
+  let d = `${tipoVia} ${nv} ${num}`.trim();
+  let semanticLabel = undefined;
+  let parsed = { tipoVia, nombreVia: nv, numero: num, planta: "", puerta: "", escalera: "" };
+  let direccionCrudaFallback = "";
+  
+  if (!fromBackend) {
+    const ptStr = (loint?.pt ?? "").trim();
+    const puStr = (loint?.pu ?? "").trim();
+    const esStr = (loint?.es ?? "").trim();
+    semanticLabel = detectSemanticLabel(esStr, ptStr, puStr) || undefined;
+    if (semanticLabel) {
+      parsed = { ...parsed, _semanticLabel: semanticLabel } as any;
+      direccionCrudaFallback = d;
+    } else {
+      const planta = ptStr ? ` Pl:${ptStr}` : "";
+      const puerta = puStr ? ` Pt:${puStr}` : "";
+      const escalera = esStr ? ` Es:${esStr}` : "";
+      direccionCrudaFallback = `${d}${escalera}${planta}${puerta}`.trim();
+      parsed = { ...parsed, planta: ptStr, puerta: puStr, escalera: esStr };
+    }
+  }
+
+  const ccaaResult = resolverComunidadAutonoma(provincia);
+  const comunidad_autonoma = fromBackend ? (datos.comunidad_autonoma || ccaaResult.ccaa) : ccaaResult.ccaa;
+  
+  const finca = bico?.finca ?? {};
+  const tipoFinca = finca?.ltp ?? "";
+  const superficieSuelo = finca?.dff?.ss ?? "";
+  const urlCartografia = finca?.infgraf?.igraf ?? "";
+  const construcciones = extraerConstrucciones(bico);
+
+  const warnings: string[] = [];
+  if (ccaaResult.warning) warnings.push(ccaaResult.warning);
+
+  return {
+    es_multiple,
+    num_inmuebles: cudnp,
+    inmuebles,
+    // Transversales
+    direccion_certificador: fromBackend ? (datos.direccion_certificador || datos.direccion || "") : localizacionLiteral,
+    direccion_cruda: fromBackend ? (datos.display?.full || datos.direccion_cruda || "") : direccionCrudaFallback,
+    municipio,
+    provincia,
+    comunidad_autonoma,
+    codigo_postal: codigoPostal,
+    zona_climatica: fromBackend ? (datos.zona_climatica ?? null) : null,
+    altitud: fromBackend ? (datos.altitud_msnm ?? datos.altitud ?? null) : null,
+    coordenadas: fromBackend ? (datos.coordenadas ?? { lat: null, lon: null }) : { lat: null, lon: null },
+    source,
+    
+    // Detalle general primer inmueble
+    detalle_inmueble: {
+      uso: debi?.luso ?? "N/D",
+      superficie: debi?.sfc ?? "N/D",
+      ano_construccion: debi?.ant ?? "N/D",
+      participacion: debi?.cpt ?? "N/D",
+      tipo_finca: tipoFinca,
+      superficie_suelo: superficieSuelo,
+      construcciones,
+      url_cartografia: urlCartografia,
+      tipo_via: fromBackend ? datos.tipo_via : parsed.tipoVia,
+      nombre_via: fromBackend ? datos.nombre_via : parsed.nombreVia,
+      numero: fromBackend ? datos.numero : parsed.numero,
+      planta: fromBackend ? datos.planta : parsed.planta,
+      puerta: fromBackend ? datos.puerta : parsed.puerta,
+      escalera: fromBackend ? datos.escalera : parsed.escalera,
+      bloque: fromBackend ? datos.bloque : "",
+      _warnings: warnings,
+      _semanticLabel: semanticLabel,
+    }
+  };
+}
+
+/** 
+ * Compatibility wrapper for legacy components.
+ * Returns whether the parcel contains multiple properties.
+ */
+export function esParcerlaMultiple(datos: any): { multiple: boolean } {
+  let multiple = false;
+  if (datos?.es_multiple !== undefined) {
+    multiple = datos.es_multiple;
+  } else {
+    const raw = datos?.raw_response ?? datos;
+    const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
+    multiple = !!(root?.lrcdnp && root?.lrcdnp?.rcdnp);
+  }
+  return { multiple };
+}
+
+/** 
+ * Compatibility wrapper for legacy components.
+ * Extracts details for the primary property in a unified way.
+ */
+export function extraerDatosInmuebleUnico(datos: any): any {
+  if (!datos) return null;
+  // If it's already a UI Model, return a shape compatible with old expectations
+  if (datos.detalle_inmueble) {
+    return {
+      ...datos.detalle_inmueble,
+      direccion: datos.direccion_certificador || datos.direccion_cruda || "",
+      municipio: datos.municipio,
+      provincia: datos.provincia,
+      comunidad_autonoma: datos.comunidad_autonoma,
+      codigo_postal: datos.codigo_postal,
+      zona_climatica: datos.zona_climatica,
+      altitud: datos.altitud,
+    };
+  }
+  // Fallback map
+  return mapCatastroResponseToUIModel(datos, "backend_legacy");
 }
 
 // ─── Verificar errores de la API ─────────────────────────────────────
@@ -477,25 +661,7 @@ function verificarErrores(datos: any): string | null {
   return null;
 }
 
-// ─── Detección de parcela múltiple ───────────────────────────────────
-
-export function esParcerlaMultiple(datos: any): { multiple: boolean; numInmuebles: number } {
-  const raw = datos?.raw_response ?? datos;
-  const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
-  const control = root?.control ?? {};
-  let cudnp = 1;
-  try {
-    cudnp = parseInt(control?.cudnp ?? "1", 10);
-  } catch {
-    cudnp = 1;
-  }
-
-  const lrcdnp = root?.lrcdnp;
-  if (lrcdnp && lrcdnp.rcdnp) {
-    return { multiple: true, numInmuebles: cudnp };
-  }
-  return { multiple: false, numInmuebles: 1 };
-}
+// export function esParcerlaMultiple() { ... } => Integrado en mapCatastroResponseToUIModel
 
 // ─── Extracción de lista de inmuebles ────────────────────────────────
 
@@ -542,6 +708,55 @@ export function extraerListaInmuebles(datos: any): InmuebleData[] {
 }
 
 // ─── Extraer datos de un inmueble único (bico) ──────────────────────
+
+function extraerConstrucciones(bico: any): ConstruccionData[] {
+  const lcons = bico?.lcons ?? {};
+  let consList = lcons?.cons ?? [];
+  if (!Array.isArray(consList)) consList = consList ? [consList] : [];
+
+  return consList.map((c: any) => {
+    const loint = c?.loint ?? {};
+    const esStr = (loint?.es ?? "").trim();
+    const ptStr = (loint?.pt ?? "").trim();
+    const puStr = (loint?.pu ?? "").trim();
+
+    return {
+      uso: c?.lcd ?? "N/D",
+      tipo: c?.lpt ?? "N/D",
+      planta: ptStr || "N/D",
+      puerta: puStr || "N/D",
+      escalera: esStr || "—",
+      superficie: c?.sfc ?? "0",
+      _semanticLabel: detectSemanticLabel(esStr, ptStr, puStr) || undefined,
+    };
+  });
+}
+
+// ─── Helplers adicionales ───────────────────────────────────────────
+
+function limpiarLdtTerritorial(ldt: string): string {
+  if (!ldt) return "";
+  let clean = ldt.replace(/\s+/g, " ").trim();
+  // Quitar "(TERRITORIAL)" o similares si aparecen
+  clean = clean.replace(/\(TERRITORIAL\)/gi, "").trim();
+  return clean;
+}
+
+function resolverComunidadAutonoma(provincia: string): { ccaa: string; warning?: string } {
+  const p = provincia.trim().toUpperCase();
+  const res = PROVINCIA_CCAA_MAP[p];
+  if (res) return { ccaa: res };
+
+  // Fallback para provincias vascas o navarras (fuera de competencia Catastro común)
+  if (["VIZCAYA", "BIZKAIA", "ALAVA", "ARABA", "GUIPUZCOA", "GIPUZKOA", "NAVARRA"].includes(p)) {
+    return {
+      ccaa: p === "NAVARRA" ? "Comunidad Foral de Navarra" : "País Vasco",
+      warning: "Provincia con régimen foral propio; los datos pueden ser limitados en esta API común.",
+    };
+  }
+
+  return { ccaa: "España (Comunidad no identificada)" };
+}
 
 // ─── Tabla oficial provincia → comunidad autónoma (determinista) ──────
 const PROVINCIA_CCAA_MAP: Record<string, string> = {
@@ -634,365 +849,3 @@ const PROVINCIA_CCAA_MAP: Record<string, string> = {
   CEUTA: "Ceuta",
   MELILLA: "Melilla",
 };
-
-/** Resolve comunidad_autonoma from province name (deterministic, no guessing). */
-function resolverComunidadAutonoma(provincia: string): { ccaa: string; warning?: string } {
-  if (!provincia || !provincia.trim()) return { ccaa: "", warning: "provincia_empty" };
-  const normalized = provincia
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // strip accents
-    .toUpperCase();
-  const ccaa = PROVINCIA_CCAA_MAP[normalized];
-  if (ccaa) return { ccaa };
-  // Try partial match for edge cases like "CORUNA" vs "A CORUNA"
-  for (const [key, val] of Object.entries(PROVINCIA_CCAA_MAP)) {
-    if (normalized.includes(key) || key.includes(normalized)) return { ccaa: val };
-  }
-  return { ccaa: "", warning: `ccaa_unresolvable:${provincia}` };
-}
-
-/**
- * Strip trailing territorial block from Catastro ldt.
- * Input:  "DS DISEMINADO 7 Polígono 2 Parcela 30014 ... LOS ARENALES. 45522 ALBARREAL DE TAJO (TOLEDO)"
- * Output: "DS DISEMINADO 7 Polígono 2 Parcela 30014 ... LOS ARENALES."
- */
-function limpiarLdtTerritorial(ldt: string): string {
-  if (!ldt) return "";
-  // Pattern: trailing " 45522 MUNICIPIO (PROVINCIA)" — CP is 5 digits at the END
-  // Use greedy .+ to match everything up to the LAST 5-digit block + territorial
-  const match = ldt.match(/^(.+)\s+\d{5}\s+.+\([^)]+\)\s*$/);
-  if (match) return match[1].trim();
-  // Fallback: " CP MUNICIPIO" without parenthesized province
-  const match2 = ldt.match(/^(.+)\s+\d{5}\s+[A-ZÁÉÍÓÚÑ\s]+$/i);
-  if (match2) return match2[1].trim();
-  return ldt;
-}
-
-export function extraerDatosParcela(datos: any): {
-  direccion: string;
-  municipio: string;
-  provincia: string;
-  codigoPostal: string;
-  zona_climatica?: string;
-  altitud?: number;
-} {
-  const fromBackend = datos?.direccion_cruda !== undefined && datos?.raw_response !== undefined;
-
-  if (fromBackend) {
-    return {
-      direccion: datos.direccion_certificador || datos.direccion || "",
-      municipio: datos.municipio || "",
-      provincia: datos.provincia || "",
-      codigoPostal: datos.codigo_postal || "",
-      zona_climatica: datos.zona_climatica,
-      altitud: datos.altitud,
-    };
-  }
-
-  const raw = datos?.raw_response ?? datos;
-  const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
-  const lrcdnp = root?.lrcdnp ?? {};
-  const rcdnpList = Array.isArray(lrcdnp?.rcdnp)
-    ? lrcdnp.rcdnp
-    : lrcdnp?.rcdnp
-      ? [lrcdnp.rcdnp]
-      : [];
-  const primerItem = rcdnpList[0] || {};
-  const dt = primerItem?.dt ?? {};
-  const locs = dt?.locs ?? {};
-  const lous = locs?.lous ?? {};
-  const lourb = lous?.lourb ?? {};
-
-  const ldtRaw = (primerItem?.ldt ?? dt?.ldt ?? "").toString().trim();
-  const direccion = limpiarLdtTerritorial(ldtRaw) || "";
-  const municipio = dt?.nm ?? locs?.locm?.nm ?? "";
-  const provincia = dt?.np ?? "";
-  const codigoPostal = lourb?.dp ?? "";
-
-  return {
-    direccion,
-    municipio,
-    provincia,
-    codigoPostal,
-  };
-}
-
-export function extraerDatosInmuebleUnico(datos: any): {
-  direccion: string;
-  direccion_certificador: string;
-  comunidad_autonoma: string;
-  municipio: string;
-  provincia: string;
-  codigoPostal: string;
-  uso: string;
-  superficie: string;
-  anoConstruccion: string;
-  participacion: string;
-  tipoFinca: string;
-  superficieSuelo: string;
-  construcciones: ConstruccionData[];
-  urlCartografia: string;
-  zona_climatica?: string;
-  altitud?: number;
-  direccion_cruda?: string;
-  _semanticLabel?: string;
-  tipoVia?: string;
-  nombreVia?: string;
-  numero?: string;
-  planta?: string;
-  puerta?: string;
-  escalera?: string;
-  bloque?: string;
-  _warnings?: string[];
-} {
-  // Si la respuesta vino del backend con campos pre-extraidos y smart parsing:
-  const fromBackend = datos?.direccion_cruda !== undefined && datos?.raw_response !== undefined;
-
-  const raw = datos?.raw_response ?? datos;
-  const root = raw?.consulta_dnprcResult ?? raw?.consulta_dnp ?? raw;
-  const bico = root?.bico ?? {};
-  const bi = bico?.bi ?? {};
-  const debi = bi?.debi ?? {};
-  const dt = bi?.dt ?? {};
-
-  // Localización literal completa (ldt) — contiene TODO: dirección + CP + municipio + (provincia)
-  const ldtRaw = (bi?.ldt ?? bico?.finca?.ldt ?? dt?.ldt ?? "").toString().trim();
-  // Limpiar: quitar bloque territorial del final → solo la parte de dirección
-  const localizacionLiteral = limpiarLdtTerritorial(ldtRaw);
-
-  // Dirección — dt.locs.lous.lourb.dir
-  const locs = dt?.locs ?? {};
-  const lous = locs?.lous ?? {};
-  const lourb = lous?.lourb ?? {};
-  const dir = lourb?.dir ?? {};
-  const tv = dir?.tv ?? "";
-  const nv = dir?.nv ?? "";
-  const num = dir?.pnp ?? "";
-  // Municipio/Provincia — directamente en dt.nm y dt.np
-  const municipio = dt?.nm ?? locs?.locm?.nm ?? "";
-  const provincia = dt?.np ?? "";
-
-  let direccion = "";
-  if (fromBackend) {
-    direccion = datos.direccion; // Usa la ya parseada por Python
-  } else {
-    const tvRaw = tv.toUpperCase();
-    const tipoVia = TIPO_VIA_MAP[tvRaw] || tvRaw || "CALLE";
-    const loint = lourb?.loint ?? dt?.loint ?? {};
-
-    let d = `${tipoVia} ${nv} ${num}`.trim();
-
-    const ptStr = (loint?.pt ?? "").trim();
-    const puStr = (loint?.pu ?? "").trim();
-    const esStr = (loint?.es ?? "").trim();
-
-    const semanticLabel = detectSemanticLabel(esStr, ptStr, puStr);
-
-    if (semanticLabel) {
-      // es/pt/pu form a semantic word — NOT a real location
-      direccion = d;
-      datos._parsed = {
-        tipoVia: tipoVia,
-        nombreVia: nv,
-        numero: num,
-        planta: "",
-        puerta: "",
-        escalera: "",
-        _semanticLabel: semanticLabel,
-      };
-    } else {
-      const planta = ptStr ? ` Pl:${ptStr}` : "";
-      const puerta = puStr ? ` Pt:${puStr}` : "";
-      const escalera = esStr ? ` Es:${esStr}` : "";
-
-      direccion = `${d}${escalera}${planta}${puerta}`.trim();
-
-      datos._parsed = {
-        tipoVia: tipoVia,
-        nombreVia: nv,
-        numero: num,
-        planta: ptStr,
-        puerta: puStr,
-        escalera: esStr,
-      };
-    }
-  }
-
-  // Código Postal — dt.locs.lous.lourb.dp
-  const codigoPostal = lourb?.dp ?? "";
-
-  // Finca info
-  const finca = bico?.finca ?? {};
-  const tipoFinca = finca?.ltp ?? "";
-  const superficieSuelo = finca?.dff?.ss ?? "";
-  const urlCartografia = finca?.infgraf?.igraf ?? "";
-
-  // Construcciones (lcons) — array de unidades constructivas
-  const construcciones = extraerConstrucciones(bico);
-
-  // Resolver provincia → comunidad autónoma de forma determinista
-  const provinciaFinal = fromBackend ? datos.provincia : provincia;
-  const ccaaResult = resolverComunidadAutonoma(provinciaFinal);
-  const warnings: string[] = [];
-  if (ccaaResult.warning) warnings.push(ccaaResult.warning);
-
-  // Semantic label (from es+pt+pu detection) for consumers to know
-  const semanticLabel = datos._parsed?._semanticLabel ?? undefined;
-
-  return {
-    // direccion_certificador = ldt LIMPIO (sin bloque territorial)
-    // Solo la parte de dirección/localización, SIN CP/municipio/provincia
-    direccion_certificador: fromBackend
-      ? datos.direccion_certificador || localizacionLiteral || datos.direccion
-      : localizacionLiteral || direccion,
-    // direccion legacy (tipo_via + nombre_via + num)
-    direccion: fromBackend ? datos.direccion : direccion,
-    municipio: fromBackend ? datos.municipio : municipio,
-    provincia: provinciaFinal,
-    comunidad_autonoma: fromBackend ? datos.comunidad_autonoma || ccaaResult.ccaa : ccaaResult.ccaa,
-    codigoPostal: fromBackend ? datos.codigo_postal : codigoPostal,
-
-    uso: debi?.luso ?? "N/D",
-    superficie: debi?.sfc ?? "N/D",
-    anoConstruccion: debi?.ant ?? "N/D",
-    participacion: debi?.cpt ?? "N/D",
-    tipoFinca,
-    superficieSuelo,
-    construcciones,
-    urlCartografia,
-
-    zona_climatica: fromBackend ? datos.zona_climatica : undefined,
-    altitud: fromBackend ? datos.altitud : undefined,
-    direccion_cruda: fromBackend ? datos.direccion_cruda : undefined,
-    _semanticLabel: semanticLabel,
-    _warnings: warnings.length > 0 ? warnings : undefined,
-
-    tipoVia: fromBackend ? datos.tipo_via : datos._parsed?.tipoVia,
-    nombreVia: fromBackend ? datos.nombre_via : datos._parsed?.nombreVia,
-    numero: fromBackend ? datos.numero : datos._parsed?.numero,
-    planta: fromBackend ? datos.planta : datos._parsed?.planta,
-    puerta: fromBackend ? datos.puerta : datos._parsed?.puerta,
-    escalera: fromBackend ? datos.escalera : datos._parsed?.escalera,
-    bloque: fromBackend ? datos.bloque : undefined,
-  };
-}
-
-// ─── Extraer construcciones (lcons) ─────────────────────────────────
-
-function extraerConstrucciones(bico: any): ConstruccionData[] {
-  let lcons = bico?.lcons ?? [];
-  if (!Array.isArray(lcons)) lcons = lcons ? [lcons] : [];
-
-  return lcons.map((c: any) => {
-    const loint = c?.dt?.lourb?.loint ?? {};
-    const pt = (loint?.pt ?? "").trim();
-    const pu = (loint?.pu ?? "").trim();
-    const es = (loint?.es ?? "").trim();
-    const semantic = detectSemanticLabel(es, pt, pu);
-
-    return {
-      uso: c?.lcd ?? "N/D",
-      tipo: c?.dvcons?.dtip ?? "N/D",
-      planta: semantic ? "" : pt || "N/D",
-      puerta: semantic ? "" : pu || "N/D",
-      escalera: semantic ? "" : es || "—",
-      superficie: c?.dfcons?.stl ?? "N/D",
-      _semanticLabel: semantic || undefined,
-    };
-  });
-}
-
-// ─── URLs de imágenes del Catastro ──────────────────────────────────
-
-export function getUrlFachada(rc: string, datos: any): string {
-  const root = datos?.consulta_dnprcResult ?? datos?.consulta_dnp ?? datos;
-  const { cp, cmc } = extraerCodigosGeo(root);
-  return `https://www1.sedecatastro.gob.es/CYCBienInmworkinmuble/OVCConCiworkinYCBieni.aspx?del=${cp}&mun=${cmc}&UrbRus=U&RefC=${rc}&pest=fot`;
-}
-
-export function getUrlPlano(rc: string, _datos: any): string {
-  const rc14 = rc.substring(0, 14);
-  return `https://ovc.catastro.meh.es/OVCServWeb/OVCWcfLibres/OVCFotoFachworkinada.svc/RecuperarFotoFachworkinadaRC?ReferenciaCatastral=${rc14}`;
-}
-
-export function getUrlCroquis(rc: string, _datos: any): string {
-  const rc14 = rc.substring(0, 14);
-  return `https://www1.sedecatastro.gob.es/Cartografia/mapa.aspx?refcat=${rc14}&tipocarto=CARTO`;
-}
-
-function extraerCodigosGeo(root: any): { cp: string; cmc: string } {
-  const bico = root?.bico ?? {};
-  const bi = bico?.bi ?? {};
-  const dt = bi?.dt ?? {};
-  // Prioridad: dt.loine.cp para delegación, dt.cmc para municipio
-  const loine = dt?.loine ?? {};
-  return {
-    cp: loine?.cp ?? dt?.locs?.cpro ?? "",
-    cmc: dt?.cmc ?? loine?.cm ?? "",
-  };
-}
-
-// ─── Extraer Escalera, Planta, Puerta (Consulta_DNPRC_Codigos) ──────
-
-const CATASTRO_BASE =
-  "https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCallejero/COVCCallejeroCodigos.svc/json";
-
-/** Descompone una RC de 20 caracteres en sus partes constitutivas */
-function _parseRC20(
-  rc: string
-): { pc1: string; pc2: string; car: string; cc1: string; cc2: string } | null {
-  if (rc.length !== 20) return null;
-  return {
-    pc1: rc.slice(0, 7),
-    pc2: rc.slice(7, 14),
-    car: rc.slice(14, 18), // "cargo" = identificador de unidad constructiva
-    cc1: rc[18],
-    cc2: rc[19],
-  };
-}
-
-export interface LointData {
-  escalera: string | null;
-  planta: string | null;
-  puerta: string | null;
-  bloque: string | null;
-  superficieTotal: number | null;
-}
-
-/**
- * Para RCs de 20 dígitos: usa Consulta_DNPRC_Codigos para obtener
- * escalera, planta y puerta del nodo <loint> (Localización Interior).
- */
-export async function fetchLointDataFromRC(rc: string): Promise<LointData[]> {
-  const parts = _parseRC20(rc.trim().toUpperCase());
-  if (!parts) throw new Error(`RC inválida: ${rc} (debe tener 20 caracteres)`);
-
-  const url = `${CATASTRO_BASE}/Consulta_DNPRC_Codigos?RefCat=${rc}`;
-
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Catastro HTTP ${res.status}`);
-
-  const json = await res.json();
-
-  // El nodo de datos está en consulta_dnp > bico > bi
-  const bi = json?.consulta_dnp?.bico?.bi;
-  if (!bi) return [];
-
-  // lcons puede contener un objeto único o un array si hay varias unidades
-  const consList: any[] = Array.isArray(bi?.lcons?.cons)
-    ? bi.lcons.cons
-    : bi?.lcons?.cons
-      ? [bi.lcons.cons]
-      : [];
-
-  return consList.map(
-    (cons: any): LointData => ({
-      escalera: cons?.dt?.lourb?.loint?.es ?? null,
-      planta: cons?.dt?.lourb?.loint?.pt ?? null,
-      puerta: cons?.dt?.lourb?.loint?.pu ?? null,
-      bloque: cons?.dt?.lourb?.loint?.bq ?? null,
-      superficieTotal: cons?.dfcons?.stl != null ? Number(cons.dfcons.stl) : null,
-    })
-  );
-}
