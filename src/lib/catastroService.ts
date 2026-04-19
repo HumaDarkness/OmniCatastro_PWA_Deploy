@@ -709,55 +709,6 @@ export function extraerListaInmuebles(datos: any): InmuebleData[] {
 
 // ─── Extraer datos de un inmueble único (bico) ──────────────────────
 
-function extraerConstrucciones(bico: any): ConstruccionData[] {
-  const lcons = bico?.lcons ?? {};
-  let consList = lcons?.cons ?? [];
-  if (!Array.isArray(consList)) consList = consList ? [consList] : [];
-
-  return consList.map((c: any) => {
-    const loint = c?.loint ?? {};
-    const esStr = (loint?.es ?? "").trim();
-    const ptStr = (loint?.pt ?? "").trim();
-    const puStr = (loint?.pu ?? "").trim();
-
-    return {
-      uso: c?.lcd ?? "N/D",
-      tipo: c?.lpt ?? "N/D",
-      planta: ptStr || "N/D",
-      puerta: puStr || "N/D",
-      escalera: esStr || "—",
-      superficie: c?.sfc ?? "0",
-      _semanticLabel: detectSemanticLabel(esStr, ptStr, puStr) || undefined,
-    };
-  });
-}
-
-// ─── Helplers adicionales ───────────────────────────────────────────
-
-function limpiarLdtTerritorial(ldt: string): string {
-  if (!ldt) return "";
-  let clean = ldt.replace(/\s+/g, " ").trim();
-  // Quitar "(TERRITORIAL)" o similares si aparecen
-  clean = clean.replace(/\(TERRITORIAL\)/gi, "").trim();
-  return clean;
-}
-
-function resolverComunidadAutonoma(provincia: string): { ccaa: string; warning?: string } {
-  const p = provincia.trim().toUpperCase();
-  const res = PROVINCIA_CCAA_MAP[p];
-  if (res) return { ccaa: res };
-
-  // Fallback para provincias vascas o navarras (fuera de competencia Catastro común)
-  if (["VIZCAYA", "BIZKAIA", "ALAVA", "ARABA", "GUIPUZCOA", "GIPUZKOA", "NAVARRA"].includes(p)) {
-    return {
-      ccaa: p === "NAVARRA" ? "Comunidad Foral de Navarra" : "País Vasco",
-      warning: "Provincia con régimen foral propio; los datos pueden ser limitados en esta API común.",
-    };
-  }
-
-  return { ccaa: "España (Comunidad no identificada)" };
-}
-
 // ─── Tabla oficial provincia → comunidad autónoma (determinista) ──────
 const PROVINCIA_CCAA_MAP: Record<string, string> = {
   // Andalucía
@@ -849,6 +800,67 @@ const PROVINCIA_CCAA_MAP: Record<string, string> = {
   CEUTA: "Ceuta",
   MELILLA: "Melilla",
 };
+
+/** Resolve comunidad_autonoma from province name (deterministic, no guessing). */
+function resolverComunidadAutonoma(provincia: string): { ccaa: string; warning?: string } {
+  if (!provincia || !provincia.trim()) return { ccaa: "", warning: "provincia_empty" };
+  const normalized = provincia
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // strip accents
+    .toUpperCase();
+  const ccaa = PROVINCIA_CCAA_MAP[normalized];
+  if (ccaa) return { ccaa };
+  // Try partial match for edge cases like "CORUNA" vs "A CORUNA"
+  for (const [key, val] of Object.entries(PROVINCIA_CCAA_MAP)) {
+    if (normalized.includes(key) || key.includes(normalized)) return { ccaa: val };
+  }
+  return { ccaa: "", warning: `ccaa_unresolvable:${provincia}` };
+}
+
+/**
+ * Strip trailing territorial block from Catastro ldt.
+ * Input:  "DS DISEMINADO 7 Polígono 2 Parcela 30014 ... LOS ARENALES. 45522 ALBARREAL DE TAJO (TOLEDO)"
+ * Output: "DS DISEMINADO 7 Polígono 2 Parcela 30014 ... LOS ARENALES."
+ */
+function limpiarLdtTerritorial(ldt: string): string {
+  if (!ldt) return "";
+  // Pattern: trailing " 45522 MUNICIPIO (PROVINCIA)" — CP is 5 digits at the END
+  // Use greedy .+ to match everything up to the LAST 5-digit block + territorial
+  const match = ldt.match(/^(.+)\s+\d{5}\s+.+\([^)]+\)\s*$/);
+  if (match) return match[1].trim();
+  // Fallback: " CP MUNICIPIO" without parenthesized province
+  const match2 = ldt.match(/^(.+)\s+\d{5}\s+[A-ZÁÉÍÓÚÑ\s]+$/i);
+  if (match2) return match2[1].trim();
+  return ldt;
+}
+
+// Se ha migrado la funcionalidad a `mapCatastroResponseToUIModel`
+
+// ─── Extraer construcciones (lcons) ─────────────────────────────────
+
+function extraerConstrucciones(bico: any): ConstruccionData[] {
+  let lcons = bico?.lcons ?? [];
+  if (!Array.isArray(lcons)) lcons = lcons ? [lcons] : [];
+
+  return lcons.map((c: any) => {
+    const loint = c?.dt?.lourb?.loint ?? {};
+    const pt = (loint?.pt ?? "").trim();
+    const pu = (loint?.pu ?? "").trim();
+    const es = (loint?.es ?? "").trim();
+    const semantic = detectSemanticLabel(es, pt, pu);
+
+    return {
+      uso: c?.lcd ?? "N/D",
+      tipo: c?.dvcons?.dtip ?? "N/D",
+      planta: semantic ? "" : pt || "N/D",
+      puerta: semantic ? "" : pu || "N/D",
+      escalera: semantic ? "" : es || "—",
+      superficie: c?.dfcons?.stl ?? "N/D",
+      _semanticLabel: semantic || undefined,
+    };
+  });
+}
 
 // ─── URLs de imágenes del Catastro ──────────────────────────────────
 
